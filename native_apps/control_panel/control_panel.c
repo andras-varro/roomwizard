@@ -174,8 +174,11 @@ static void confirm_open(AppState *state, ConfirmAction action, const char *titl
  * â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
 
 void draw_section_header(Framebuffer *fb, int y, const char *title) {
+    draw_section_header_to(fb, y, title, CONTENT_RIGHT);
+}
+
+void draw_section_header_to(Framebuffer *fb, int y, const char *title, int right) {
     int left = CONTENT_LEFT;
-    int right = CONTENT_RIGHT;
     fb_draw_text(fb, left, y, title, COLOR_HEADER_TEXT, 2);
     int text_w = text_measure_width(title, 2);
     int line_x = left + text_w + 12;

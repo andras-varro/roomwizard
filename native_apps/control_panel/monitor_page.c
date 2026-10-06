@@ -1,5 +1,6 @@
 /* monitor_page.c — control_panel's Monitor page: uptime, load, SoC temperature,
- * CPU history, memory, storage.
+ * memory and storage as text, and CPU, memory and SoC temperature history as
+ * graphs (beside the text in landscape, under it in portrait).
  *
  * Opened from the home grid's Monitor tile, and the one home for the live
  * system figures.  Exposed only as
@@ -10,18 +11,21 @@
  * loop calls every iteration; draw() paints the last sample and reads nothing,
  * so a repaint for any other reason costs no /proc reads.
  *
- * The CPU graph rides the same once-a-second sample: one point per sample, so
- * it adds no repaint of its own.  The math and the ring are cpu_load.c's.
- * On entry the graph is pre-filled from rwmond's published history when the
- * daemon is running (cpu_seed_from_daemon); without it the graph starts empty.
+ * The three graphs ride the same once-a-second sample: one point per sample,
+ * so they add no repaint of their own.  One widget draws all three
+ * (draw_graph); each series reaches it as permille of its axis (mon_graph.h)
+ * in a cpu_load.c ring.  On entry the graphs are pre-filled from rwmond's
+ * published history when the daemon is running (graphs_seed_from_daemon);
+ * without it they start empty.
  *
- * The SoC TEMP row exists only when a thermal zone reads (soc_temp.h): on a
- * kernel without the bandgap driver it is not drawn at all, and the rows
- * below move up — an absent figure is removed, not greyed.
+ * The SoC TEMP row and graph exist only when a thermal zone reads
+ * (soc_temp.h): on a kernel without the bandgap driver neither is drawn, and
+ * what is below moves up — an absent figure is removed, not greyed.
  */
 #include "cp_page.h"
 #include "cp_ui.h"
 #include "cpu_load.h"
+#include "mon_graph.h"
 #include "soc_temp.h"
 #include "../sysmon/mon_ring.h"
 #include "../common/common.h"
@@ -32,7 +36,7 @@
 #include <unistd.h>
 
 #define MON_REFRESH_MS 1000
-/* The CPU graph's span in minutes: one bar per refresh, CPU_HIST_N bars. */
+/* Each graph's span in minutes: one bar per refresh, CPU_HIST_N bars. */
 #define MON_GRAPH_SPAN_MIN (CPU_HIST_N * MON_REFRESH_MS / 60000)
 
 /* ── Sampling ──────────────────────────────────────────────────────────── */
@@ -146,8 +150,8 @@ static void fmt_disk(const char *mp, unsigned long used, unsigned long total,
     snprintf(buf, len, "%s  %s / %s  (%s FREE)", mp, u, t, f);
 }
 
-/* The graph's caption, permille in; -1 = no sample yet.  The panel's own cost
- * is shown here and kept out of the bars, so the graph is the rest of the
+/* The CPU graph's caption, permille in; -1 = no sample yet.  The panel's own
+ * cost is shown here and kept out of the bars, so the graph is the rest of the
  * device (cpu_load.h). */
 static void fmt_cpu(int others_pm, int self_pm, char *buf, size_t len) {
     if (others_pm < 0 || self_pm < 0)
@@ -155,6 +159,26 @@ static void fmt_cpu(int others_pm, int self_pm, char *buf, size_t len) {
     else
         snprintf(buf, len, "CPU %d%%  LAST %d MIN  (PANEL %d%%, NOT GRAPHED)",
                  (others_pm + 5) / 10, MON_GRAPH_SPAN_MIN, (self_pm + 5) / 10);
+}
+
+/* The memory graph's caption.  The series is MemTotal - MemAvailable — the
+ * figure rwmond records, so a seeded graph and a sampled one are one series;
+ * it is not the RAM row's total - free - buffers - cached.  used < 0 = none. */
+static void fmt_mem_graph(long used_kb, unsigned long total_kb, char *buf, size_t len) {
+    char u[32], t[32];
+    format_bytes(total_kb, t, sizeof(t));
+    if (used_kb < 0) snprintf(u, sizeof(u), "--");
+    else             format_bytes((unsigned long)used_kb, u, sizeof(u));
+    snprintf(buf, len, "MEM IN USE %s OF %s  LAST %d MIN", u, t, MON_GRAPH_SPAN_MIN);
+}
+
+/* The temperature graph's caption: the newest reading and the fixed axis. */
+static void fmt_temp_graph(bool ok, int mc, char *buf, size_t len) {
+    char v[32];
+    if (ok) soc_temp_format(mc, v, sizeof(v));
+    else    snprintf(v, sizeof(v), "--");
+    snprintf(buf, len, "SOC %s  AXIS %d-%d C  LAST %d MIN", v,
+             MON_TEMP_AXIS_LO_MC / 1000, MON_TEMP_AXIS_HI_MC / 1000, MON_GRAPH_SPAN_MIN);
 }
 
 static struct {
@@ -165,10 +189,22 @@ static struct {
 } sample;
 static uint32_t sampled_ms;
 
-/* CPU: the last snap, the history, and the newest shares (-1 = none yet). */
-static CpuSnap    cpu_prev;
-static CpuHistory cpu_hist;
-static int        cpu_others_pm = -1, cpu_self_pm = -1;
+/* One history graph: where layout() put it, and its series as permille of the
+ * series' own axis (mon_graph.h), so draw_graph() is the same for all three. */
+typedef struct {
+    int        x, label_y, y, w, h;   /* caption at (x, label_y); frame at (x, y) */
+    bool       shown;
+    CpuHistory hist;
+} MonGraph;
+
+static MonGraph g_cpu, g_mem, g_temp;
+static MonGraph *const graphs[] = { &g_cpu, &g_mem, &g_temp };
+#define NUM_GRAPHS ((int)(sizeof(graphs) / sizeof(graphs[0])))
+
+/* CPU: the last snap and the newest shares (-1 = none yet). */
+static CpuSnap cpu_prev;
+static int     cpu_others_pm = -1, cpu_self_pm = -1;
+static long    mem_used_kb = -1;    /* the memory graph's newest, -1 = none */
 
 static void cpu_snap(CpuSnap *s) {
     char stat[256], self[512], up[64];
@@ -189,43 +225,8 @@ static void cpu_sample(void) {
     if (clk_tck > 0
         && cpu_share(&cpu_prev, &cur, (unsigned)clk_tck,
                      &cpu_others_pm, &cpu_self_pm) == 0)
-        cpu_hist_push(&cpu_hist, cpu_others_pm);
+        cpu_hist_push(&g_cpu.hist, cpu_others_pm);
     cpu_prev = cur;
-}
-
-/* rwmond's ring (sysmon/mon_ring.h), if the daemon is running: its CPU
- * column pre-fills the graph so the page opens on the last two minutes.  A
- * file older than 3 s means the daemon is gone, and the page then starts empty
- * and samples for itself exactly as without it.  The daemon's figure excludes
- * its own ticks where this page excludes the panel's; both are the same
- * wall-time share (cpu_load.h). */
-static void cpu_seed_from_daemon(unsigned long long now_cs) {
-    static char text[MON_RING_TEXT_MAX];
-    static MonRing ring;
-    unsigned long long file_cs;
-    unsigned flags;
-    FILE *f = fopen(MON_RING_PATH, "r");
-    if (!f) return;
-    size_t n = fread(text, 1, sizeof(text) - 1, f);
-    fclose(f);
-    text[n] = '\0';
-    if (mon_ring_parse(text, &ring, &file_cs, &flags) != 0
-        || !mon_ring_fresh(file_cs, now_cs, 300))
-        return;
-    for (int i = 0; i < ring.count; i++) {
-        int pm = mon_ring_get(&ring, i)->cpu_pm;
-        if (pm != MON_ABSENT) cpu_hist_push(&cpu_hist, pm);
-    }
-}
-
-/* The page was closed, so nothing sampled the gap: start the graph afresh
- * rather than draw one point averaged over however long that was — from
- * rwmond's history when it is fresh, else empty. */
-static void cpu_restart(void) {
-    cpu_hist_clear(&cpu_hist);
-    cpu_others_pm = cpu_self_pm = -1;
-    cpu_snap(&cpu_prev);
-    if (cpu_prev.valid) cpu_seed_from_daemon(cpu_prev.wall_cs);
 }
 
 /* SoC temperature: which thermal zone, and its newest reading. */
@@ -241,9 +242,10 @@ static int temp_read_zone(int n, int *mc) {
         && soc_temp_parse(raw, mc) == 0 ? 0 : -1;
 }
 
-/* Whether the row exists.  The zone is looked up once — the first whose temp
- * reads and parses — because the sensor driver is built into the image, so
- * the answer cannot change within a boot; layout() and the sampler both ask. */
+/* Whether the row and the graph exist.  The zone is looked up once — the
+ * first whose temp reads and parses — because the sensor driver is built into
+ * the image, so the answer cannot change within a boot; layout() and the
+ * sampler both ask. */
 static bool temp_present(void) {
     if (temp_zone == -2) {
         temp_zone = -1;
@@ -262,18 +264,78 @@ static void monitor_sample(void) {
         read_disk_usage(mount_points[i], &sample.disk[i]);
 }
 
+/* The memory and temperature points of the newest sample, taken on the same
+ * tick as the CPU point.  A missing MemAvailable or a failed zone read adds
+ * no point, rather than a zero. */
+static void graphs_sample(void) {
+    const MemInfo *mi = &sample.mem;
+    if (mi->total_kb > 0 && mi->available_kb > 0 && mi->available_kb <= mi->total_kb) {
+        mem_used_kb = (long)(mi->total_kb - mi->available_kb);
+        cpu_hist_push(&g_mem.hist, mon_scale_pm(mem_used_kb, 0, (long long)mi->total_kb));
+    } else {
+        mem_used_kb = -1;
+    }
+    if (temp_ok)
+        cpu_hist_push(&g_temp.hist,
+                      mon_scale_pm(temp_mc, MON_TEMP_AXIS_LO_MC, MON_TEMP_AXIS_HI_MC));
+}
+
+/* rwmond's ring (sysmon/mon_ring.h), if the daemon is running: its three
+ * columns pre-fill the three graphs so the page opens on the last two
+ * minutes.  A file older than 3 s means the daemon is gone, and the page then
+ * starts empty and samples for itself exactly as without it.  The daemon's CPU
+ * figure excludes its own ticks where this page excludes the panel's; both
+ * are the same wall-time share (cpu_load.h).  Memory is scaled against this
+ * page's MemTotal, which monitor_sample() has read before this runs. */
+static void graphs_seed_from_daemon(unsigned long long now_cs) {
+    static char text[MON_RING_TEXT_MAX];
+    static MonRing ring;
+    unsigned long long file_cs;
+    unsigned flags;
+    FILE *f = fopen(MON_RING_PATH, "r");
+    if (!f) return;
+    size_t n = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[n] = '\0';
+    if (mon_ring_parse(text, &ring, &file_cs, &flags) != 0
+        || !mon_ring_fresh(file_cs, now_cs, 300))
+        return;
+    long long total = (long long)sample.mem.total_kb;
+    bool temp = temp_present();
+    for (int i = 0; i < ring.count; i++) {
+        const MonSample *s = mon_ring_get(&ring, i);
+        if (s->cpu_pm != MON_ABSENT) cpu_hist_push(&g_cpu.hist, s->cpu_pm);
+        if (s->mem_kb != MON_ABSENT && total > 0)
+            cpu_hist_push(&g_mem.hist, mon_scale_pm(s->mem_kb, 0, total));
+        if (s->temp_mc != MON_ABSENT && temp)
+            cpu_hist_push(&g_temp.hist,
+                          mon_scale_pm(s->temp_mc, MON_TEMP_AXIS_LO_MC, MON_TEMP_AXIS_HI_MC));
+    }
+}
+
+/* The page was closed, so nothing sampled the gap: start the graphs afresh
+ * rather than draw one point averaged over however long that was — from
+ * rwmond's history when it is fresh, else empty. */
+static void graphs_restart(void) {
+    for (int i = 0; i < NUM_GRAPHS; i++) cpu_hist_clear(&graphs[i]->hist);
+    cpu_others_pm = cpu_self_pm = -1;
+    mem_used_kb = -1;
+    cpu_snap(&cpu_prev);
+    if (cpu_prev.valid) graphs_seed_from_daemon(cpu_prev.wall_cs);
+}
+
 /* Nothing to read from the Config; sampling here only means no frame can ever
  * show the zeroed struct. */
 static void monitor_page_load(const Config *cfg) {
     (void)cfg;
     monitor_sample();
-    cpu_restart();
+    graphs_restart();
     sampled_ms = get_time_ms();
 }
 
 static void monitor_page_enter(void) {
     monitor_sample();
-    cpu_restart();
+    graphs_restart();
     sampled_ms = get_time_ms();
 }
 
@@ -286,26 +348,65 @@ static void monitor_page_enter(void) {
 #define MON_METER_GAP  10
 #define MON_LOAD_LABEL "LOAD AVG:"
 #define MON_TEMP_LABEL "SOC TEMP:"   /* values align after the wider of these */
-#define MON_GRAPH_MIN_H 24  /* below this a CPU graph is a smear */
+#define MON_CAP_H      (MON_LINE_H + 2)  /* a graph's caption line above it */
+#define MON_GRAPH_GAP   8   /* between one graph's bottom and the next caption */
+#define MON_GRAPH_MIN_H 24  /* below this a history graph is a smear */
 #define MON_GRAPH_MAX_H 96  /* past this it only takes room from nothing */
-#define MON_SIDE_MIN_W 240  /* graph beside UPTIME/LOAD only if this wide */
-#define MON_FIT_SLACK   4   /* left under the last bar when growing the graph */
+#define MON_COL_GAP    20   /* text column to graph column */
+#define MON_SIDE_MIN_W 240  /* graphs beside the text only if this wide */
+#define MON_FIT_SLACK   4   /* left under the lowest thing when sizing graphs */
 
 static int  uptime_y, load_y, temp_y, value_x;
 static int  mon_rows;   /* scale-2 rows at the top: 2, or 3 with SOC TEMP */
 static int  sec_mem_y, ram_y, swap_y, sec_disk_y;
 static int  disk_y[NUM_MOUNT_POINTS];
-static int  bar_x, bar_w;
-static int  cpu_x, cpu_label_y, graph_y, graph_w, graph_h;
-static bool cpu_beside;
+static int  bar_x, bar_w, header_right;
+static bool graphs_beside;
+
+/* The worst-case uptime, formatted the way the row draws it. */
+static void worst_uptime(char *buf, size_t len) {
+    format_uptime(999 * 86400 + 23 * 3600 + 59 * 60 + 59, buf, len);
+}
+
+/* The text column's right edge: its widest line, each formatted through the
+ * draw path's own formatter with worst-case values (1048575 kB is
+ * format_bytes()'s longest, "1024.0 MB").  value_x and bar_x must be set. */
+static int text_right_edge(void) {
+    const unsigned long W = 1048575;
+    char s[160];
+    int right = 0, w;
+    worst_uptime(s, sizeof(s));
+    w = value_x + text_measure_width(s, 2);                       if (w > right) right = w;
+    w = value_x + text_measure_width("99.99 99.99 99.99", 2);     if (w > right) right = w;
+    if (mon_rows == 3) {
+        soc_temp_format(SOC_TEMP_MIN_MC, s, sizeof(s));
+        w = value_x + text_measure_width(s, 2);                   if (w > right) right = w;
+    }
+    fmt_used_of("SWAP", W, W, s, sizeof(s));
+    w = bar_x + text_measure_width(s, 1);                         if (w > right) right = w;
+    fmt_ram_detail(W, W, W, s, sizeof(s));
+    w = bar_x + text_measure_width(s, 1);                         if (w > right) right = w;
+    for (int i = 0; i < NUM_MOUNT_POINTS; i++) {
+        fmt_disk(mount_points[i], W, W, W, s, sizeof(s));
+        w = bar_x + text_measure_width(s, 1);                     if (w > right) right = w;
+    }
+    return right;
+}
 
 /* A meter is `lines` scale-1 text lines, then its bar; returns the y after it. */
 static int meter_bottom(int y, int lines) {
     return y + lines * MON_LINE_H + MON_BAR_H;
 }
 
-/* MEMORY and STORAGE from y down; returns the y under the last storage bar. */
-static int place_meters(int y) {
+/* The text column from the top: UPTIME, LOAD, SOC TEMP (if present), then
+ * MEMORY and STORAGE.  Returns the y under the last storage bar. */
+static int place_text(void) {
+    int y = CONTENT_Y + 6;
+    uptime_y = y;
+    load_y   = y + MON_ROW_H;
+    temp_y   = y + 2 * MON_ROW_H;   /* drawn only when mon_rows is 3 */
+    y += mon_rows * MON_ROW_H + 6;
+
     sec_mem_y = y;                y += MON_HEADER_H;
     ram_y     = y;                y = meter_bottom(y, 2) + MON_METER_GAP;
     swap_y    = y;                y = meter_bottom(y, 1) + MON_METER_GAP;
@@ -319,114 +420,93 @@ static int place_meters(int y) {
     return y;
 }
 
-/* UPTIME, LOAD, SOC TEMP (if present) and the CPU graph, with the graph grown
- * by `grow` px past its minimum; then the meters.  Returns the stack's bottom
- * y.  The graph goes BESIDE the scale-2 rows when the room right of their
- * widest value is at least MON_SIDE_MIN_W (landscape), else UNDER them, full
- * width (portrait). */
-static int place_stack(int grow) {
-    int y = CONTENT_Y + 6;
-    uptime_y = y;
-    load_y   = y + MON_ROW_H;
-    temp_y   = y + 2 * MON_ROW_H;   /* drawn only when mon_rows is 3 */
-    if (cpu_beside) {
-        /* The rows' block is as tall as the graph and its label need. */
-        int block = mon_rows * MON_ROW_H + grow;
-        cpu_label_y = uptime_y;
-        graph_y = cpu_label_y + MON_LINE_H + 2;
-        graph_h = block - (MON_LINE_H + 2);
-        y += block + 6;
-    } else {
-        y += mon_rows * MON_ROW_H + 6;
-        cpu_label_y = y;
-        graph_y = y + MON_LINE_H + 2;
-        graph_h = MON_GRAPH_MIN_H + grow;
-        y = graph_y + graph_h + MON_METER_GAP;
+/* The shown graphs stacked from y0 in a column at x, w wide, sharing the
+ * height down to the content bottom equally, each between MON_GRAPH_MIN_H and
+ * MON_GRAPH_MAX_H.  Returns the y under the last graph. */
+static int place_graphs(int x, int w, int y0) {
+    int n = 0;
+    for (int i = 0; i < NUM_GRAPHS; i++) if (graphs[i]->shown) n++;
+    int avail = CONTENT_Y + CONTENT_H - MON_FIT_SLACK - y0;
+    int h = (avail - n * MON_CAP_H - (n - 1) * MON_GRAPH_GAP) / n;
+    if (h > MON_GRAPH_MAX_H) h = MON_GRAPH_MAX_H;
+    if (h < MON_GRAPH_MIN_H) h = MON_GRAPH_MIN_H;
+    int y = y0;
+    for (int i = 0; i < NUM_GRAPHS; i++) {
+        MonGraph *g = graphs[i];
+        if (!g->shown) continue;
+        g->x = x; g->w = w; g->h = h;
+        g->label_y = y;
+        g->y = y + MON_CAP_H;
+        y = g->y + h + MON_GRAPH_GAP;
     }
-    return place_meters(y);
+    return y - MON_GRAPH_GAP;
 }
 
-/* Re-run whenever the logical screen changes (rebuild_ui()).  One column of
- * meters in both orientations: every row is one line of text or one bar, so
- * the stack is only as wide as its longest line, and landscape's shorter
- * CONTENT_H is the constraint the receipt below checks.  The CPU graph takes
- * whatever height is left, between MON_GRAPH_MIN_H and MON_GRAPH_MAX_H. */
+/* Re-run whenever the logical screen changes (rebuild_ui()).  Two columns
+ * when there is room — the text left, the graphs (CPU, memory, SoC
+ * temperature) stacked right — which is landscape; otherwise one column, the
+ * graphs under the text, full width, which is portrait.  The temperature
+ * graph exists only with a thermal zone, like its row: absent is removed. */
 static void monitor_page_layout(void) {
     mon_rows = temp_present() ? 3 : 2;
+    g_cpu.shown = g_mem.shown = true;
+    g_temp.shown = mon_rows == 3;
     int label_w = text_measure_width(MON_LOAD_LABEL, 2);
     if (mon_rows == 3 && text_measure_width(MON_TEMP_LABEL, 2) > label_w)
         label_w = text_measure_width(MON_TEMP_LABEL, 2);
-    value_x  = CONTENT_LEFT + 10 + label_w + 12;
-    bar_x = CONTENT_LEFT + 10;
-    bar_w = CONTENT_WIDTH - 20;
+    value_x = CONTENT_LEFT + 10 + label_w + 12;
+    bar_x   = CONTENT_LEFT + 10;
 
-    /* Where the scale-2 values end: their worst cases, as the receipt uses. */
-    char wv[64];
-    format_uptime(999 * 86400 + 23 * 3600 + 59 * 60 + 59, wv, sizeof(wv));
-    int values_right = value_x + text_measure_width(wv, 2);
-    int w2 = value_x + text_measure_width("99.99 99.99 99.99", 2);
-    if (w2 > values_right) values_right = w2;
-    int side_x = values_right + 20;
-    cpu_beside = (bar_x + bar_w) - side_x >= MON_SIDE_MIN_W;
-    cpu_x   = cpu_beside ? side_x : bar_x;
-    graph_w = (bar_x + bar_w) - cpu_x;
+    int text_right = text_right_edge();
+    int col_x = text_right + MON_COL_GAP;
+    graphs_beside = (CONTENT_RIGHT - 10) - col_x >= MON_SIDE_MIN_W;
 
-    /* Two passes: the minimum graph, then grow it into the spare height.  In
-     * the beside case the minimum is what the two rows already give it. */
-    int min_grow = 0;
-    int bottom   = place_stack(min_grow) - CONTENT_Y;
-    int max_grow = cpu_beside ? MON_GRAPH_MAX_H - (mon_rows * MON_ROW_H - MON_LINE_H - 2)
-                              : MON_GRAPH_MAX_H - MON_GRAPH_MIN_H;
-    int grow = CONTENT_H - MON_FIT_SLACK - bottom;
-    if (grow > max_grow) grow = max_grow;
-    if (grow < 0) grow = 0;
-    int y = place_stack(grow);
+    int text_bottom, graphs_bottom;
+    if (graphs_beside) {
+        bar_w = text_right - bar_x;
+        header_right = text_right;
+        text_bottom   = place_text();
+        graphs_bottom = place_graphs(col_x, (CONTENT_RIGHT - 10) - col_x, CONTENT_Y + 6);
+    } else {
+        bar_w = CONTENT_WIDTH - 20;
+        header_right = CONTENT_RIGHT;
+        text_bottom   = place_text();
+        graphs_bottom = place_graphs(bar_x, bar_w, text_bottom + MON_METER_GAP + 6);
+    }
 
     /* ⚠️ THE RECEIPT, in the settings stack's shape.  Everything here hangs off
      * CONTENT_Y, which comes from a per-unit touch inset, so a row pushed past
-     * the content rect looks fine on one unit and clips on another.  The last
-     * storage bar is the lowest thing drawn; the right edge is the widest line,
-     * each formatted through the draw path's own formatter with worst-case
-     * values (1048575 kB is format_bytes()'s longest, "1024.0 MB"). */
+     * the content rect looks fine on one unit and clips on another.  The lowest
+     * thing drawn is the last storage bar or the last graph; the right edge is
+     * the widest text line, bar, graph frame or caption, each caption
+     * formatted through its draw path's formatter with worst-case values. */
     {
         const unsigned long W = 1048575;
         char s[160];
-        int bottom = y - CONTENT_Y;
-        int right  = bar_x + bar_w;
-        int w;
-
-        format_uptime(999 * 86400 + 23 * 3600 + 59 * 60 + 59, s, sizeof(s));
-        w = value_x + text_measure_width(s, 2);
-        if (w > right) right = w;
-        w = value_x + text_measure_width("99.99 99.99 99.99", 2);
-        if (w > right) right = w;
-        if (mon_rows == 3) {
-            soc_temp_format(SOC_TEMP_MIN_MC, s, sizeof(s));
-            w = value_x + text_measure_width(s, 2);
+        int bottom = (text_bottom > graphs_bottom ? text_bottom : graphs_bottom) - CONTENT_Y;
+        int right  = text_right, w, min_h = MON_GRAPH_MAX_H, gw = 0, n = 0;
+        if (bar_x + bar_w > right) right = bar_x + bar_w;
+        for (int i = 0; i < NUM_GRAPHS; i++) {
+            const MonGraph *g = graphs[i];
+            if (!g->shown) continue;
+            n++;
+            if (g->x + g->w > right) right = g->x + g->w;
+            if (g->h < min_h) min_h = g->h;
+            gw = g->w;
+            if (g == &g_cpu)       fmt_cpu(1000, 1000, s, sizeof(s));
+            else if (g == &g_mem)  fmt_mem_graph((long)W, W, s, sizeof(s));
+            else                   fmt_temp_graph(true, SOC_TEMP_MIN_MC, s, sizeof(s));
+            w = g->x + text_measure_width(s, 1);
             if (w > right) right = w;
         }
-        fmt_used_of("SWAP", W, W, s, sizeof(s));
-        w = bar_x + text_measure_width(s, 1);
-        if (w > right) right = w;
-        fmt_ram_detail(W, W, W, s, sizeof(s));
-        w = bar_x + text_measure_width(s, 1);
-        if (w > right) right = w;
-        for (int i = 0; i < NUM_MOUNT_POINTS; i++) {
-            fmt_disk(mount_points[i], W, W, W, s, sizeof(s));
-            w = bar_x + text_measure_width(s, 1);
-            if (w > right) right = w;
-        }
-        fmt_cpu(1000, 1000, s, sizeof(s));
-        w = cpu_x + text_measure_width(s, 1);
-        if (w > right) right = w;
         const char *verdict = bottom > CONTENT_H     ? "⚠ PAST CONTENT BOTTOM"
                             : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
-                            : graph_h < MON_GRAPH_MIN_H ? "⚠ CPU GRAPH TOO SHORT"
+                            : min_h < MON_GRAPH_MIN_H ? "⚠ GRAPH TOO SHORT"
                             : "fits";
         printf("control_panel: monitor stack %s — bottom +%d of CONTENT_H %d, "
-               "right %d of CONTENT_RIGHT %d, cpu graph %dx%d %s, soc temp %s (safe %dx%d, %s)\n",
+               "right %d of CONTENT_RIGHT %d, %d graphs %dx%d %s, soc temp %s (safe %dx%d, %s)\n",
                verdict, bottom, CONTENT_H, right, CONTENT_RIGHT,
-               graph_w, graph_h, cpu_beside ? "beside" : "under",
+               n, gw, min_h, graphs_beside ? "beside" : "under",
                mon_rows == 3 ? "shown" : "absent",
                SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                CONTENT_WIDTH < 600 ? "portrait" : "landscape");
@@ -440,28 +520,25 @@ static void draw_row(Framebuffer *fb, int y, const char *label, const char *valu
     fb_draw_text(fb, value_x, y, value, COLOR_WHITE, 2);
 }
 
-/* The CPU history: one column per held sample, newest at the right edge, so
- * a fresh page fills from the right.  Coloured by level like a usage bar, with
- * a dim rule at 50 %.  Reads nothing — the samples are cpu_sample()'s. */
-static void draw_cpu_graph(Framebuffer *fb) {
-    char s[96];
-    fmt_cpu(cpu_others_pm, cpu_self_pm, s, sizeof(s));
-    fb_draw_text(fb, cpu_x, cpu_label_y, s, COLOR_WHITE, 1);
-
-    fb_fill_rect(fb, cpu_x, graph_y, graph_w, graph_h, RGB(8, 8, 14));
-    fb_draw_rect(fb, cpu_x, graph_y, graph_w, graph_h, RGB(70, 70, 90));
-    int ix = cpu_x + 1, iy = graph_y + 1, iw = graph_w - 2, ih = graph_h - 2;
+/* THE history graph, for all three series: the caption, then one column per
+ * held sample, newest at the right edge, so a fresh page fills from the
+ * right.  Coloured by level like a usage bar, with a dim rule at mid-axis.
+ * Reads nothing — the samples are the samplers'. */
+static void draw_graph(Framebuffer *fb, const MonGraph *g, const char *caption) {
+    fb_draw_text(fb, g->x, g->label_y, caption, COLOR_WHITE, 1);
+    fb_fill_rect(fb, g->x, g->y, g->w, g->h, RGB(8, 8, 14));
+    fb_draw_rect(fb, g->x, g->y, g->w, g->h, RGB(70, 70, 90));
+    int ix = g->x + 1, iy = g->y + 1, iw = g->w - 2, ih = g->h - 2;
     if (iw <= 0 || ih <= 0) return;
     fb_fill_rect(fb, ix, iy + ih / 2, iw, 1, RGB(45, 45, 60));
 
-    int first = CPU_HIST_N - cpu_hist.count;   /* slot of the oldest sample */
-    for (int i = 0; i < cpu_hist.count; i++) {
-        int pm   = cpu_hist_get(&cpu_hist, i);
+    int first = CPU_HIST_N - g->hist.count;    /* slot of the oldest sample */
+    for (int i = 0; i < g->hist.count; i++) {
+        int pm   = cpu_hist_get(&g->hist, i);
         int slot = first + i;
         int x0 = ix + slot * iw / CPU_HIST_N;
         int x1 = ix + (slot + 1) * iw / CPU_HIST_N;
-        int h  = pm * ih / 1000;
-        if (pm > 0 && h == 0) h = 1;           /* a non-zero sample stays visible */
+        int h  = mon_bar_h(pm, ih);
         if (h <= 0 || x1 <= x0) continue;
         uint32_t c = pm >= 800 ? RGB(210, 70, 60)
                    : pm >= 500 ? RGB(220, 170, 40)
@@ -482,9 +559,17 @@ static void monitor_page_draw(Framebuffer *fb) {
         else         snprintf(s, sizeof(s), "--");
         draw_row(fb, temp_y, MON_TEMP_LABEL, s);
     }
-    draw_cpu_graph(fb);
 
-    draw_section_header(fb, sec_mem_y, "MEMORY");
+    fmt_cpu(cpu_others_pm, cpu_self_pm, s, sizeof(s));
+    draw_graph(fb, &g_cpu, s);
+    fmt_mem_graph(mem_used_kb, mi->total_kb, s, sizeof(s));
+    draw_graph(fb, &g_mem, s);
+    if (g_temp.shown) {
+        fmt_temp_graph(temp_ok, temp_mc, s, sizeof(s));
+        draw_graph(fb, &g_temp, s);
+    }
+
+    draw_section_header_to(fb, sec_mem_y, "MEMORY", header_right);
     unsigned long used = mi->total_kb - mi->free_kb - mi->buffers_kb - mi->cached_kb;
     if (used > mi->total_kb) used = 0;
     fmt_used_of("RAM", used, mi->total_kb, s, sizeof(s));
@@ -505,7 +590,7 @@ static void monitor_page_draw(Framebuffer *fb) {
                        su, mi->swap_total_kb, "");
     }
 
-    draw_section_header(fb, sec_disk_y, "STORAGE");
+    draw_section_header_to(fb, sec_disk_y, "STORAGE", header_right);
     for (int i = 0; i < NUM_MOUNT_POINTS; i++) {
         const DiskInfo *di = &sample.disk[i];
         if (!di->valid) {
@@ -521,14 +606,16 @@ static void monitor_page_draw(Framebuffer *fb) {
     }
 }
 
-/* No widgets: the only thing that changes the screen is the clock.  The CPU
- * point is taken on the same tick, so the graph costs no repaint of its own. */
+/* No widgets: the only thing that changes the screen is the clock.  The graph
+ * points are taken on the same tick, so the graphs cost no repaint of their
+ * own. */
 static CpPageResult monitor_page_input(Config *cfg, int tx, int ty,
                                        bool touching, uint32_t now) {
     (void)cfg; (void)tx; (void)ty; (void)touching;
     if (now - sampled_ms < MON_REFRESH_MS) return CP_PAGE_IDLE;
     monitor_sample();
     cpu_sample();
+    graphs_sample();
     sampled_ms = now;
     return CP_PAGE_REDRAW;
 }

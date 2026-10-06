@@ -123,6 +123,7 @@ CTEST_ROWS=(
     "cpu_load_test|-I.|control_panel/cpu_load.c"
     "soc_temp_test|-I.|control_panel/soc_temp.c"
     "mon_ring_test|-I.|sysmon/mon_ring.c"
+    "mon_graph_test|-I.|control_panel/mon_graph.c"
     "evdev_resync_test|-I common|common/gamepad.c common/input_slots.c common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "fb_rotate_test|-O2 -I common|common/framebuffer.c common/hardware.c common/config.c"
     "framebuffer_bpp_test|-I common|common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"

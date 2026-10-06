@@ -50,8 +50,10 @@
 #define COLOR_BG          RGB(20, 20, 30)      /* the panel's background */
 #define COLOR_DISABLED    RGB(120, 120, 120)   /* a control switched off */
 
-/* A section title at y, with a rule running to CONTENT_RIGHT. */
+/* A section title at y, with a rule running to CONTENT_RIGHT — or, for a
+ * header heading one column of a two-column page, to `right`. */
 void draw_section_header(Framebuffer *fb, int y, const char *title);
+void draw_section_header_to(Framebuffer *fb, int y, const char *title, int right);
 
 /* A value/min..max fill bar with its percentage printed to the right; drawn
  * grey when !active (a setting that is currently switched off). */
