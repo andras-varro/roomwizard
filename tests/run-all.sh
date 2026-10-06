@@ -122,6 +122,7 @@ CTEST_ROWS=(
     "bezel_scale_test|-I common|common/framebuffer.c common/hardware.c common/config.c"
     "config_test|-I common|common/config.c"
     "cpu_load_test|-I.|control_panel/cpu_load.c"
+    "soc_temp_test|-I.|control_panel/soc_temp.c"
     "evdev_resync_test|-I common|common/gamepad.c common/input_slots.c common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"
     "fb_rotate_test|-O2 -I common|common/framebuffer.c common/hardware.c common/config.c"
     "framebuffer_bpp_test|-I common|common/framebuffer.c common/hardware.c common/config.c common/touch_input.c"

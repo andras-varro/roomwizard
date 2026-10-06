@@ -1,0 +1,11 @@
+--- a/drivers/thermal/ti-soc-thermal/ti-bandgap.c
++++ b/drivers/thermal/ti-soc-thermal/ti-bandgap.c
+@@ -1271,7 +1271,7 @@ int ti_bandgap_probe(struct platform_device *pdev)
+ 	bgp->dev = &pdev->dev;
+ 
+ 	if (TI_BANDGAP_HAS(bgp, UNRELIABLE))
+-		dev_warn(&pdev->dev,
++		dev_info(&pdev->dev,
+ 			 "This OMAP thermal sensor is unreliable. You've been warned\n");
+ 
+ 	if (TI_BANDGAP_HAS(bgp, TSHUT)) {

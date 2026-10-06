@@ -23,3 +23,10 @@ enable  LOGO_LINUX_CLUT224
 # recover's unbind leaves OTG_FORCESTDBY forcing MSTANDBY and no DMA transfer completes again.
 # Measured on .188, 2026-09-27: patched, audio streams after replug + recover with FORCESTDBY 0.
 enable  USB_INVENTRA_DMA
+# The OMAP3 on-die bandgap sensor. The vendor DTB already carries bandgap@48002524
+# ("ti,omap34xx-bandgap") and a cpu_thermal zone pointing at it, and TI_SOC_THERMAL is already =y,
+# but without this symbol ti-bandgap.c has no OMAP3 match entry, so the zone exists and its temp
+# read fails with EINVAL. Upstream flags the OMAP3 data TI_BANDGAP_FEATURE_UNRELIABLE: a 7-bit ADC,
+# a coarse table and no trim, so read it as a trend, not as a calibrated junction temperature.
+# Measured on .188, 2026-10-05: thermal_zone0/temp 72-73 C idle, 76 C after a 30 s busy loop.
+enable  OMAP3_THERMAL

@@ -1,5 +1,5 @@
-/* monitor_page.c — control_panel's Monitor page: uptime, load, CPU history,
- * memory, storage.
+/* monitor_page.c — control_panel's Monitor page: uptime, load, SoC temperature,
+ * CPU history, memory, storage.
  *
  * Opened from the home grid's Monitor tile, and the one home for the live
  * system figures.  Exposed only as
@@ -12,10 +12,15 @@
  *
  * The CPU graph rides the same once-a-second sample: one point per sample, so
  * it adds no repaint of its own.  The math and the ring are cpu_load.c's.
+ *
+ * The SoC TEMP row exists only when a thermal zone reads (soc_temp.h): on a
+ * kernel without the bandgap driver it is not drawn at all, and the rows
+ * below move up — an absent figure is removed, not greyed.
  */
 #include "cp_page.h"
 #include "cp_ui.h"
 #include "cpu_load.h"
+#include "soc_temp.h"
 #include "../common/common.h"
 
 #include <stdio.h>
@@ -193,9 +198,35 @@ static void cpu_restart(void) {
     cpu_snap(&cpu_prev);
 }
 
+/* SoC temperature: which thermal zone, and its newest reading. */
+#define MON_MAX_ZONES 8
+static int  temp_zone = -2;      /* -2 not looked up yet, -1 none, else N */
+static int  temp_mc;
+static bool temp_ok;
+
+static int temp_read_zone(int n, int *mc) {
+    char path[64], raw[32];
+    snprintf(path, sizeof(path), "/sys/class/thermal/thermal_zone%d/temp", n);
+    return read_file_line(path, raw, sizeof(raw)) == 0
+        && soc_temp_parse(raw, mc) == 0 ? 0 : -1;
+}
+
+/* Whether the row exists.  The zone is looked up once — the first whose temp
+ * reads and parses — because the sensor driver is built into the image, so
+ * the answer cannot change within a boot; layout() and the sampler both ask. */
+static bool temp_present(void) {
+    if (temp_zone == -2) {
+        temp_zone = -1;
+        for (int n = 0; n < MON_MAX_ZONES; n++)
+            if (temp_read_zone(n, &temp_mc) == 0) { temp_zone = n; break; }
+    }
+    return temp_zone >= 0;
+}
+
 static void monitor_sample(void) {
     read_uptime(sample.uptime, sizeof(sample.uptime));
     read_loadavg(sample.load, sizeof(sample.load));
+    temp_ok = temp_present() && temp_read_zone(temp_zone, &temp_mc) == 0;
     read_meminfo(&sample.mem);
     for (int i = 0; i < NUM_MOUNT_POINTS; i++)
         read_disk_usage(mount_points[i], &sample.disk[i]);
@@ -223,13 +254,15 @@ static void monitor_page_enter(void) {
 #define MON_LINE_H     12   /* a scale-1 text line and its gap to the next */
 #define MON_BAR_H      16
 #define MON_METER_GAP  10
-#define MON_LOAD_LABEL "LOAD AVG:"   /* the wider label: values align after it */
+#define MON_LOAD_LABEL "LOAD AVG:"
+#define MON_TEMP_LABEL "SOC TEMP:"   /* values align after the wider of these */
 #define MON_GRAPH_MIN_H 24  /* below this a CPU graph is a smear */
 #define MON_GRAPH_MAX_H 96  /* past this it only takes room from nothing */
 #define MON_SIDE_MIN_W 240  /* graph beside UPTIME/LOAD only if this wide */
 #define MON_FIT_SLACK   4   /* left under the last bar when growing the graph */
 
-static int  uptime_y, load_y, value_x;
+static int  uptime_y, load_y, temp_y, value_x;
+static int  mon_rows;   /* scale-2 rows at the top: 2, or 3 with SOC TEMP */
 static int  sec_mem_y, ram_y, swap_y, sec_disk_y;
 static int  disk_y[NUM_MOUNT_POINTS];
 static int  bar_x, bar_w;
@@ -256,23 +289,25 @@ static int place_meters(int y) {
     return y;
 }
 
-/* UPTIME, LOAD and the CPU graph, with the graph grown by `grow` px past its
- * minimum; then the meters.  Returns the stack's bottom y.  The graph goes
- * BESIDE the two scale-2 rows when the room right of their widest value is at
- * least MON_SIDE_MIN_W (landscape), else UNDER them, full width (portrait). */
+/* UPTIME, LOAD, SOC TEMP (if present) and the CPU graph, with the graph grown
+ * by `grow` px past its minimum; then the meters.  Returns the stack's bottom
+ * y.  The graph goes BESIDE the scale-2 rows when the room right of their
+ * widest value is at least MON_SIDE_MIN_W (landscape), else UNDER them, full
+ * width (portrait). */
 static int place_stack(int grow) {
     int y = CONTENT_Y + 6;
     uptime_y = y;
     load_y   = y + MON_ROW_H;
+    temp_y   = y + 2 * MON_ROW_H;   /* drawn only when mon_rows is 3 */
     if (cpu_beside) {
         /* The rows' block is as tall as the graph and its label need. */
-        int block = 2 * MON_ROW_H + grow;
+        int block = mon_rows * MON_ROW_H + grow;
         cpu_label_y = uptime_y;
         graph_y = cpu_label_y + MON_LINE_H + 2;
         graph_h = block - (MON_LINE_H + 2);
         y += block + 6;
     } else {
-        y += 2 * MON_ROW_H + 6;
+        y += mon_rows * MON_ROW_H + 6;
         cpu_label_y = y;
         graph_y = y + MON_LINE_H + 2;
         graph_h = MON_GRAPH_MIN_H + grow;
@@ -287,7 +322,11 @@ static int place_stack(int grow) {
  * CONTENT_H is the constraint the receipt below checks.  The CPU graph takes
  * whatever height is left, between MON_GRAPH_MIN_H and MON_GRAPH_MAX_H. */
 static void monitor_page_layout(void) {
-    value_x  = CONTENT_LEFT + 10 + text_measure_width(MON_LOAD_LABEL, 2) + 12;
+    mon_rows = temp_present() ? 3 : 2;
+    int label_w = text_measure_width(MON_LOAD_LABEL, 2);
+    if (mon_rows == 3 && text_measure_width(MON_TEMP_LABEL, 2) > label_w)
+        label_w = text_measure_width(MON_TEMP_LABEL, 2);
+    value_x  = CONTENT_LEFT + 10 + label_w + 12;
     bar_x = CONTENT_LEFT + 10;
     bar_w = CONTENT_WIDTH - 20;
 
@@ -306,7 +345,7 @@ static void monitor_page_layout(void) {
      * the beside case the minimum is what the two rows already give it. */
     int min_grow = 0;
     int bottom   = place_stack(min_grow) - CONTENT_Y;
-    int max_grow = cpu_beside ? MON_GRAPH_MAX_H - (2 * MON_ROW_H - MON_LINE_H - 2)
+    int max_grow = cpu_beside ? MON_GRAPH_MAX_H - (mon_rows * MON_ROW_H - MON_LINE_H - 2)
                               : MON_GRAPH_MAX_H - MON_GRAPH_MIN_H;
     int grow = CONTENT_H - MON_FIT_SLACK - bottom;
     if (grow > max_grow) grow = max_grow;
@@ -331,6 +370,11 @@ static void monitor_page_layout(void) {
         if (w > right) right = w;
         w = value_x + text_measure_width("99.99 99.99 99.99", 2);
         if (w > right) right = w;
+        if (mon_rows == 3) {
+            soc_temp_format(SOC_TEMP_MIN_MC, s, sizeof(s));
+            w = value_x + text_measure_width(s, 2);
+            if (w > right) right = w;
+        }
         fmt_used_of("SWAP", W, W, s, sizeof(s));
         w = bar_x + text_measure_width(s, 1);
         if (w > right) right = w;
@@ -350,9 +394,10 @@ static void monitor_page_layout(void) {
                             : graph_h < MON_GRAPH_MIN_H ? "⚠ CPU GRAPH TOO SHORT"
                             : "fits";
         printf("control_panel: monitor stack %s — bottom +%d of CONTENT_H %d, "
-               "right %d of CONTENT_RIGHT %d, cpu graph %dx%d %s (safe %dx%d, %s)\n",
+               "right %d of CONTENT_RIGHT %d, cpu graph %dx%d %s, soc temp %s (safe %dx%d, %s)\n",
                verdict, bottom, CONTENT_H, right, CONTENT_RIGHT,
                graph_w, graph_h, cpu_beside ? "beside" : "under",
+               mon_rows == 3 ? "shown" : "absent",
                SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                CONTENT_WIDTH < 600 ? "portrait" : "landscape");
     }
@@ -401,6 +446,12 @@ static void monitor_page_draw(Framebuffer *fb) {
 
     draw_row(fb, uptime_y, "UPTIME:", sample.uptime);
     draw_row(fb, load_y, MON_LOAD_LABEL, sample.load);
+    if (mon_rows == 3) {
+        /* The zone exists; a single failed read shows "--", not a stale figure. */
+        if (temp_ok) soc_temp_format(temp_mc, s, sizeof(s));
+        else         snprintf(s, sizeof(s), "--");
+        draw_row(fb, temp_y, MON_TEMP_LABEL, s);
+    }
     draw_cpu_graph(fb);
 
     draw_section_header(fb, sec_mem_y, "MEMORY");
