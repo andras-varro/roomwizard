@@ -175,13 +175,12 @@ and returns, and landscape is unchanged.
 
 Userspace except F101, which is the image build.
 
-### F4. Surface the SoC temperature and the RTC cell voltage — temperature implemented, panel check and cell voltage left
+### F4. Surface the RTC cell voltage on Monitor — open
 
-The temperature half is implemented and booted on `.188`: a `SOC TEMP:` row on Monitor (hidden when no zone; pure
-parser `control_panel/soc_temp.{c,h}`, test `native_apps/tests/soc_temp_test.c`; sensor facts in
+`in_voltage9` is the RTC backup cell and needs no wire; show it as a Monitor row (the SoC temperature row already
+exists: `control_panel/soc_temp.{c,h}`, sensor facts in
 [`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)).
-**Left:** the operator's panel check of the page, and `in_voltage9` (RTC backup cell, needs no wire; a "battery low"
-warning is nearly free).
+A "battery low" warning is nearly free once the row reads.
 ### F8. Smooth LED effects — open
 
 The two LEDs are true PWM and drive to red / amber / green with smooth crossfade, visible from outside
@@ -418,21 +417,18 @@ tied to rooms, since a BeagleBone target has nothing to do with rooms, and it fi
 (F102) and the BeagleBone port (F106). Candidate names are open. **Done when** a name is chosen and the tree, docs,
 device paths and `LICENSE.md` follow it.
 
-### F132. Monitor history daemon: CPU, memory and SoC temperature in a ~2 minute ring — implemented, awaiting two operator steps
+### F136. Screen blanking after a configurable idle time — open, operator request 2026-10-06
 
-`rwmond` is implemented (commit 2a81e0d) and measured on `.188`: 0.27 % CPU (48 ticks / 180.04 s, `CLK_TCK` 100),
-`VmRSS` 1096 kB, nice 19, against the operator's ~1 % threshold. **Left:** (1) the operator runs
-`bash commissioning/provision.sh 192.168.50.188` (the auto-mode classifier refused it for the worker), then
-`ssh root@192.168.50.188 '/etc/init.d/rwmond status'` to confirm the boot start; (2) panel check: Control Panel,
-Monitor shows a full CPU graph at once.
-
-### F133. Monitor page re-layout: text left, charts right — implemented 2026-10-06, awaiting panel check
-
-Implemented in `control_panel.c` (one `draw_graph()`, scaling in `control_panel/mon_graph.c`). Receipts measured on `.188`: landscape 3 graphs 372x96 beside, portrait 3 graphs 381x96 under; **unseen on the panel**. **Done when** the operator has looked at Control Panel → Monitor in both orientations. Small open point: the RAM text row is total−free−buffers−cached while the graph is MemTotal−MemAvailable (caption "MEM IN USE"), so the two disagree; pick one definition.
-
-### F134. Over-temperature warning: red LED plus a red square on every present — implemented 2026-10-06, awaiting ScummVM and VNC check
-
-Implemented: `rwmond` latches `MON_FLAG_OVERTEMP` at 85 °C and clears at 80 °C and lights `red_led`; `fb_swap()` paints the square (`native_apps/common/overtemp.h` holds the decisions). Thresholds 85/80 are operator-accepted defaults for an uncalibrated sensor (about 72 °C idle), not datasheet-derived. Verified on `.188` in the launcher by forcing (`touch /var/run/rwmond.force_overtemp`). **Done when** the same force file shows the square inside ScummVM and a VNC session (16 bpp; `vnc_client` presents only on frame updates, so it can lag on a static screen) and removing it clears it. Unverified: portrait, a real thermal trip.
+Full backlight heats the SoC area by about 10 °C (60s versus ~70 °C measured at the Monitor SoC temperature row,
+[`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)).
+Turn `/sys/class/leds/backlight/brightness` (0-100) to 0 after N minutes without input; any input (touch, key, pad,
+mouse) restores the configured level, and **the waking touch must be swallowed** so it presses nothing. Per the
+operator's settings rule N belongs in the settings app, next to the backlight level: `control_panel/display_page.c`
+writes `backlight_brightness` (`common/config.c:347`, applied by `common/hardware.c:225`). **Open design:** who owns
+the idle timer, a daemon such as `native_apps/sysmon/rwmond.c` (which cannot see input events and would have to
+open every event node) or library code in `common/` (every app already polls `gamepad.c`; ScummVM and
+`vnc_client` link their own input paths, so each would need it); and which apps keep the screen on regardless (a
+video or VNC session). **Done when** the panel blanks after the configured time and a tap wakes it without acting.
 
 ## Structural and cleanup
 
