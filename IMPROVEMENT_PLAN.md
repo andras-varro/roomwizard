@@ -417,18 +417,13 @@ tied to rooms, since a BeagleBone target has nothing to do with rooms, and it fi
 (F102) and the BeagleBone port (F106). Candidate names are open. **Done when** a name is chosen and the tree, docs,
 device paths and `LICENSE.md` follow it.
 
-### F136. Screen blanking after a configurable idle time — open, operator request 2026-10-06
+### F136. Screen blanking after a configurable idle time — implemented, awaiting the operator's panel check
 
-Full backlight heats the SoC area by about 10 °C (60s versus ~70 °C measured at the Monitor SoC temperature row,
-[`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)).
-Turn `/sys/class/leds/backlight/brightness` (0-100) to 0 after N minutes without input; any input (touch, key, pad,
-mouse) restores the configured level, and **the waking touch must be swallowed** so it presses nothing. Per the
-operator's settings rule N belongs in the settings app, next to the backlight level: `control_panel/display_page.c`
-writes `backlight_brightness` (`common/config.c:347`, applied by `common/hardware.c:225`). **Open design:** who owns
-the idle timer, a daemon such as `native_apps/sysmon/rwmond.c` (which cannot see input events and would have to
-open every event node) or library code in `common/` (every app already polls `gamepad.c`; ScummVM and
-`vnc_client` link their own input paths, so each would need it); and which apps keep the screen on regardless (a
-video or VNC session). **Done when** the panel blanks after the configured time and a tap wakes it without acting.
+Implemented (`blank_minutes`, Display page SCREEN OFF cycler); measured on `.188` only that `blank_minutes=1` goes
+from brightness 100 to 0 after 75 s and that a restart restores 100. **Not verified: wake and swallow by touch, pad,
+key or mouse.** Panel check: (1) Display page, SCREEN OFF to 1 MIN; (2) leave about 70 s, the panel goes dark;
+(3) tap once on a button, the panel lights and nothing fires, tap again and it acts; (4) repeat with a USB key or
+pad press; then set it back to 10 MIN or NEVER. **Done when** the operator confirms 2-4.
 
 ## Structural and cleanup
 

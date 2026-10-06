@@ -172,17 +172,11 @@ every app actually uses.
 1. **LEDs: `hw_set_led()` / `hw_set_leds()`.** Never write `/sys/class/leds/` directly — these
    respect the `led_enabled` and `led_brightness` config.
 2. **Backlight: `hw_set_backlight()`.** It scales by the configured `backlight_brightness`
-   percentage, so `hw_set_backlight(100)` means "the user's chosen maximum". The one exception is a
-   settings slider *previewing* a value — it is choosing that percentage, so scaling by the outgoing
-   one shows the wrong brightness. `hw_set_backlight_raw()` is for that, and it exists so a preview
-   does not carry its own copy of the sysfs path: two did, both naming a node that does not exist here.
-3. **Call `hw_set_backlight(100)` at both startup and exit.** Startup so the app matches the
-   user's preference; exit so the next app inherits a sane value. `snake.c` misses the exit
-   call and `app_launcher.c` misses both — do not copy them.
-4. **`hw_leds_off()` deliberately bypasses config** and always writes 0, so cleanup works even
-   when LEDs are disabled.
-5. Direct sysfs writes are acceptable **only** in test functions that intentionally exercise
-   raw hardware.
+   percentage, so `hw_set_backlight(100)` means "the user's chosen maximum". The one exception is a settings slider *previewing* a value — it is choosing that percentage, so scaling by the outgoing one shows the wrong brightness. `hw_set_backlight_raw()` is for that, and it exists so a preview does not carry its own copy of the sysfs path: two did, both naming a node that does not exist here.
+3. **Call `hw_set_backlight(100)` at both startup and exit.** Startup so the app matches the user's preference; exit so the next app inherits a sane value. `snake.c` misses the exit call and `app_launcher.c` misses both — do not copy them.
+4. **`hw_leds_off()` deliberately bypasses config** and always writes 0, so cleanup works even when LEDs are disabled.
+5. Direct sysfs writes are acceptable **only** in test functions that intentionally exercise raw hardware.
+6. **Screen blanking is already in `common/`; an app adds nothing.** `hw_blank_poll()` runs from `fb_swap`, `touch_poll` and `gamepad_poll`, and the waking touch is swallowed there. A video or remote app opts out with `hw_blank_set_enabled(false)` after `fb_init` (`vnc_client.c`); a loop that blocks over 5 s without polling restarts the idle clock and restores the panel.
 
 **Config cache is per-process.** `hardware.c` caches config on the first `hw_set_*()` call to avoid
 re-reading during animations. A `fork()`/`exec()` child gets a fresh cache, so launched apps always see
