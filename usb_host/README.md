@@ -114,10 +114,12 @@ configuration descriptor (`bMaxPower = 250`, also in 2mA units).
 
 ### Power budget in our own image
 
-Nothing in this repo raises the budget: our DTBs keep `power = <0x32>` (100 mA) **[inferred from the
-DTB, not measured on a unit]**, so a controller connected directly may be rejected and a powered hub
-avoids it. The vendor-image byte patch that raised it is deleted with vendor-kernel support.
-`build-and-deploy.sh` prints the live value at the end: `/proc/device-tree/ocp@68000000/usb_otg_hs@480ab000/power`.
+Our image's DTB carries `power = <0xfa>` (500 mA), set by `kernel/dts/musb-power.sh`: **measured 2026-10-06 on
+`.188`**, `/proc/device-tree` reads `0xfa`, the byte at DTB offset `0xeb47`, and an Xbox 360 pad plugged
+directly (no hub) enumerated as `input1` with no `insufficient available bus power` in `dmesg` (operator, n=1).
+The vendor image keeps `0x32` (100 mA), where a powered hub is needed; its byte patch is deleted with
+vendor-kernel support. `build-and-deploy.sh` prints the live value at the end:
+`/proc/device-tree/ocp@68000000/usb_otg_hs@480ab000/power`.
 
 
 #### DTB Location in uImage

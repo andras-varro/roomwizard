@@ -48,9 +48,7 @@ mkimage -A arm -O linux -T kernel -C none -a 0x80008000 -e 0x80008000 -n '' -d z
   differing bytes.
 - `mkimage` and `fdtput` (package `device-tree-compiler`, probed as `dtc`) are in `setup-build-env.sh`'s `kmod` group. A clone without them can build
   modules but cannot package an image.
-- ⚠️ **None of our DTBs raises the USB power budget**: `usb_otg_hs` keeps the vendor's `power` `0x32`
-  (100 mA, [§3.6](../SYSTEM_ANALYSIS.md#36-usb)), so a controller needs a powered hub. The byte patch that
-  raised it on the vendor image is deleted with vendor-kernel support (tag `last-vendor-kernel`).
+- **The USB power budget is ours (`dts/musb-power.sh`)**: `usb_otg_hs` `power` goes `0x32` (100 mA, vendor, [§3.6](../SYSTEM_ANALYSIS.md#36-usb)) to `0xfa` (500 mA); `--vendor-dtb` keeps `0x32`. Booted on `.188`: `/proc/device-tree` reads `0xfa` (measured 2026-10-06).
 
 Installing the image on a unit is a **manual operator step**, and nothing scripted writes `uImage-system`
 ([`lib/CLAUDE.md`](../lib/CLAUDE.md)). The permission classifier refuses an agent's write there, so the operator takes a backup of the running
@@ -58,10 +56,11 @@ Installing the image on a unit is a **manual operator step**, and nothing script
 copying the backup back, by SSH if the image answers or with a card reader if it does not. `build-image.sh`
 itself writes only `uImage-test`; `mlo`, `u-boot.bin` and `ctrlblock.bin` stay untouched.
 
-`.188`'s p1 holds, **measured 2026-10-05**, the boot files, `uImage-bootstrap`, `uImage-system.vendor`, `.f103undo`
+`.188`'s p1 holds, **measured 2026-10-06**, the boot files, `uImage-bootstrap`, `uImage-system.vendor`, `.f103undo`
 (`24ab7f08…`, the flush-patch image), `.f125undo` (`fb4f2c94…`, the image before the TCP patches), `.f4undo`
-(`022be99b…`, the image before `OMAP3_THERMAL`) and `uImage-system`, our image with every `kernel/patches/` patch,
-our panel DTB, the power node below and `OMAP3_THERMAL` (`72683498…`). p1 is 54% used; an image is ~5.2 MB, so
+(`022be99b…`, the image before `OMAP3_THERMAL`), `.f101vbusundo` (`72683498…`, the image before the 500 mA
+`musb-power.sh` budget, so the undo for that change) and `uImage-system`, our image with every `kernel/patches/`
+patch, our panel DTB, the power node below, `OMAP3_THERMAL` and `musb-power.sh` (`45b05f77…`). p1 is 54% used; an image is ~5.2 MB, so
 delete a stale one before the next.
 
 **Software power-off (`dts/twl4030-poweroff.sh`): booted on `.188`, powers the board down — measured 2026-10-04.**
@@ -118,6 +117,7 @@ manufacturer 93. No MUSB DMA question stands in the way: A2DP is tens of KB/s, w
 | `patches/musb-omap2430-set-vbus-report.patch` | `omap2430_musb_set_vbus()` polls DEVCTL `BDEVICE` 100 × `mdelay(5)`, so upstream's 1 s jiffies deadline never ends the wait: it gives up after ~505 ms **[inferred from source, not timed on the device]** and prints a bare `configured as A device timeout`, then carries on as on success. The patch waits on a `ktime` deadline (1 s from the mailbox work, 500 ms from the SESSREQ hard IRQ) and prints `configured as A device timeout: devctl %02x after %lld ms[ (irq)]`; carry-on is kept. Booted on `.188` with the patch above | reading `omap2430.c`; the message makes the next occurrence measure itself |
 | `patches/tcp-01…12-*.patch` | remote TCP DoS: SegmentSmack CVE-2018-5390 (01-05, out-of-order queue CPU burn) and SACK Panic/slowness/low MSS CVE-2019-11477/78/79 (06-12, `BUG_ON` in `tcp_shifted_skb`, unbounded `tcp_fragment`, MSS 48). The stable 4.14.59/.127/.131/.138/.142 commits **verbatim** from `git.kernel.org`, each keeps its upstream `commit … upstream.` line; apply with offsets, no fuzz. Adds sysctl `net.ipv4.tcp_min_snd_mss` (default 48). FragmentSmack CVE-2018-5391 is not here (an rbtree rework of `inet_frag`) | grep of the pristine tree: no `tcp_min_snd_mss`, `tcp_ooo_try_coalesce` or `rb_fragments` |
 | `patches/ti-bandgap-unreliable-info.patch` | with `OMAP3_THERMAL` the probe prints "This OMAP thermal sensor is unreliable. You've been warned" at warning level on every boot, a boot-console defect | demotes it to info, text unchanged. The config half is `enable OMAP3_THERMAL` in `config-changes`: the vendor DTB already has `bandgap@48002524` (`ti,omap34xx-bandgap`) and a `cpu_thermal` zone and `THERMAL`/`THERMAL_OF`/`TI_SOC_THERMAL`/`TI_THERMAL` were `=y`, but without it `ti-bandgap.c` has no OMAP3 match entry and the zone read failed EINVAL; no DT edit [measured, `.188` 2026-10-05] |
+| `dts/musb-power.sh` | `usb_otg_hs` `power` is `0x32` in the vendor DTB; `omap2430.c` copies it to `pdata->power` and `musb_host_setup()` sets `hcd->power_budget = 2 * power` mA, which the hub driver takes as the root hub budget, so a device asking more than 100 mA is refused (`insufficient available bus power`). The script `fdtput`s `0xfa` (500 mA), leaves `mode` 3. **Booted on `.188`** (uImage md5 `45b05f77…`; undo `.f101vbusundo`, `72683498…`): `/proc/device-tree` `power` reads `0xfa`, the byte at DTB offset `0xeb47` (measured); an Xbox 360 pad plugged directly, no hub, enumerated as `input1` with no `insufficient available bus power` line in `dmesg` (operator, 2026-10-06, n=1). That the budget is what the hub code uses is **[inferred from source]** (only a `dev_dbg` prints it) | reading `musb_host.c` and `omap2430.c`; `/proc/device-tree/ocp@68000000/usb_otg_hs@480ab000/power` |
 | `dts/twl4030-poweroff.sh` | `poweroff` is a halt: the vendor `twl@48` has no power child, so `drivers/mfd/twl4030-power.c` binds nothing and `pm_power_off` stays NULL (measured, `CONFIG_TWL4030_POWER=y`). The script adds `power` (`ti,twl4030-power`, `ti,system-power-controller`): the probe installs `pm_power_off` (writes `PWR_DEVOFF`) and, with the plain compatible, loads no sequence scripts. **Booted on `.188`, powers down** (result above) | reading `twl4030-power.c`; `twl4030_power_off` in `/proc/kallsyms` with nothing bound |
 
 **The panel patch, in detail.**
