@@ -15,6 +15,7 @@
 
 #include "gamepad.h"
 #include "framebuffer.h"
+#include "hardware.h"
 #include "input_scan.h"
 #define LOGGER_LIB_CLIENT
 #include "logger.h"
@@ -805,6 +806,9 @@ static bool poll_gamepad(GamepadManager *gm, int p) {
             }
         } else if (ev.type == EV_KEY) {
             bool down = (ev.value != 0);
+            if (down && ev.value == 1 && hw_blank_note_activity())
+                continue;                   /* woke a dark panel: not a press */
+            hw_blank_keepalive();
             int code = input_pad_key((InputPadLayout)gm->pad_layout[p], ev.code);
 
             if (code == m->btn_jump)
@@ -923,8 +927,11 @@ static bool poll_keyboard_fd(GamepadManager *gm, int *fd, bool *latched) {
     ssize_t r;
     while ((r = read(*fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
         if (input_syn_drop_skip(&sd, &ev)) continue;
-        if (ev.type == EV_KEY)
+        if (ev.type == EV_KEY) {
+            if (ev.value == 1 && hw_blank_note_activity()) continue;
+            hw_blank_keepalive();
             latch_key(latched, ev.code, ev.value != 0);
+        }
     }
     if (read_gone(r)) {
         drop_gone_fd(gm, fd);
@@ -971,6 +978,11 @@ static bool poll_mouse(GamepadManager *gm, InputState *state) {
         ssize_t r = 0;
         while (fd >= 0 && (r = read(fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
             if (input_syn_drop_skip(&sd, &ev)) continue;
+            if (ev.type == EV_REL || (ev.type == EV_KEY && ev.value == 1)) {
+                if (hw_blank_note_activity()) continue;   /* woke a dark panel */
+            } else if (ev.type == EV_KEY) {
+                hw_blank_keepalive();
+            }
             if (ev.type == EV_REL) {
                 if (ev.code == REL_X)
                     accum_dx += ev.value;
@@ -1175,7 +1187,11 @@ void gamepad_poll(GamepadManager *gm, InputState *state,
     state->mouse_connected    = (gm->mouse_count > 0) ? 1 : 0;
 
     /* Read from each input source */
+    hw_blank_poll();
     bool lost = poll_gamepads(gm);    /* latches keys/hat, updates the axes */
+    for (int b = 0; b < GAMEPAD_BUCKETS; b++)       /* a held stick is activity */
+        for (int i = 0; i < 4; i++)
+            if (gm->bucket_axis[b][i]) hw_blank_keepalive();
     lost |= poll_keyboard(gm);        /* latches keys */
     lost |= poll_mouse(gm, state);
     if (lost)                         /* SYN_DROPPED: events were discarded */

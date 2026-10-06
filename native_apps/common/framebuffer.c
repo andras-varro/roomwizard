@@ -836,11 +836,13 @@ void fb_swap(Framebuffer *fb) {
         return;
     fb_present_full(fb);
     fb_overtemp_poll(fb);
+    hw_blank_poll();
 }
 
 void fb_swap_rect(Framebuffer *fb, int x, int y, int w, int h) {
     fb_present_rect(fb, x, y, w, h);
     fb_overtemp_poll(fb);
+    hw_blank_poll();
 }
 
 void fb_clear(Framebuffer *fb, uint32_t color) {

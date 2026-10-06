@@ -1,5 +1,6 @@
 #include "touch_input.h"
 #include "framebuffer.h"
+#include "hardware.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -400,6 +401,9 @@ int touch_wait_for_press(TouchInput *touch, int *x, int *y) {
     return 0;
 }
 
+/* The press that woke a blanked panel is held back until its release. */
+static bool blank_swallow = false;
+
 // After a SYN_DROPPED (input_scan.h): the finger lift — or touch-down — may
 // have been among the events the kernel discarded, so take the level and the
 // position from the kernel and synthesise whichever edge differs. A failed
@@ -415,12 +419,19 @@ static void touch_resync(TouchInput *touch) {
                 ((keys[BTN_TOUCH / lb] >> (BTN_TOUCH % lb)) & 1UL);
     if (down && !touch->touching) {
         touch->touching = true;
-        touch->state.pressed = true;
-        touch->state.held = true;
+        blank_swallow = hw_blank_note_activity();
+        if (!blank_swallow) {
+            touch->state.pressed = true;
+            touch->state.held = true;
+        }
     } else if (!down && touch->touching) {
         touch->touching = false;
-        touch->state.released = true;
-        touch->state.held = false;
+        if (blank_swallow) {
+            blank_swallow = false;
+        } else {
+            touch->state.released = true;
+            touch->state.held = false;
+        }
     }
     if (touch->touching) {
         int x = touch->last_x, y = touch->last_y;
@@ -430,7 +441,9 @@ static void touch_resync(TouchInput *touch) {
     }
 }
 
+
 int touch_poll(TouchInput *touch) {
+    hw_blank_poll();
     // Non-blocking poll. Process events in arrival order:
     //   1. ABS_X, ABS_Y → last_x/last_y (RAW)
     //   2. BTN_TOUCH    → press/release (uses last_x/last_y)
@@ -453,19 +466,29 @@ int touch_poll(TouchInput *touch) {
         } else if (ev.type == EV_KEY && ev.code == BTN_TOUCH) {
             if (ev.value == 1 && !touch->touching) {
                 touch->touching = true;
-                touch->state.pressed = true;
-                touch->state.held = true;
                 int x = touch->last_x, y = touch->last_y;
                 scale_coordinates(touch, &x, &y);
                 touch->state.x = x;
                 touch->state.y = y;
+                /* The touch that wakes a dark panel presses nothing. */
+                blank_swallow = hw_blank_note_activity();
+                if (!blank_swallow) {
+                    touch->state.pressed = true;
+                    touch->state.held = true;
+                }
             } else if (ev.value == 0 && touch->touching) {
                 touch->touching = false;
-                touch->state.released = true;
-                touch->state.held = false;
+                if (blank_swallow) {
+                    blank_swallow = false;      /* its release too */
+                } else {
+                    touch->state.released = true;
+                    touch->state.held = false;
+                }
+                hw_blank_keepalive();
             }
         } else if (ev.type == EV_SYN && ev.code == SYN_REPORT) {
             if (touch->touching) {
+                hw_blank_keepalive();
                 int x = touch->last_x, y = touch->last_y;
                 scale_coordinates(touch, &x, &y);
                 touch->state.x = x;

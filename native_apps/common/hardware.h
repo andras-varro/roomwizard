@@ -43,6 +43,16 @@ int hw_init(void);
  */
 void hw_reload_config(void);
 
+/* Screen blanking after an idle time (config key blank_minutes).  The input
+ * paths call note_activity (true = this input woke a dark panel and MUST be
+ * dropped, with its matching release) or keepalive (refreshes the timer, never
+ * wakes); the present and poll paths call poll.  set_enabled(false) is the
+ * opt-out for video-like processes: never blank, and restore a dark panel. */
+bool hw_blank_note_activity(void);
+void hw_blank_keepalive(void);
+void hw_blank_poll(void);
+void hw_blank_set_enabled(bool enabled);
+
 /**
  * Set individual LED brightness
  * @param led: LED_RED or LED_GREEN

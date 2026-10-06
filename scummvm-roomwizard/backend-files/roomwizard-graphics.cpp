@@ -33,6 +33,9 @@
 #include <sys/time.h>
 #include "backends/platform/roomwizard/roomwizard.h"
 #include "backends/platform/roomwizard/roomwizard-events.h"
+extern "C" {
+#include "hardware.h"
+}
 #include "common/rect.h"
 #include "common/textconsole.h"
 #include "common/system.h"
@@ -103,6 +106,8 @@ void RoomWizardGraphicsManager::initFramebuffer() {
 		return;
 	}
 
+	// A game or video is watched, not touched: this port never blanks the panel.
+	hw_blank_set_enabled(false);
 	_fbInitialized = true;
 
 	debug("RoomWizard: framebuffer %dx%d visible", fbWidth(), fbHeight());

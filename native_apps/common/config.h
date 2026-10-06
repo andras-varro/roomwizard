@@ -149,6 +149,11 @@ int config_led_brightness(const Config *cfg);
 /* Get backlight brightness percentage. Reads "backlight_brightness" key (default: 100). */
 int config_backlight_brightness(const Config *cfg);
 
+/* Idle minutes before the backlight is switched off; 0 = never.  Key
+ * "blank_minutes", default 10.  Read by common/hardware.c; set on the Display
+ * page. */
+int config_blank_minutes(const Config *cfg);
+
 /* ── Atomic file writes ──────────────────────────────────────────────────
  *
  * fopen(path, "w") truncates before a single byte is written, and without an

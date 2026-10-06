@@ -759,6 +759,8 @@ static int run_vnc_client(const char *host, int port) {
         LOG_ERROR(&g_logger, "Failed to initialize framebuffer");
         return -1;
     }
+    /* A remote desktop is watched, not touched: never blank the panel. */
+    hw_blank_set_enabled(false);
     LOG_INFO(&g_logger, "Framebuffer: %ux%u, %u bpp, size=%zu",
              g_fb.width, g_fb.height, g_fb.bytes_per_pixel * 8, g_fb.screen_size);
 

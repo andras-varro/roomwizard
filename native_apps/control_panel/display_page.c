@@ -195,6 +195,11 @@ static const struct {
 static int  backlight;           /* config key backlight_brightness, 20..100 */
 static bool portrait;            /* PORTRAIT_FLAG_FILE exists */
 static int  queued_test = -1;    /* test to run full-screen, -1 none */
+static int  blank_min;           /* config key blank_minutes: 0 = never */
+
+/* What the SCREEN OFF button cycles through. */
+static const int blank_choices[] = { 0, 1, 2, 5, 10, 30 };
+#define BLANK_CHOICE_COUNT ((int)(sizeof(blank_choices) / sizeof(blank_choices[0])))
 
 static int clamp_backlight(int v) {
     return v < BACKLIGHT_MIN ? BACKLIGHT_MIN : v > 100 ? 100 : v;
@@ -214,6 +219,7 @@ static void apply_backlight(int brightness_pct) {
 static void display_page_load(const Config *cfg) {
     backlight = clamp_backlight(config_get_int(cfg, "backlight_brightness",
                                                DEFAULT_BACKLIGHT_BRIGHTNESS));
+    blank_min = config_blank_minutes(cfg);
     portrait  = (access(PORTRAIT_FLAG_FILE, F_OK) == 0);
 }
 
@@ -233,6 +239,27 @@ static void backlight_persist(Config *mem) {
         cp_status("BACKLIGHT SAVE FAILED", false);
     }
     hw_reload_config();                 /* the ramp scales by the saved value */
+}
+
+/* Same shape as backlight_persist(): the key goes into the file by re-reading
+ * it, then hardware.c's cache is reloaded so the new delay applies at once. */
+static void blank_persist(Config *mem) {
+    config_set_int(mem, "blank_minutes", blank_min);
+
+    Config disk;
+    config_init(&disk);
+    config_load(&disk);
+    config_set_int(&disk, "blank_minutes", blank_min);
+    if (config_save(&disk) != 0) {
+        fprintf(stderr, "control_panel: blank_minutes save failed\n");
+        cp_status("SCREEN OFF SAVE FAILED", false);
+    }
+    hw_reload_config();
+}
+
+static void blank_label(char *out, size_t n, int minutes) {
+    if (minutes <= 0) snprintf(out, n, "SCREEN OFF: NEVER");
+    else              snprintf(out, n, "SCREEN OFF: %d MIN", minutes);
 }
 
 /* Present = portrait on the next launch; the file's content is never read. */
@@ -263,6 +290,7 @@ static void display_page_reset_defaults(Config *cfg) {
     config_init(&disk);
     if (config_load(&disk) == 0) {
         config_remove(&disk, "backlight_brightness");
+        config_remove(&disk, "blank_minutes");
         if (config_save(&disk) != 0)
             fprintf(stderr, "control_panel: backlight default save failed\n");
     }
@@ -326,6 +354,7 @@ static uint32_t geom_rows_format(char *edges, size_t elen, char *reach, size_t r
 
 static ToggleSwitch portrait_toggle;
 static Button       bl_minus_btn, bl_plus_btn;
+static Button       blank_btn;
 static Button       test_btns[DISP_TEST_COUNT];
 
 static int  sec_disp_y, bl_label_y, bar_x, bar_y, bar_w;
@@ -376,7 +405,11 @@ static void display_page_layout(void) {
 
     /* The toggle, and under it the note it shows when on — on its own line,
      * because beside the toggle it runs past a portrait content width. */
-    toggle_init(&portrait_toggle, CONTENT_LEFT + 5, step_y + DISP_STEP_BTN_H + 16,
+    int blank_y = step_y + DISP_STEP_BTN_H + 12;
+    int blank_w = text_measure_width("SCREEN OFF: NEVER", 2) + 24;
+    button_init_full(&blank_btn, CONTENT_LEFT + 5, blank_y, blank_w, DISP_STEP_BTN_H,
+                     "", RGB(80, 80, 80), COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
+    toggle_init(&portrait_toggle, CONTENT_LEFT + 5, blank_y + DISP_STEP_BTN_H + 16,
                 60, 28, DISP_PORTRAIT_LABEL, portrait);
     note_y    = portrait_toggle.y + 36;
     visible_y = note_y + 20;
@@ -424,6 +457,8 @@ static void display_page_layout(void) {
                    + text_measure_width(DISP_PORTRAIT_LABEL, 1) + 20;
         int note_r = CONTENT_LEFT + 5 + text_measure_width(DISP_PORTRAIT_NOTE, 1);
         if (note_r > right) right = note_r;
+        if (blank_btn.x + blank_btn.width > right)
+            right = blank_btn.x + blank_btn.width;
         if (bl_plus_btn.x + bl_plus_btn.width > right)
             right = bl_plus_btn.x + bl_plus_btn.width;
         for (int i = 0; i < DISP_TEST_COUNT; i++)
@@ -450,6 +485,11 @@ static void display_page_draw(Framebuffer *fb) {
     button_draw(fb, &bl_minus_btn);
     draw_brightness_bar(fb, bar_x, bar_y, backlight, BACKLIGHT_MIN, 100, bar_w, true);
     button_draw(fb, &bl_plus_btn);
+
+    char bl[32];
+    blank_label(bl, sizeof(bl), blank_min);
+    button_set_text(&blank_btn, bl);
+    button_draw(fb, &blank_btn);
 
     portrait_toggle.state = portrait;   /* derived every frame, never cached */
     toggle_draw(fb, &portrait_toggle);
@@ -497,6 +537,15 @@ static CpPageResult display_page_input(Config *cfg, int tx, int ty,
         }
     }
 
+    if (button_update(&blank_btn, tx, ty, touching, now)) {
+        int at = 0;
+        for (int i = 0; i < BLANK_CHOICE_COUNT; i++)
+            if (blank_choices[i] == blank_min) at = i;
+        blank_min = blank_choices[(at + 1) % BLANK_CHOICE_COUNT];
+        blank_persist(cfg);
+        act = CP_PAGE_REDRAW;
+    }
+
     for (int i = 0; i < DISP_TEST_COUNT; i++) {
         if (button_update(&test_btns[i], tx, ty, touching, now)) {
             queued_test = i;
@@ -511,6 +560,7 @@ static int display_page_focusables(UiRect *out, int max) {
     int n = focus_add_toggle(out, 0, max, &portrait_toggle);
     n = focus_add_button(out, n, max, &bl_minus_btn);
     n = focus_add_button(out, n, max, &bl_plus_btn);
+    n = focus_add_button(out, n, max, &blank_btn);
     for (int i = 0; i < DISP_TEST_COUNT; i++)
         n = focus_add_button(out, n, max, &test_btns[i]);
     return n;

@@ -347,3 +347,8 @@ int config_led_brightness(const Config *cfg) {
 int config_backlight_brightness(const Config *cfg) {
     return config_get_int(cfg, "backlight_brightness", 100);
 }
+
+int config_blank_minutes(const Config *cfg) {
+    int m = config_get_int(cfg, "blank_minutes", 10);
+    return m < 0 ? 0 : m;
+}

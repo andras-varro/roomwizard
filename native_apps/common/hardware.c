@@ -1,5 +1,7 @@
 #include "hardware.h"
 #include "config.h"
+#include "blank_decide.h"
+#include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +20,7 @@ static bool     hw_config_loaded = false;
 static bool     hw_led_enabled = true;
 static int      hw_led_brightness_pct = 100;
 static int      hw_backlight_brightness_pct = 100;
+static int      hw_blank_minutes = BLANK_DEFAULT_MINUTES;
 
 static void hw_load_config(void) {
     if (hw_config_loaded) return;
@@ -29,6 +32,7 @@ static void hw_load_config(void) {
         hw_led_enabled = config_led_enabled(&cfg);
         hw_led_brightness_pct = config_led_brightness(&cfg);
         hw_backlight_brightness_pct = config_backlight_brightness(&cfg);
+        hw_blank_minutes = config_blank_minutes(&cfg);
     }
 }
 
@@ -333,4 +337,94 @@ void hw_led_pulse_stop(LedPulse *p) {
     p->active = false;
     p->phase  = -1;
     hw_set_led(p->led, 0);
+}
+
+/* ── Screen blanking ────────────────────────────────────────────────────────
+ *
+ * The idle clock lives here because hardware.c is the one file every process
+ * links (the native apps, ScummVM, vnc_client).  The input paths call
+ * hw_blank_note_activity() / hw_blank_keepalive(); the present path and both
+ * poll paths call hw_blank_poll().  The decision itself is blank_decide.h. */
+
+static bool      blank_enabled   = true;
+static bool      blank_dark      = false;    /* the panel is dark because of us */
+static bool      blank_started   = false;
+static long long blank_last_in_ms = 0;
+static long long blank_last_poll_ms = 0;
+
+/* A process that was not polling this long (the launcher, waiting on a game it
+ * started) cannot say how long the panel has been idle: start the clock over. */
+#define BLANK_POLL_GAP_MS 5000
+
+static long long blank_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Quiet read of the raw duty cycle; -1 when unreadable. */
+static int blank_raw_backlight(void) {
+    char buf[8];
+    int fd = open(BACKLIGHT_PATH, O_RDONLY);
+    if (fd < 0) return -1;
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return -1;
+    buf[n] = '\0';
+    return atoi(buf);
+}
+
+static void blank_wake_panel(void) {
+    hw_set_backlight(100);          /* scaled by the configured level */
+    blank_dark = false;
+}
+
+/* A process starts with a lit panel: whatever blanked it before (a crashed app,
+ * or the process that exited while we waited) is not this process's state. */
+static void blank_resume(long long now) {
+    blank_last_in_ms = now;
+    if (blank_raw_backlight() == 0) blank_wake_panel();
+    blank_dark = false;
+}
+
+static void blank_apply(BlankAction a) {
+    if (a == BLANK_DO_BLANK) {
+        hw_set_backlight_raw(0);
+        blank_dark = true;
+    } else if (a == BLANK_DO_WAKE || a == BLANK_WAKE_SWALLOW) {
+        blank_wake_panel();
+    }
+}
+
+void hw_blank_set_enabled(bool enabled) {
+    blank_enabled = enabled;
+    blank_apply(blank_decide(0, hw_blank_minutes, blank_dark, false, enabled));
+    if (!enabled && blank_raw_backlight() == 0) blank_wake_panel();
+}
+
+void hw_blank_poll(void) {
+    hw_load_config();
+    long long now = blank_now_ms();
+    if (!blank_started || now - blank_last_poll_ms > BLANK_POLL_GAP_MS) {
+        blank_started = true;
+        blank_resume(now);
+    }
+    blank_last_poll_ms = now;
+    blank_apply(blank_decide(now - blank_last_in_ms, hw_blank_minutes,
+                             blank_dark, false, blank_enabled));
+}
+
+bool hw_blank_note_activity(void) {
+    hw_load_config();
+    long long now = blank_now_ms();
+    if (!blank_started) { blank_started = true; blank_resume(now); }
+    blank_last_poll_ms = now;
+    BlankAction a = blank_decide(0, hw_blank_minutes, blank_dark, true, blank_enabled);
+    blank_last_in_ms = now;
+    blank_apply(a);
+    return a == BLANK_WAKE_SWALLOW;
+}
+
+void hw_blank_keepalive(void) {
+    if (!blank_dark) blank_last_in_ms = blank_now_ms();
 }
