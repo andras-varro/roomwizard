@@ -31,6 +31,7 @@
 #include "../common/common.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/statvfs.h>
 #include <unistd.h>
@@ -255,10 +256,46 @@ static bool temp_present(void) {
     return temp_zone >= 0;
 }
 
+/* RTC backup cell: the TWL4030 MADC channel 9, in millivolts.  The iio device
+ * is found by its name once, like the thermal zone; absent file, absent row. */
+#define MON_MAX_IIO 8
+static int  rtc_dev = -2;        /* -2 not looked up yet, -1 none, else N */
+static int  rtc_mv;
+static bool rtc_ok;
+
+static int rtc_read_dev(int n, int *mv) {
+    char path[80], raw[32];
+    long v;
+    char *end;
+    snprintf(path, sizeof(path), "/sys/bus/iio/devices/iio:device%d/in_voltage9_input", n);
+    if (read_file_line(path, raw, sizeof(raw)) != 0) return -1;
+    v = strtol(raw, &end, 10);
+    if (end == raw || v < 0 || v > 9999) return -1;
+    *mv = (int)v;
+    return 0;
+}
+
+static bool rtc_present(void) {
+    if (rtc_dev == -2) {
+        rtc_dev = -1;
+        for (int n = 0; n < MON_MAX_IIO; n++) {
+            char path[64], name[32];
+            snprintf(path, sizeof(path), "/sys/bus/iio/devices/iio:device%d/name", n);
+            if (read_file_line(path, name, sizeof(name)) == 0
+                && strstr(name, "madc") && rtc_read_dev(n, &rtc_mv) == 0) {
+                rtc_dev = n;
+                break;
+            }
+        }
+    }
+    return rtc_dev >= 0;
+}
+
 static void monitor_sample(void) {
     read_uptime(sample.uptime, sizeof(sample.uptime));
     read_loadavg(sample.load, sizeof(sample.load));
     temp_ok = temp_present() && temp_read_zone(temp_zone, &temp_mc) == 0;
+    rtc_ok = rtc_present() && rtc_read_dev(rtc_dev, &rtc_mv) == 0;
     read_meminfo(&sample.mem);
     for (int i = 0; i < NUM_MOUNT_POINTS; i++)
         read_disk_usage(mount_points[i], &sample.disk[i]);
@@ -348,6 +385,7 @@ static void monitor_page_enter(void) {
 #define MON_METER_GAP  10
 #define MON_LOAD_LABEL "LOAD AVG:"
 #define MON_TEMP_LABEL "SOC TEMP:"   /* values align after the wider of these */
+#define MON_RTC_LABEL  "RTC CELL:"
 #define MON_CAP_H      (MON_LINE_H + 2)  /* a graph's caption line above it */
 #define MON_GRAPH_GAP   8   /* between one graph's bottom and the next caption */
 #define MON_GRAPH_MIN_H 24  /* below this a history graph is a smear */
@@ -356,8 +394,9 @@ static void monitor_page_enter(void) {
 #define MON_SIDE_MIN_W 240  /* graphs beside the text only if this wide */
 #define MON_FIT_SLACK   4   /* left under the lowest thing when sizing graphs */
 
-static int  uptime_y, load_y, temp_y, value_x;
-static int  mon_rows;   /* scale-2 rows at the top: 2, or 3 with SOC TEMP */
+static int  uptime_y, load_y, temp_y, rtc_y, value_x;
+static int  mon_rows;   /* scale-2 rows at the top: 2, plus SOC TEMP and RTC CELL when present */
+static bool temp_row, rtc_row;
 static int  sec_mem_y, ram_y, swap_y, sec_disk_y;
 static int  disk_y[NUM_MOUNT_POINTS];
 static int  bar_x, bar_w, header_right;
@@ -378,7 +417,7 @@ static int text_right_edge(void) {
     worst_uptime(s, sizeof(s));
     w = value_x + text_measure_width(s, 2);                       if (w > right) right = w;
     w = value_x + text_measure_width("99.99 99.99 99.99", 2);     if (w > right) right = w;
-    if (mon_rows == 3) {
+    if (temp_row) {
         soc_temp_format(SOC_TEMP_MIN_MC, s, sizeof(s));
         w = value_x + text_measure_width(s, 2);                   if (w > right) right = w;
     }
@@ -398,13 +437,14 @@ static int meter_bottom(int y, int lines) {
     return y + lines * MON_LINE_H + MON_BAR_H;
 }
 
-/* The text column from the top: UPTIME, LOAD, SOC TEMP (if present), then
+/* The text column from the top: UPTIME, LOAD, SOC TEMP and RTC CELL (if present), then
  * MEMORY and STORAGE.  Returns the y under the last storage bar. */
 static int place_text(void) {
     int y = CONTENT_Y + 6;
     uptime_y = y;
     load_y   = y + MON_ROW_H;
-    temp_y   = y + 2 * MON_ROW_H;   /* drawn only when mon_rows is 3 */
+    temp_y   = y + 2 * MON_ROW_H;   /* each drawn only when its row is present */
+    rtc_y    = y + (2 + temp_row) * MON_ROW_H;
     y += mon_rows * MON_ROW_H + 6;
 
     sec_mem_y = y;                y += MON_HEADER_H;
@@ -448,12 +488,16 @@ static int place_graphs(int x, int w, int y0) {
  * graphs under the text, full width, which is portrait.  The temperature
  * graph exists only with a thermal zone, like its row: absent is removed. */
 static void monitor_page_layout(void) {
-    mon_rows = temp_present() ? 3 : 2;
+    temp_row = temp_present();
+    rtc_row  = rtc_present();
+    mon_rows = 2 + temp_row + rtc_row;
     g_cpu.shown = g_mem.shown = true;
-    g_temp.shown = mon_rows == 3;
+    g_temp.shown = temp_row;
     int label_w = text_measure_width(MON_LOAD_LABEL, 2);
-    if (mon_rows == 3 && text_measure_width(MON_TEMP_LABEL, 2) > label_w)
+    if (temp_row && text_measure_width(MON_TEMP_LABEL, 2) > label_w)
         label_w = text_measure_width(MON_TEMP_LABEL, 2);
+    if (rtc_row && text_measure_width(MON_RTC_LABEL, 2) > label_w)
+        label_w = text_measure_width(MON_RTC_LABEL, 2);
     value_x = CONTENT_LEFT + 10 + label_w + 12;
     bar_x   = CONTENT_LEFT + 10;
 
@@ -504,10 +548,10 @@ static void monitor_page_layout(void) {
                             : min_h < MON_GRAPH_MIN_H ? "⚠ GRAPH TOO SHORT"
                             : "fits";
         printf("control_panel: monitor stack %s — bottom +%d of CONTENT_H %d, "
-               "right %d of CONTENT_RIGHT %d, %d graphs %dx%d %s, soc temp %s (safe %dx%d, %s)\n",
+               "right %d of CONTENT_RIGHT %d, %d graphs %dx%d %s, soc temp %s, rtc cell %s (safe %dx%d, %s)\n",
                verdict, bottom, CONTENT_H, right, CONTENT_RIGHT,
                n, gw, min_h, graphs_beside ? "beside" : "under",
-               mon_rows == 3 ? "shown" : "absent",
+               temp_row ? "shown" : "absent", rtc_row ? "shown" : "absent",
                SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                CONTENT_WIDTH < 600 ? "portrait" : "landscape");
     }
@@ -553,11 +597,16 @@ static void monitor_page_draw(Framebuffer *fb) {
 
     draw_row(fb, uptime_y, "UPTIME:", sample.uptime);
     draw_row(fb, load_y, MON_LOAD_LABEL, sample.load);
-    if (mon_rows == 3) {
+    if (temp_row) {
         /* The zone exists; a single failed read shows "--", not a stale figure. */
         if (temp_ok) soc_temp_format(temp_mc, s, sizeof(s));
         else         snprintf(s, sizeof(s), "--");
         draw_row(fb, temp_y, MON_TEMP_LABEL, s);
+    }
+    if (rtc_row) {
+        if (rtc_ok) snprintf(s, sizeof(s), "%d.%02d V", rtc_mv / 1000, rtc_mv % 1000 / 10);
+        else        snprintf(s, sizeof(s), "--");
+        draw_row(fb, rtc_y, MON_RTC_LABEL, s);
     }
 
     fmt_cpu(cpu_others_pm, cpu_self_pm, s, sizeof(s));
