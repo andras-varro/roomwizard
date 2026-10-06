@@ -72,17 +72,6 @@ why it has not been seen.
 Fix is the rule the other two follow: cap first, lay out from the capped number, and make the number
 appear somewhere once it exceeds what is drawn — a heart plus `x10`, or a raised cap.
 
-### B38. Mix Bus Test cracks from ~6 voices under a full redraw — open, confirmed 2026-09-28, parked
-
-**Parked by the operator 2026-09-28 ("we can live with this").** **Cause measured** at `.188` with the
-honest PAD arm (readout band only, via `present_rect`): the full redraw is the trigger — 440 Hz voices
-crack from the 7th under PAD, from the 6th and on every meter redraw under FULL; not clipping
-(`clip=0 lim=0`). Mechanism **[inferred]**: an ALSA underrun at `snd_pcm_writei` that `alsa_recover()`
-hides; `audio_out.c` logs `underran at the write`. Remedies if unparked: a cheaper oscillator than the
-per-sample `sin()` in `common/audio_gen.c`, or a larger lead. Also **[inferred, code only]**:
-`native_apps/tests/audio_mix_test.c` calls `fb_fade_out()` then `audio_close()` with no pump between, so
-the stream's tail starves during the fade (`:1112-1113` today) — pump the bus through the fade.
-
 ### B41. An adapter replug can print `configured as A device timeout` on our image — open, seen once 2026-09-29
 
 **Measured on `.188`** (uImage md5 `f3b446c6b2d731e0d118583cada62c36`, the ID-ground patch booted):
@@ -97,23 +86,15 @@ message now reads `configured as A device timeout: devctl %02x after %lld ms[ (i
 so the next occurrence measures itself; read the devctl value and elapsed ms there before reproducing, then
 decide whether the wait needs the PHY/glue resumed first or the loop is simply too short.
 
-### B44. Mix Bus Test is not layout-sensitive, so it runs degraded in portrait — open, operator request 2026-09-29
-
-`native_apps/tests/audio_mix_test.c` lays out for landscape only. Known defect **[inferred from code, not
-screenshotted]**: its in-place readout repaint is a no-op in portrait, because `present_rect()` returns
-early on `fb->portrait_mode` (`tests/audio_mix_test.c:466`; the comment at 462-463 says landscape only,
-since `fb_swap()`'s rotation would be needed). **Fix:** make the layout follow the orientation, and either
-give portrait a repaint path or fall back to a full `fb_swap()` there. The operator ruled 2026-09-29 that
-it runs degraded in portrait rather than being refused; it launches from the control panel's Audio page and
-this is the portrait half of that. Verify on the panel in both orientations. Distinct from B38 (the crack under a full
-redraw), which constrains how costly a portrait redraw may be.
-
-### B47. Lockdep reports recursive L2CAP socket locking on the first incoming BT connection — open, seen once 2026-10-01
+### B47. Lockdep reports recursive L2CAP socket locking on the first incoming BT connection — open, seen twice (2026-10-01, 2026-10-05)
 
 **Measured on `.188`:** at the 8BitDo pad's first incoming connection after boot the kernel printed `WARNING:
 possible recursive locking detected` — `sk_lock-AF_BLUETOOTH-BTPROTO_L2CAP` taken twice, `l2cap_sock_new_connection_cb`
 → `bt_accept_enqueue` → `lock_sock_nested`, from `l2cap_connect` / `hci_rx_work`. It did not reappear on the later
-reconnect. Console warnings are defects even when harmless. Our image evidently has lockdep enabled
+reconnect. **Second sighting 2026-10-05, ~60 s after boot, during incoming BT connections:** the same splat in
+`hci_rx_work` → `l2cap_recv_frame` → `l2cap_connect` → `l2cap_sock_new_connection_cb` → `bt_accept_enqueue` →
+`lock_sock_nested`, held `conn->chan_lock`, `chan->lock#2/2` and `sk_lock-AF_BLUETOOTH-BTPROTO_L2CAP`, kernel 4.14.52
+tainted `O` (our out-of-tree modules). Console warnings are defects even when harmless. Our image evidently has lockdep enabled
 (`CONFIG_PROVE_LOCKING` or similar) **[inferred; the config was not read]**. Cause not investigated;
 **[inferred]** candidate: the 4.14 parent/child L2CAP socket false positive that upstream later annotated with a
 nesting subclass. **Next:** read `.config` for the lockdep symbols and the upstream change to
@@ -156,19 +137,6 @@ blinks; if host paging works, have the init script or a `bluetoothd` policy conn
 check whether `bluetoothd` can stop without powering the adapter off, so no 0x15 is sent. **Done when** a restart
 leaves the pad connected, or the pad's behaviour is attributed and the workaround documented.
 
-### B54. Plugging in a wired USB controller drops the whole USB hub, and every Bluetooth link with it — open, cause found, hardware fix
-
-**Measured from `/var/log/messages` on Oct 3 and twice on Oct 4 (`.188`):** plugging the wired Xbox 360 pad makes the
-external hub `1-1` (Terminus FE1.1s `1a40:0101`) drop off the musb root port and re-enumerate. The BT dongle `1-1.1`
-(ASUS `0b05:1bf6`, RTL8761) sits on it, so `hci0` reloads firmware and all BT links drop. The headset also drops but
-reconnects by itself about 25 s later (AVRCP input re-created); the 8BitDo does not. Negative control: plugging a
-low-power Compx 2.4G receiver did not drop the hub. Userspace is ruled out (`hidp_open`/`hidp_close` are empty).
-**Inferred:** a VBUS sag on inrush, which musb logs only at `KERN_DEBUG` (`musb_core.c:674-716`,
-`VBUSERR_RETRY_COUNT=3`); a hub brownout is not ruled out. **Fix:** hardware, a powered hub. Software mitigation:
-reconnect bonded devices when `hci0` comes back (F130; the watcher is deployed, its first reconnect is not yet observed). **Done when** `dmesg` after the plug shows whether
-`VBUS_ERROR` fires, and a repeat with a powered hub keeps the pad. **Operator question:** does the current hub have its
-own supply?
-
 ### B55. Keyboard, pad and multitouch readers still ignore an evdev overflow — open, partial fix shipped
 
 `SYN_DROPPED` is handled by `common/input_scan.h` `input_syn_drop_skip()` in `gamepad.c`, `touch_input.c`, the
@@ -193,6 +161,15 @@ residues:
 2. **The reboot path is unproven.** `S30avahi-daemon` is in place but the link was written directly
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
+
+### B56. Mix Bus Test should refuse portrait with a message — open, operator ruling 2026-10-05
+
+The page is not to be laid out for portrait. When the display is portrait it shows a "not supported in portrait"
+message instead of running, as the calibration app does: `native_apps/control_panel/touch_wizard.c:197-209` clears,
+draws "CALIBRATE IN LANDSCAPE MODE" / "TURN PORTRAIT OFF AND RELAUNCH", `fb_swap()`s, sleeps 3 s and returns. The Mix
+Bus Test is `native_apps/tests/audio_mix_test.c`, whose `present_rect()` already returns early on `fb->portrait_mode`
+(`:471`) and so repaints nothing there. **Done when** launching it from the Audio page in portrait shows the message
+and returns, and landscape is unchanged.
 
 ## Features
 
@@ -245,9 +222,26 @@ Linux that boots, finds the card and runs the existing script unchanged. That ke
 and moves the portability problem to a boot medium instead of into the script. Substantial new work,
 deliberately not scoped here.
 
-### F101. Build our own 4.14.52 image — open
+### F101. Build our own kernel image, rebased onto 4.14.336 — open
 
-**The deliverable is a `uImage` we compiled, staged on p1 beside the vendor's.** The policy and the
+**The deliverable is a `uImage` we compiled, staged on p1 beside the vendor's, on 4.14.336 — the final 4.14 release
+(4.14 has been EOL since Jan 2024, so no newer one exists; 5.x/6.x stays out per the kernel policy).** It brings every
+stable fix, including **FragmentSmack CVE-2018-5391** (a large `inet_frag` rework, not patched on .52; the stop-gap
+`ipfrag_high_thresh=262144` / `ipfrag_low_thresh=196608` is not applied). **Measured:** all 9 of our patches dry-run
+clean on 4.14.336 (one offset); the 12 `tcp-*` patches are redundant there; 3 of the 5 `patches-modules` (KNOB, HIDP
+length, `remote_efs`) are in .336, the two RTL8761CU ones still apply (`btusb` needs fuzz 2, refresh);
+`CPU_SPECTRE`/`HARDEN_BRANCH_PREDICTOR` exist there and .336 prints the IBE state at boot. **Risks (measured diffs):**
+`omap2430.c` drops `.set_vbus` from `omap2430_ops` (changes the SESSREQ/port-power VBUS path and the IRQ branch of our
+set-vbus-report patch), and `musbhsdma.c` has a TX-completion rework (our audio DMA path). `4.14.52` is pinned in
+`kernel/build-image.sh:18`, `build-modules.sh:15,21`, `build-bt-modules.sh:17,83`, `usb_host/build-kernel-modules.sh:16`,
+`usb_host/build-and-deploy.sh:56`, `bluetooth/build-and-deploy.sh:43`, `device-files/bluetooth:29`, `touch-module:8`,
+`usb-audio-modules:18`, `xpad-modules:8-10` (use `uname -r`), `provision-rules.conf:118,128` and the `release.sh` licence
+text. **Rebase steps, stepwise:** (1) generalise the module paths to `uname -r`; (2) build .336 with our 9 patches and
+diff `dropped-symbols.txt`; (3) boot it on `.188`; (4) re-run the USB and audio checks; (5) retire the redundant
+patches. With vendor-kernel support dropped (see the cleanup item of that name) no second `.52` module set is needed.
+**Effort [inferred]:** about 1 h for the image, 0.5-1 day for the scripts, 1-2 operator sessions.
+
+**The image work:** the policy and the
 standing costs are [§7](SYSTEM_ANALYSIS.md#7-kernel-policy); this entry is the work. The image boots, takes
 DHCP and answers SSH, and the panel works ([`kernel/README.md`](kernel/README.md) holds the build, the patches
 and the p1 files). What is left is building the touch driver into the image, the fbcon cursor and boot
@@ -327,18 +321,6 @@ untouched, so the recovery is still "reimage the card".
 | What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. Operator ruling 2026-09-29: the whole `LICENSE.md` overhaul is part of this item — our GPL kernel image and modules now ship (source-offer duty), native apps and ScummVM link glibc and libasound dynamically, the glibc row names only `gnueabihf`, and the obligation column is unreviewed. |
 | What does p5 become? | It frees 1.5 GB of space. |
 
-### F104. CPU-usage graph on the Monitor page — implemented, awaiting operator check (commit `2f953b1`)
-
-`native_apps/control_panel/cpu_load.c` holds the pure math (host test `cpu_load_test`); `monitor_page.c` draws a
-120-sample graph on the 1 s tick, busy share divided by wall time from `/proc/uptime` (`/proc/stat`'s total column is
-not a valid denominator: [`SYSTEM_ANALYSIS.md#34-audio`](SYSTEM_ANALYSIS.md#34-audio), the PIO-cost paragraph), with
-the panel's own share excluded and shown in the caption. Not yet seen on the panel (no switch opens the page).
-**Operator check:** Control Panel → Monitor shows the graph beside UPTIME / LOAD AVG with the caption
-"CPU n% LAST 2 MIN (PANEL m%, NOT GRAPHED)"; `ssh root@192.168.50.188 'timeout 15 yes > /dev/null'` drives the columns
-red to the top (~97-100%) and back down after; reopening the page starts the graph empty (by design); in portrait the
-graph is full width below. **Done when** that passes; then delete this entry.
-rises under a known load (a `yes > /dev/null` over SSH), which also checks the denominator.
-
 ### F105. Auto-rescan on the USB page while it is open — open, operator idea 2026-09-30, later
 
 The control panel's USB page re-reads the bus only on opening and on RESCAN (the Input page already polls `/dev/input`
@@ -386,7 +368,10 @@ the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then
 The pad (pointer, A/B drags, wheel, hold-Select, Settings navigation) is operator-verified. **Still open:** keyboard
 typing into the Settings keypads; the pad on the reconnect screen; and **[inferred, not reproduced]** a stray remote
 click if A or B is still held when leaving Settings and the session reconnects. **Done when** each of the three
-works or is shown to be unreachable.
+works or is shown to be unreachable. **Also:** the exit gesture reuses the input tester's exit methods
+(`native_apps/control_panel/input_page.c`): hold Esc on a keyboard (`:420`), hold left+right mouse buttons
+(`ui_chord_button`, `:403`), and on a pad hold Select or Start, the pad's Back (`:420`, `:457-460`); the held-key
+state is `UiHold` (`common/ui_focus.h:79`).
 
 
 ### F118. An arcade-style start menu shared by all the games — open, not started, operator request 2026-10-04
@@ -394,17 +379,10 @@ works or is shown to be unreachable.
 Replaces each game's green START button with one menu widget in `native_apps/common/` (not seven copies). The selected
 item is drawn like `> Start <` and the marker blinks slowly. Ping pattern: a ping on each of 3 blinks, then 3 silent
 blinks, then repeat; the pings run on the game clock. Entries are per game, and selection works by pad, keyboard and
-touch. It is the intended home for per-play choices: a 1 player / 2 player choice (reads the Input page's player slots) and a
-pace choice (F119). **Also owns "games honour the player slots"** : no game has a multiplayer mode
+touch. It is the intended home for per-play choices: a 1 player / 2 player choice (reads the Input page's player slots). **Also owns "games honour the player slots"** : no game has a multiplayer mode
 yet and nothing calls `gamepad_player()`, so the 1P/2P chooser is the first consumer. **Done when** every game starts
 from it and a 2-player choice reads P1 and P2 from the slots. The seven games' current start pages all differ in
 layout and style; the rework unifies them (operator, 2026-10-04).
-
-### F119. Platformer pace: Slow / Normal / Fast — open, needs F118, operator request 2026-10-04
-
-Three entries on the start menu from F118. Normal is today's `TICK_S` of 1/20 s (`native_apps/platformer/platformer.c`,
-`#define TICK_S`). The physics constants are per tick, so pace is that one constant and the jump arc keeps its shape.
-Background: at 30 ticks/s the operator found the game about 1.8x faster than before the time-based change.
 
 ### F120. `touch_trace` becomes a page of the control panel's touch diagnostic — open, operator ruling 2026-10-04
 
@@ -417,24 +395,6 @@ remove it from `GAMES_BINARIES` and its build step in `native_apps/build-and-dep
 rows, and `SMOKE_EXTRA_TOOLS` in `native_apps/smoke-first-screen.sh`. **Done when** the page shows the same three
 readings and the log is still written, and no `touch_trace` remains in the tree.
 
-### F128. Rebase onto 4.14.336, stepwise — open, evaluated 2026-10-05, security audit 2026-10-04
-
-Still 4.14, so inside the kernel policy; it brings every stable fix, including **FragmentSmack CVE-2018-5391** (a large
-`inet_frag` rework, not patched here; the stop-gap `ipfrag_high_thresh=262144` / `ipfrag_low_thresh=196608` is not
-applied). **Measured:** all 9 of our patches dry-run clean on 4.14.336 (one offset); the 12 `tcp-*` patches are
-redundant there; 3 of the 5 `patches-modules` (KNOB, HIDP length, `remote_efs`) are in .336, the two RTL8761CU ones
-still apply (`btusb` needs fuzz 2, refresh); `CPU_SPECTRE`/`HARDEN_BRANCH_PREDICTOR` exist there and .336 prints the
-IBE state at boot. **Risks (measured diffs):** `omap2430.c` drops `.set_vbus` from `omap2430_ops` (changes the
-SESSREQ/port-power VBUS path and the IRQ branch of our set-vbus-report patch), and `musbhsdma.c` has a TX-completion
-rework (our audio DMA path). `4.14.52` is pinned in `kernel/build-image.sh:18`, `build-modules.sh:15,21`,
-`build-bt-modules.sh:17,83`, `usb_host/build-kernel-modules.sh:16`, `usb_host/build-and-deploy.sh:56`,
-`bluetooth/build-and-deploy.sh:43`, `device-files/bluetooth:29`, `touch-module:8`, `usb-audio-modules:18`,
-`xpad-modules:8-10` (use `uname -r`), `provision-rules.conf:118,128` and the `release.sh` licence text; units on the
-vendor kernel still need `.52` USB modules, so two module sets. **Steps:** generalise the module paths to `uname -r`;
-build .336 with our 9 patches and diff `dropped-symbols.txt`; boot it on `.188`; re-run the USB and audio checks;
-retire the redundant patches. **Effort [inferred]:** about 1 h for the image, 0.5-1 day for the scripts, 1-2 operator
-sessions.
-
 ### F129. Control panel settings page: SSH mode, date/time and similar system settings — open, operator request 2026-10-05
 
 A page in `native_apps/control_panel.c` for system settings that today need SSH or a provisioning run: **SSH mode**
@@ -445,23 +405,34 @@ panel button cannot prove a key exists, so decide what the page may do (show the
 password). Per the operator's settings rule, new settings belong in the settings app. **Done when** the page shows
 the current SSH mode and date/time and a change survives a reboot.
 
-### F130. Reconnect the Bluetooth headset and pads after a panel reboot — implemented, awaiting operator check (commit `78e1167`)
-
-The `bluetooth` init script (`device-files/bluetooth`) backgrounds a watcher (`watch` subcommand, pidfile
-`/var/run/bluetooth-watch.pid`) that on each new `hci0` sysfs inode (boot, or a hub reset — see B54) waits for Powered,
-then makes up to 3 rounds (5/15/45 s) of `Device1.Connect` via `dbus-send` for Trusted, unblocked devices holding a
-`[LinkKey]`, logging to syslog tag `bluetooth`. **Measured on `.188`:** it fired at boot and on a `btusb` unbind/bind;
-no successful reconnect was observed (all four bonded devices were off). **Operator check:** reboot the panel with the
-headset and the 8BitDo on; both should connect within 1-2 min without a tap, and
-`grep "bluetooth: reconnect" /home/root/log/messages` shows the rounds. If the headset connects and the pad does not,
-the pad refuses host-initiated connects. **Done when** that check passes; then delete this entry.
-
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
 "RoomWizard" is likely a Steelcase trademark **[unchecked]**. The operator's idea is "Lizard" (Linux + Wizard): not
 tied to rooms, since a BeagleBone target has nothing to do with rooms, and it fits a Steelcase-free distro/rootfs
 (F102) and the BeagleBone port (F106). Candidate names are open. **Done when** a name is chosen and the tree, docs,
 device paths and `LICENSE.md` follow it.
+
+### F132. Monitor history daemon: CPU, memory and SoC temperature in a ~2 minute ring — open, operator request 2026-10-05
+
+A small always-on daemon samples CPU, memory and SoC temperature into a ~2 minute ring buffer, so the Monitor page
+shows the recent past the moment it is opened (today the graph starts empty). ⚠️ **Operator condition: build it only
+if its own CPU load is insignificant — measure it** on `.188` (idle, with and without the daemon, against the
+denominator rule in `SYSTEM_ANALYSIS.md` §3.4) and drop it if not. Depends on F4 for the temperature channel. **Done
+when** the Monitor page opens with the last 2 minutes drawn and the measured daemon load is recorded as acceptable.
+
+### F133. Monitor page re-layout: text left, charts right — open, operator request 2026-10-05, after F4
+
+Left side text (memory, storage); right side charts: CPU (exists), memory, SoC temperature. Needs the temperature
+channel from F4, and the history from F132 to be worth opening. **Done when** the page shows the three charts and the
+text column in landscape and a sensible stack in portrait.
+
+### F134. Over-temperature warning: red LED plus a red square on every present — open, operator request 2026-10-05, after F4 and F132
+
+The history daemon (F132) lights `red_led` and writes a flag file when the SoC passes a threshold;
+`native_apps/common/framebuffer.c` draws a red square in a corner on every present while the flag is set, like the
+Raspberry Pi indicator. Native apps, `vnc_client` and ScummVM all link `framebuffer.c`, so **all three components
+redeploy**. Threshold to be chosen from the OMAP3503 datasheet limits, not guessed. **Done when** forcing the flag shows
+the square in a native app, VNC and ScummVM, and clearing it removes the square.
 
 ## Structural and cleanup
 
@@ -493,6 +464,11 @@ its level-5 problem is open on the level number, not on the mechanism. A pause-d
 Office Runner's TRAINING toggle in `platformer.c` uses) is not script-reachable — there is no
 `/dev/uinput` — so a mode with no CLI entry has no first-screen SSH check either; it makes a deep state
 cheaper for a human, not automatable.
+
+**First deliverable: `control_panel <page>`** (e.g. `control_panel monitor`) opens that page directly, so on-device
+verification can screenshot a page without tapping — there is no way to script a touch. The launcher passes no
+arguments, so the switch is SSH-only. **Done when** `ssh root@<ip> /opt/games/control_panel monitor` shows the Monitor
+page in a framebuffer capture.
 
 ### C12. Offline commissioning has never been run against a real disk — open
 
@@ -536,13 +512,15 @@ the touch diagnostic: fold duplicates into one rather than adding a button per t
 the deferred `dlopen`'d `CpPage` modules, which an out-of-tree page would need (design requirements in
 `native_apps/CLAUDE.md` → *control_panel*).
 
-### F131. The USB deploy prints `p1 power budget: FAILED` on a unit running our own image — open, cosmetic
+### C18. Drop vendor-kernel support — open, operator ruling 2026-10-05, deletion pre-approved
 
-`lib/rw-usbpower.sh` recognises only the vendor and 500 mA `uImage-system` md5s and correctly refuses anything else,
-so `usb_host/build-and-deploy.sh` (`:480`) and `deploy-all.sh` report FAILED on our image. Our image has no 500 mA
-patch at all (`kernel/README.md`). **Fix:** recognise "our image" by a marker (a header name), not an md5 list, and
-print `skipped: own image`. **Done when** a deploy to a unit on our image prints that and the vendor paths still
-refuse an unknown image.
+The next release supports only our own kernel; the vendor kernel is never patched again. Bluetooth already relies on
+our kernel's features. **Steps:** (a) find the last commit where the vendor-kernel patch path still worked and tag it
+(`last-vendor-kernel`); (b) delete the p1 vendor-kernel patch path — the `uImage-system` writer in `lib/rw-usbpower.sh`,
+`usb_host/patch_dtb.py`, `usb_host/uimage.py`, the p1 power-budget check (its `FAILED` print on our image,
+`usb_host/build-and-deploy.sh:480`, goes with it) and their tests; (c) fix the docs that describe the byte-patch route
+(`CLAUDE.md`, `lib/CLAUDE.md`, `SYSTEM_ANALYSIS.md` USB section, `COMMISSIONING.md`) in the same change. **Done when**
+the tag exists, no vendor-kernel patch code or test remains, and `./tests/run-all.sh` and `./tests/doc_check.sh` pass.
 
 ---
 
