@@ -159,6 +159,30 @@ The tools are scratch-grade and live outside the repo, in `C:\work\rw-scratch`: 
 data files are `vendor-Image` and `vendor.kallsyms`. `led_pwm_probe` is read: the vendor adds a u32 `brightness`
 DT property and applies it at probe, which vanilla hard-codes to `LED_OFF`. Still unexamined: `fb_find_logo`.
 
+## Mainline and omapfb
+
+**Mainline still carries `omapfb`** — **measured** 2026-10-05 by reading torvalds/linux master on GitHub, not on a
+device. `drivers/video/fbdev/omap2/omapfb/` is present with its own `dss/` and `displays/` (`omapfb-main.c`,
+`omapfb-ioctl.c`, `omapfb-sysfs.c`, `vrfb.c`); `FB_OMAP2` depends on `FB`, `GPIOLIB` and `DRM_OMAP = n` (exclusive
+with `omapdrm`) and carries no deprecation text; `FB_OMAP2_DSS_DPI` defaults y, the parallel panel this board uses.
+The earlier "removed during 5.x" claim was wrong; the likely origin is the upstream split (~4.15) giving omapfb a
+private `omapdss` copy **[inferred]**. The DRM/KMS objection in `SYSTEM_ANALYSIS.md` ([Kernel policy](../SYSTEM_ANALYSIS.md#7-kernel-policy))
+therefore applies to `omapdrm` only, which nobody has to use. Staying on our 4.14 build remains the operator's
+decision; a mainline-omapfb kernel is **unevaluated**.
+
+**Unproven on this device (all inferred):** the panel lights under mainline omapfb with a DT panel node; the runtime
+32/16bpp switch and the overlay sysfs still behave; the vendor U-Boot boots a modern zImage+DTB; the RAM footprint
+fits 234 MB.
+
+**Would gain (inferred):** security and network fixes (4.14 is EOL, we hand-backport); a much newer Bluetooth stack
+(8761CU native from v6.19, see *Bluetooth modules*), possibly relief for the L2CAP lockdep and 8BitDo-reconnect issues
+(unverified guess); newer USB/xpad; OMAP3 thermal sensing as standard config. **Would cost:** porting
+`drivers/cy8ctmg120_ts`, redoing the twl4030 power-node and DT changes, rebuilding every shipped module, a larger
+image, some speed on a 600 MHz core; likely several sessions.
+
+**Cheapest first step:** boot the newest LTS with omapfb on a spare card, asking only whether the panel lights and
+the bpp switch works.
+
 ## Drivers still missing from our image
 
 | Function | State | Route |

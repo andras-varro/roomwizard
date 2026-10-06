@@ -920,6 +920,8 @@ group_c() {
 # handles SYN_DROPPED is new content with no stale text to cut; kernel/README.md gained the measured ACTLR value (replacing the
 # "unmeasured" sentence), the module-set rebuild rule after an image patch change (MODVERSIONS), and a refreshed p1 inventory.
 # The plan shed five closed entries and its ceiling was not lowered, for the reason above.
+# 2026-10-05: kernel/README.md 160 -> 180. The Mainline and omapfb section is new content (the measured upstream omapfb finding,
+# the unproven list, gains and costs) that replaced a false claim held in the system analysis; no stale text in this file to cut.
 #
 #
 #
@@ -940,7 +942,7 @@ ceilings() {
 215	scummvm-roomwizard/CLAUDE.md
 162	vnc_client/CLAUDE.md
 137	.claude/skills/doc-update/SKILL.md
-160	kernel/README.md
+180	kernel/README.md
 40	kernel/CLAUDE.md
 EOF
 }

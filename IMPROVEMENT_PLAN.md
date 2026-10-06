@@ -225,7 +225,7 @@ deliberately not scoped here.
 ### F101. Build our own kernel image, rebased onto 4.14.336 — open
 
 **The deliverable is a `uImage` we compiled, staged on p1 beside the vendor's, on 4.14.336 — the final 4.14 release
-(4.14 has been EOL since Jan 2024, so no newer one exists; 5.x/6.x stays out per the kernel policy).** It brings every
+(4.14 has been EOL since Jan 2024, so no newer one exists; a mainline kernel is unevaluated, see the kernel notes).** It brings every
 stable fix, including **FragmentSmack CVE-2018-5391** (a large `inet_frag` rework, not patched on .52; the stop-gap
 `ipfrag_high_thresh=262144` / `ipfrag_low_thresh=196608` is not applied). **Measured:** all 9 of our patches dry-run
 clean on 4.14.336 (one offset); the 12 `tcp-*` patches are redundant there; 3 of the 5 `patches-modules` (KNOB, HIDP
@@ -286,6 +286,15 @@ the operator's TTL cables — [`HARDWARE.md#4-unpopulated-and-expansion`](HARDWA
 is off the critical path now that SSH answers, and remains the only channel for an image that does not.
 ⚠️ **Do not repoint `ctrlblock.bin` at a bootstrap image**: it overwrites two protected files and destroys
 the vendor recovery image.
+
+### F135. Boot the newest LTS kernel with omapfb on a spare card — open, operator request 2026-10-05, step 1 only
+
+Mainline still carries `omapfb`, so a newer kernel is unevaluated rather than ruled out; the evidence, the
+unproven list and the gains and costs are in `kernel/README.md` → *Mainline and omapfb* and are not repeated
+here. **Step 1 only:** on a **separate card**, so `.188`'s card is untouched, boot the newest LTS with omapfb
+and a DT panel node, and answer two questions: does the panel light, and does the runtime 32/16bpp switch work
+(`fbset`, `/sys/class/graphics/fb0/bits_per_pixel`). Anything past that (touch, Bluetooth, modules) waits on
+a yes to both.
 
 ### F102. Build our own root filesystem for p6 — open, asked for by the operator 2026-09-25
 
@@ -536,7 +545,7 @@ is needed for nothing ([`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy))
 | Enable the two EHCI USB host ports | **Nowhere to plug in** — no second USB connector and no unpopulated footprint on the board, so `CONFIG_USB_EHCI_HCD` is not what blocks this and an image we build gains nothing here | [`#36-usb`](SYSTEM_ANALYSIS.md#36-usb) |
 | SPI | Four controllers `okay` in the DT and `CONFIG_SPI` unset, but **nothing is on the bus** — no children are declared, and putting a device there needs a wire | [`#314-what-is-not-present`](SYSTEM_ANALYSIS.md#314-what-is-not-present) |
 | Piezo buzzer on TWL4030 PWM | **Needs a wire**, and all 3 dmtimer PWMs are taken; `CONFIG_PWM_TWL` is the cheap half | [`#39-i2c`](SYSTEM_ANALYSIS.md#39-i2c) |
-| Mainline 5.x/6.x port | **Closed on DRM/KMS, not on effort:** `omapdrm` would break the runtime bpp switching ScummVM and the VNC client depend on, lose the DSS overlay sysfs, and cost RAM. Building 4.14.52 ourselves (F101) is the opposite decision and keeps all three intact | [`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy) |
+| Mainline 5.x/6.x port | **Standing operator decision to stay on our 4.14 build, not a closed technical verdict:** `omapdrm` would break the runtime bpp switching and the DSS overlay sysfs, but mainline still carries `omapfb` (upstream source, 2026-10-05), which is unevaluated on this device. Building 4.14.52 ourselves (F101) keeps all three intact | [`#7-kernel-policy`](SYSTEM_ANALYSIS.md#7-kernel-policy) |
 | Ambient-light sensor / auto-backlight | **No such hardware.** The teardown found no sensor and, decisively, no aperture, window or light pipe anywhere in the enclosure — a sensor would have nothing to sense even if fitted. ⚠️ Do **not** probe for it: `pv02_app 5` can hang I2C bus 1, which carries the PMIC. *Time-of-day* dimming needs no sensor and is still available. | [`#39-i2c`](SYSTEM_ANALYSIS.md#39-i2c) |
 | Serial console | Located and pinned out (`P4`), then declined: the recovery loop is *pull the card, reimage, DHCP, SSH*, and since NAND and U-Boot stay untouched the card **is** the entire failure surface. Serial would add boot visibility, not recovery capability. Revisit only if NAND or U-Boot ever get written — or once we are iterating on our own images (F101), where serial is the only channel that shows *why* one failed to boot, though fitting `P4` is itself a board change. | [`#312-serial-ports`](SYSTEM_ANALYSIS.md#312-serial-ports) |
 

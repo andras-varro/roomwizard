@@ -2199,16 +2199,14 @@ recovery is a card pull plus copying a backup back onto p1 (plain FAT). ⚠️ *
 never by the panel**, which stays blank until the panel driver exists; from SSH on, every panel and touch
 iteration is a `.ko` copied over, and touch itself still ends at an operator ([Touch](#33-touch)).
 
-**A mainline 5.x/6.x port stays out, on DRM/KMS.** `omapfb`/`omapdss` were deprecated across 4.x and
-**removed from mainline during 5.x**; the OMAP3 replacement `omapdrm` is a DRM/KMS driver. Under it
-`/dev/fb0` exists only via `CONFIG_DRM_FBDEV_EMULATION`, whose fbdev emulation exposes a **fixed** pixel
-format, while this project switches bpp at runtime in three components ([Display](#32-display)); the DSS
-overlay sysfs interface disappears outright; and a 6.x kernel
-has a materially larger footprint on a 234 MB box. That the emulation would *reject* the switch is
-**[inferred]**, untestable here for want of any DRM at all; what is **measured** is that the current
-stack supports it (`/sys/class/graphics/fb0/bits_per_pixel` tracks whichever app is running).
-⚠️ **None of this bears on a 4.14.52 rebuild**, which leaves omapfb, that switch and the overlay sysfs
-exactly as they are.
+**A mainline 5.x/6.x port stays out (standing operator decision); its DRM/KMS reason holds for `omapdrm` only.**
+Under `omapdrm`, `/dev/fb0` exists only via `CONFIG_DRM_FBDEV_EMULATION`, a **fixed** pixel format, while this
+project switches bpp at runtime in three components ([Display](#32-display)), and the DSS overlay sysfs is
+gone. That the emulation would *reject* the switch is **[inferred]**; **measured** is that the current stack
+supports it (`/sys/class/graphics/fb0/bits_per_pixel` tracks the running app). **Measured from upstream source
+2026-10-05: mainline still carries `omapfb`** (`drivers/video/fbdev/omap2/omapfb/`, own `dss/`), so a newer
+kernel is unevaluated, not ruled out: `kernel/README.md` → *Mainline and omapfb*. A 4.14.52 rebuild leaves
+omapfb, the switch and the overlay sysfs exactly as they are.
 
 ⚠️ **What a rebuild does not buy: enumeration.** "Recompile the kernel and the USB problems go away" is
 not true and has been proposed. It buys the config defects above and the *ability* to patch the driver.
