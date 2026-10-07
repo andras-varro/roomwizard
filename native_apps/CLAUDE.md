@@ -547,8 +547,8 @@ consumer). The default `btn_action` is `BTN_WEST` (`0x134`), commented "X" but p
 ⚠️ **Any evdev reader that tracks a level (button, key, axis, touch contact) must handle `SYN_DROPPED`.** When the
 kernel buffer overflows, `evdev.c` `__pass_event` drops the unread events and leaves `SYN_DROPPED` plus the newest one
 [measured from source]; a lost release then reads as held until the next click. On `SYN_DROPPED` skip to the
-end of that packet with `input_syn_drop_skip()` (`common/input_scan.h`) and re-read the level with `EVIOCGKEY`/`EVIOCGABS`.
-`gamepad.c`, `touch_input.c`, the `vnc_client` mouse and the ScummVM mouse do; `tests/evdev_resync_test.c` is the check.
+end of that packet with `input_syn_drop_skip()` (`common/input_scan.h`) and re-read the level (`EVIOCGKEY` keys, `EVIOCGABS` axes, `EVIOCGMTSLOTS` MT slots).
+Every evdev reader in the tree does; a new one must too. Checks: `tests/evdev_resync_test.c`, `vnc_pad_test.c` group 11. Keyboard, pad and MT paths: inferred from code, not observed on device.
 
 **All three fields are pure outputs of `gamepad_poll()`** — it recomputes them from scratch every call, so
 writing them from an app has no effect past the next poll. `held` is the OR of two kinds of source, and

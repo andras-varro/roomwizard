@@ -137,15 +137,6 @@ blinks; if host paging works, have the init script or a `bluetoothd` policy conn
 check whether `bluetoothd` can stop without powering the adapter off, so no 0x15 is sent. **Done when** a restart
 leaves the pad connected, or the pad's behaviour is attributed and the workaround documented.
 
-### B55. Keyboard, pad and multitouch readers still ignore an evdev overflow — open, partial fix shipped
-
-`SYN_DROPPED` is handled by `common/input_scan.h` `input_syn_drop_skip()` in `gamepad.c`, `touch_input.c`, the
-`vnc_client` mouse and the ScummVM mouse (rule: `native_apps/CLAUDE.md` → *Input*). **Not yet:** the ScummVM keyboard
-(`roomwizard-events.cpp` ~`:652`) and pad (~`:903`) readers; the `vnc_client` keyboard (`vnc_input.c:366`, which needs
-held-key tracking to resync) and pad (`:412`); and `control_panel/input_page.c:1223`, whose multitouch diagnostic can
-show a stale slot (needs `EVIOCGMTSLOTS`). **Done when** each resyncs through `input_syn_drop_skip()` and a lost
-release leaves the key, button or slot up.
-
 ### D7. mDNS does not resolve from WSL, which is where the deploy scripts run — open, confirmed 2026-08-15
 
 A named unit answers to `<name>.local` from Windows (`commissioning/set-hostname.sh`, the avahi link). Two
