@@ -605,6 +605,61 @@ static void draw_keypad(SettingsState *st) {
     fb_swap(fb);
 }
 
+/* ── Keypad edits: one implementation for a tap and a physical key ───── */
+
+/* Append ch.  The PORT field takes digits only; every other field takes what
+ * its keypad offers. */
+static void kp_type(SettingsState *st, char ch) {
+    if (st->keypad_mode == KEYPAD_NUMERIC && st->editing_field == 1 &&
+        !isdigit((unsigned char)ch))
+        return;
+    (void)vnc_kp_insert(st->keypad_buf, (int)sizeof(st->keypad_buf),
+                        &st->keypad_cursor, st->keypad_max_len, ch);
+}
+
+_Static_assert((int)KEYPAD_NUMERIC == VNC_KP_NUMERIC && (int)KEYPAD_FULL == VNC_KP_FULL &&
+               (int)KEYPAD_ALPHA == VNC_KP_ALPHA, "vnc_pad.h modes mirror KEYPAD_*");
+
+static void kp_backspace(SettingsState *st) {
+    (void)vnc_kp_backspace(st->keypad_buf, &st->keypad_cursor);
+}
+
+/* OK: commit the buffer into the field being edited and leave the keypad. */
+static int kp_commit(SettingsState *st) {
+    if (st->keypad_mode == KEYPAD_NUMERIC) {
+        if (st->editing_field == 0) {
+            /* HOST: reject empty */
+            if (st->keypad_buf[0] != '\0') {
+                strncpy(st->working.host, st->keypad_buf,
+                        sizeof(st->working.host) - 1);
+                st->working.host[sizeof(st->working.host) - 1] = '\0';
+            }
+        } else {
+            /* PORT: clamp to 1-65535 */
+            int p = atoi(st->keypad_buf);
+            if (p < 1) p = 1;
+            if (p > 65535) p = 65535;
+            st->working.port = p;
+        }
+    } else if (st->keypad_mode == KEYPAD_FULL) {
+        strncpy(st->working.password, st->keypad_buf,
+                sizeof(st->working.password) - 1);
+        st->working.password[sizeof(st->working.password) - 1] = '\0';
+    } else {
+        strncpy(st->working.encodings, st->keypad_buf,
+                sizeof(st->working.encodings) - 1);
+        st->working.encodings[sizeof(st->working.encodings) - 1] = '\0';
+    }
+    st->screen = SCREEN_MAIN;
+    return 1;
+}
+
+/* CANCEL: discard and leave the keypad. */
+static int kp_cancel(SettingsState *st) {
+    st->screen = SCREEN_MAIN;
+    return 0;
+}
+
 /* ── Handle touch on NUMERIC keypad ────────────────────────────────── */
 /*
  * Returns:
@@ -621,35 +676,16 @@ static int handle_keypad_touch(SettingsState *st, int tx, int ty) {
         const char *k = btn->label;
 
         /* OK — commit edit */
-        if (strcmp(k, "OK") == 0) {
-            if (st->editing_field == 0) {
-                /* HOST: reject empty */
-                if (st->keypad_buf[0] != '\0') {
-                    strncpy(st->working.host, st->keypad_buf,
-                            sizeof(st->working.host) - 1);
-                    st->working.host[sizeof(st->working.host) - 1] = '\0';
-                }
-            } else {
-                /* PORT: clamp to 1-65535 */
-                int p = atoi(st->keypad_buf);
-                if (p < 1) p = 1;
-                if (p > 65535) p = 65535;
-                st->working.port = p;
-            }
-            st->screen = SCREEN_MAIN;
-            return 1;
-        }
+        if (strcmp(k, "OK") == 0)
+            return kp_commit(st);
 
         /* CANCEL — discard */
-        if (strcmp(k, "CANCEL") == 0) {
-            st->screen = SCREEN_MAIN;
-            return 0;
-        }
+        if (strcmp(k, "CANCEL") == 0)
+            return kp_cancel(st);
 
         /* BACKSPACE */
         if (strcmp(k, "<-") == 0) {
-            if (st->keypad_cursor > 0)
-                st->keypad_buf[--st->keypad_cursor] = '\0';
+            kp_backspace(st);
             return -1;
         }
 
@@ -662,18 +698,7 @@ static int handle_keypad_touch(SettingsState *st, int tx, int ty) {
 
         /* Digit or punctuation (single char labels: 0-9, '.', ':') */
         if (strlen(k) == 1) {
-            char ch = k[0];
-
-            /* PORT field: only allow digits */
-            if (st->editing_field == 1 && !isdigit((unsigned char)ch))
-                return -1;
-
-            /* Buffer overflow protection */
-            if (st->keypad_cursor >= st->keypad_max_len)
-                return -1;
-
-            st->keypad_buf[st->keypad_cursor++] = ch;
-            st->keypad_buf[st->keypad_cursor] = '\0';
+            kp_type(st, k[0]);
             return -1;
         }
 
@@ -973,12 +998,7 @@ static int handle_keypad_full_touch(SettingsState *st, int tx, int ty) {
             ch = is_full ? full_symbols[sym_idx] : alpha_symbols[sym_idx];
         }
 
-        /* Buffer overflow protection */
-        if (st->keypad_cursor >= st->keypad_max_len)
-            return -1;
-
-        st->keypad_buf[st->keypad_cursor++] = ch;
-        st->keypad_buf[st->keypad_cursor] = '\0';
+        kp_type(st, ch);
         return -1;
     }
 
@@ -991,11 +1011,7 @@ static int handle_keypad_full_touch(SettingsState *st, int tx, int ty) {
             if (!hit_rect(tx, ty, kx, ky, FKP_KEY_W, FKP_KEY_H))
                 continue;
 
-            if (st->keypad_cursor >= st->keypad_max_len)
-                return -1;
-
-            st->keypad_buf[st->keypad_cursor++] = full_digits[d];
-            st->keypad_buf[st->keypad_cursor] = '\0';
+            kp_type(st, full_digits[d]);
             return -1;
         }
     }
@@ -1012,8 +1028,7 @@ static int handle_keypad_full_touch(SettingsState *st, int tx, int ty) {
             return -1;
 
         case FKA_DEL:
-            if (st->keypad_cursor > 0)
-                st->keypad_buf[--st->keypad_cursor] = '\0';
+            kp_backspace(st);
             return -1;
 
         case FKA_CLR:
@@ -1022,23 +1037,10 @@ static int handle_keypad_full_touch(SettingsState *st, int tx, int ty) {
             return -1;
 
         case FKA_CANCEL:
-            st->screen = SCREEN_MAIN;
-            return 0;
+            return kp_cancel(st);
 
         case FKA_OK:
-            if (is_full) {
-                /* Commit PASSWORD */
-                strncpy(st->working.password, st->keypad_buf,
-                        sizeof(st->working.password) - 1);
-                st->working.password[sizeof(st->working.password) - 1] = '\0';
-            } else {
-                /* Commit ENCODINGS */
-                strncpy(st->working.encodings, st->keypad_buf,
-                        sizeof(st->working.encodings) - 1);
-                st->working.encodings[sizeof(st->working.encodings) - 1] = '\0';
-            }
-            st->screen = SCREEN_MAIN;
-            return 1;
+            return kp_commit(st);
         }
     }
 
@@ -1149,10 +1151,23 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
         /* Pad and keyboard: moves act at once; A and B queue a tap, and
          * nothing more is taken until that tap has been delivered. */
         VncNav acts[16];
-        int nact = vnc_nav_poll(&nav, acts, 16);
+        char   chs[16];
+        nav.kp_mode = (st.screen == SCREEN_MAIN) ? -1 : (int)st.keypad_mode;
+        int nact = vnc_nav_poll(&nav, acts, chs, 16);
         for (int i = 0; i < nact && tap.phase == 0 && !real_touching; i++) {
             UiDir d;
-            if (vnc_nav_dir(acts[i], &d)) {
+            if (acts[i] == VNC_NAV_CHAR || acts[i] == VNC_NAV_BKSP ||
+                acts[i] == VNC_NAV_OK || acts[i] == VNC_NAV_CANCEL) {
+                /* A physical key typed into the open keypad.  Only polled
+                 * with a keypad open, but OK / CANCEL earlier in this batch
+                 * may have closed it: the rest of the batch is then dropped. */
+                if (st.screen == SCREEN_MAIN)
+                    break;
+                if (acts[i] == VNC_NAV_CHAR)      kp_type(&st, chs[i]);
+                else if (acts[i] == VNC_NAV_BKSP) kp_backspace(&st);
+                else if (acts[i] == VNC_NAV_OK)   (void)kp_commit(&st);
+                else                              (void)kp_cancel(&st);
+            } else if (vnc_nav_dir(acts[i], &d)) {
                 if (st.focus_on)
                     st.focus = ui_focus_move(rects, nrects, st.focus, d);
                 st.focus_on = true;     /* the first press only shows the ring */

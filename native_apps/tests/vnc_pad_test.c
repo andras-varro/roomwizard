@@ -23,6 +23,7 @@
  */
 #include "vnc_pad.h"
 #include <stdio.h>
+#include <string.h>
 
 static int fails, passes;
 
@@ -394,6 +395,43 @@ static void group8_keychar(void) {
           vnc_nav_key(KEY_SPACE, 1) == VNC_NAV_ACTIVATE, "vnc_nav_key unchanged");
 }
 
+static void group9_kp(void) {
+    int sh = 0;
+    char c = 0;
+    char buf[9] = "";
+    int cur = 0;
+
+    /* shift tracking: any value of a shift key, never an edit itself */
+    CHECK(vnc_kp_key(KEY_LEFTSHIFT, 1, &sh, VNC_KP_FULL, &c) == VNC_KC_NONE && sh == VNC_KP_SHIFT_L, "left shift down sets its bit");
+    vnc_kp_key(KEY_RIGHTSHIFT, 1, &sh, VNC_KP_FULL, &c);
+    CHECK(sh == (VNC_KP_SHIFT_L | VNC_KP_SHIFT_R), "both shifts");
+    CHECK(vnc_kp_key(KEY_A, 1, &sh, VNC_KP_FULL, &c) == VNC_KC_CHAR && c == 'A', "shift held: A");
+    vnc_kp_key(KEY_LEFTSHIFT, 0, &sh, VNC_KP_FULL, &c);
+    CHECK(sh == VNC_KP_SHIFT_R, "releasing left leaves right");
+    CHECK(vnc_kp_key(KEY_A, 1, &sh, VNC_KP_FULL, &c) == VNC_KC_CHAR && c == 'A', "right shift still holds");
+    vnc_kp_key(KEY_RIGHTSHIFT, 0, &sh, VNC_KP_FULL, &c);
+    CHECK(sh == 0 && vnc_kp_key(KEY_A, 1, &sh, VNC_KP_FULL, &c) == VNC_KC_CHAR && c == 'a', "both up: a");
+
+    /* value filter */
+    CHECK(vnc_kp_key(KEY_A, 2, &sh, VNC_KP_FULL, &c) == VNC_KC_CHAR, "char repeats");
+    CHECK(vnc_kp_key(KEY_BACKSPACE, 2, &sh, VNC_KP_FULL, &c) == VNC_KC_BACKSPACE, "backspace repeats");
+    CHECK(vnc_kp_key(KEY_A, 0, &sh, VNC_KP_FULL, &c) == VNC_KC_NONE && c == 0, "release types nothing");
+    CHECK(vnc_kp_key(KEY_ENTER, 1, &sh, VNC_KP_FULL, &c) == VNC_KC_OK, "enter press is OK");
+    CHECK(vnc_kp_key(KEY_ENTER, 2, &sh, VNC_KP_FULL, &c) == VNC_KC_NONE, "enter repeat is not OK");
+    CHECK(vnc_kp_key(KEY_ESC, 2, &sh, VNC_KP_NUMERIC, &c) == VNC_KC_NONE, "esc repeat is not CANCEL");
+    CHECK(vnc_kp_key(KEY_ESC, 1, &sh, VNC_KP_NUMERIC, &c) == VNC_KC_CANCEL, "esc press is CANCEL");
+
+    /* shared insert / backspace */
+    CHECK(vnc_kp_insert(buf, 9, &cur, 3, 'x') && vnc_kp_insert(buf, 9, &cur, 3, 'y') &&
+          vnc_kp_insert(buf, 9, &cur, 3, 'z') && cur == 3 && strcmp(buf, "xyz") == 0, "inserts to max");
+    CHECK(!vnc_kp_insert(buf, 9, &cur, 3, 'w') && cur == 3 && strcmp(buf, "xyz") == 0, "max refuses");
+    cur = 8; memset(buf, 'q', 8); buf[8] = 0;
+    CHECK(!vnc_kp_insert(buf, 9, &cur, 99, 'w') && cur == 8, "buffer capacity refuses past max");
+    cur = 2; strcpy(buf, "ab");
+    CHECK(vnc_kp_backspace(buf, &cur) && cur == 1 && strcmp(buf, "a") == 0, "backspace");
+    CHECK(vnc_kp_backspace(buf, &cur) && !vnc_kp_backspace(buf, &cur) && cur == 0 && buf[0] == 0, "backspace on empty is a no-op");
+}
+
 int main(void) {
     group1_axis();
     group2_events();
@@ -403,6 +441,7 @@ int main(void) {
     group6_speed();
     group7_nav();
     group8_keychar();
+    group9_kp();
     printf("vnc_pad_test: %d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }

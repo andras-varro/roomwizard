@@ -118,6 +118,8 @@ typedef struct {
     int count;
     VncPadMap map;                         // from /etc/input_config.conf
     InputSigGate gate;                     // hot-plug rescan
+    int kp_mode;                           // VncKeypadMode while a keypad is open, else -1 (set by the caller; -1 from open)
+    int kp_shift;                          // VNC_KP_SHIFT_* bits of the physical shift keys
 } VncNavInput;
 
 // Open every keyboard and pad, seeding what is already held so it never acts.
@@ -125,7 +127,10 @@ void vnc_nav_open(VncNavInput *nav);
 
 // Read every pending event; up to max actions into out[], in order.  Returns
 // how many.  Also rescans when /dev/input changes.
-int vnc_nav_poll(VncNavInput *nav, VncNav *out, int max);
+// With nav->kp_mode >= 0 a keyboard also yields VNC_NAV_CHAR (char in ch[]),
+// BKSP, OK and CANCEL (vnc_kp_key first, vnc_nav_key on NONE); ch[] is
+// index-aligned with out[].
+int vnc_nav_poll(VncNavInput *nav, VncNav *out, char *ch, int max);
 
 // Close every node.
 void vnc_nav_close(VncNavInput *nav);

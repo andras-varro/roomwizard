@@ -117,6 +117,9 @@ typedef enum {
     VNC_NAV_UP, VNC_NAV_DOWN, VNC_NAV_LEFT, VNC_NAV_RIGHT,
     VNC_NAV_ACTIVATE,
     VNC_NAV_BACK,
+    /* Only while the caller has set VncNavInput.kp_mode (a keypad is open): */
+    VNC_NAV_CHAR,       /* type the char that came with it */
+    VNC_NAV_BKSP, VNC_NAV_OK, VNC_NAV_CANCEL,
 } VncNav;
 
 /* The stick counts as pushed past this deflection (of 1000) and as back at
@@ -187,5 +190,23 @@ typedef enum {
  * Esc come back here as OK / CANCEL, so a keypad never sees them as nav
  * ACTIVATE / BACK; Space is a char in ALPHA only, and elsewhere stays nav. */
 VncKeyChar vnc_key_char(int code, int shift, int mode, char *ch);
+
+/* Shift bits for vnc_kp_key: one per physical shift key. */
+#define VNC_KP_SHIFT_L 1
+#define VNC_KP_SHIFT_R 2
+
+/* PURE. One keyboard EV_KEY as a keypad edit, with the value filter and the
+ * shift tracking the caller would otherwise repeat: KEY_LEFTSHIFT / RIGHTSHIFT
+ * set and clear their bit in *shift (any value) and return NONE; CHAR and
+ * BACKSPACE act on press (1) and autorepeat (2), OK and CANCEL on press only;
+ * anything else is NONE.  Same *ch contract as vnc_key_char. */
+VncKeyChar vnc_kp_key(int code, int value, int *shift, int mode, char *ch);
+
+/* PURE. Append ch to buf (cursor = length) unless that would exceed max or buf
+ * capacity cap (bytes incl. NUL).  Returns true if it was appended. */
+bool vnc_kp_insert(char *buf, int cap, int *cursor, int max, char ch);
+
+/* PURE. Delete the last char; false if the buffer is empty. */
+bool vnc_kp_backspace(char *buf, int *cursor);
 
 #endif /* VNC_PAD_H */

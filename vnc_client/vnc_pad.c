@@ -313,3 +313,37 @@ emit:
     if (ch) *ch = c;
     return VNC_KC_CHAR;
 }
+
+VncKeyChar vnc_kp_key(int code, int value, int *shift, int mode, char *ch) {
+    VncKeyChar r;
+    if (ch) *ch = 0;
+    if (code == KEY_LEFTSHIFT || code == KEY_RIGHTSHIFT) {
+        int bit = (code == KEY_LEFTSHIFT) ? VNC_KP_SHIFT_L : VNC_KP_SHIFT_R;
+        if (value == 0) *shift &= ~bit;
+        else            *shift |= bit;
+        return VNC_KC_NONE;
+    }
+    if (value != 1 && value != 2)
+        return VNC_KC_NONE;
+    r = vnc_key_char(code, *shift != 0, mode, ch);
+    if (value == 2 && (r == VNC_KC_OK || r == VNC_KC_CANCEL)) {
+        if (ch) *ch = 0;
+        return VNC_KC_NONE;
+    }
+    return r;
+}
+
+bool vnc_kp_insert(char *buf, int cap, int *cursor, int max, char ch) {
+    if (*cursor >= max || *cursor + 1 >= cap)
+        return false;
+    buf[(*cursor)++] = ch;
+    buf[*cursor] = '\0';
+    return true;
+}
+
+bool vnc_kp_backspace(char *buf, int *cursor) {
+    if (*cursor <= 0)
+        return false;
+    buf[--(*cursor)] = '\0';
+    return true;
+}

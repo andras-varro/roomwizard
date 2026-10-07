@@ -755,13 +755,14 @@ static void nav_drop(VncNavInput *nav, int i) {
 void vnc_nav_open(VncNavInput *nav) {
     InputConfig cfg;
     memset(nav, 0, sizeof(*nav));
+    nav->kp_mode = -1;
     input_config_defaults(&cfg);
     (void)input_config_load(&cfg, INPUT_CONFIG_PATH);
     vnc_pad_map_from_config(&nav->map, &cfg);
     nav_scan(nav);
 }
 
-int vnc_nav_poll(VncNavInput *nav, VncNav *out, int max) {
+int vnc_nav_poll(VncNavInput *nav, VncNav *out, char *ch, int max) {
     int n = 0;
     if (input_sig_gate_poll(&nav->gate, get_ticks_ms()))
         nav_scan(nav);
@@ -774,9 +775,18 @@ int vnc_nav_poll(VncNavInput *nav, VncNav *out, int max) {
         errno = 0;
         while ((r = read(nd->fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
             VncNav a = VNC_NAV_NONE;
+            char c = 0;
             if (nd->kind == INPUT_KIND_KEYBOARD) {
-                if (ev.type == EV_KEY)
-                    a = vnc_nav_key(ev.code, ev.value);
+                if (ev.type == EV_KEY) {
+                    VncKeyChar kc = vnc_kp_key(ev.code, ev.value, &nav->kp_shift,
+                                               nav->kp_mode, &c);
+                    if (nav->kp_mode >= 0 && kc != VNC_KC_NONE)
+                        a = (kc == VNC_KC_CHAR) ? VNC_NAV_CHAR
+                          : (kc == VNC_KC_BACKSPACE) ? VNC_NAV_BKSP
+                          : (kc == VNC_KC_OK) ? VNC_NAV_OK : VNC_NAV_CANCEL;
+                    else
+                        a = vnc_nav_key(ev.code, ev.value);
+                }
             } else if (ev.type == EV_KEY) {
                 a = vnc_nav_pad_event(&nav->pad[i], &nav->map, EV_KEY,
                                       input_pad_key(nd->pad_layout, ev.code), ev.value);
@@ -784,8 +794,10 @@ int vnc_nav_poll(VncNavInput *nav, VncNav *out, int max) {
                 a = vnc_nav_pad_event(&nav->pad[i], &nav->map, EV_ABS,
                                       ev.code, ev.value);
             }
-            if (a != VNC_NAV_NONE && n < max)
+            if (a != VNC_NAV_NONE && n < max) {
+                ch[n] = c;
                 out[n++] = a;
+            }
         }
         if (r < 0 && errno == ENODEV) {
             DEBUG_PRINT("Settings input gone: %s", nd->path);
