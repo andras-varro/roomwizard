@@ -172,7 +172,7 @@ Hotplug: the `/dev/input` fingerprint is checked every 1 s and devices are resca
 (`vnc_pad_motion`: a gap over `VNC_PAD_MAX_STEP_MS` counts as that long, a sub-pixel carry is kept, full-deflection speed is
 two thirds of the remote width per second clamped to `VNC_PAD_MIN_SPEED`..`VNC_PAD_MAX_SPEED`, d-pad is `VNC_PAD_DPAD_NORM`);
 A / B are held levels (so a drag works), a shoulder press is a one-shot wheel pulse, and Select held `UI_HOLD_EXIT_MS` (`UiHold`)
-opens Settings, like the 3 s corner hold and a held keyboard Esc (`vnc_esc_event` / `vnc_esc_hold_exit`; a short tap is sent to the remote on release, the remote never sees Esc held). A physical keyboard types into the open Settings keypads only (pure `vnc_key_char`, `vnc_kp_key`, `vnc_kp_insert` in `vnc_pad.c`; host test `native_apps/tests/vnc_pad_test.c`); the reconnect screen takes no pad or keyboard yet.
+opens Settings, like the 3 s corner hold and a held keyboard Esc (`vnc_esc_event` / `vnc_esc_hold_exit`; a short tap is sent to the remote on release, the remote never sees Esc held). A physical keyboard types into the open Settings keypads only (pure `vnc_key_char`, `vnc_kp_key`, `vnc_kp_insert` in `vnc_pad.c`; host test `native_apps/tests/vnc_pad_test.c`); the reconnect screen shares Settings' input (`vnc_nav_open`/`vnc_nav_poll`) and drawing (`vnc_draw_focus_ring`/`vnc_draw_pointer` in `vnc_settings.c`), so pad, keyboard and mouse work there (operator-verified); a pointer move repaints the whole screen.
 
 ## Settings GUI
 

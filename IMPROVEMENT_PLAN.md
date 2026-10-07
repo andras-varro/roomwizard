@@ -341,16 +341,7 @@ rest committed as bare PPMs with no generator — and collected by the `*//*.ppm
 the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then delete the three old scripts.
 **Done when** the launcher grid on the panel reads as the same family as the Control Panel's. Operator 2026-10-07 also wants a better icon for the Control Panel's System page, done with this rework: its page has `.icon = NULL` (`system_page.c:563`) and `ICONS` in `gen_cp_icons.py:178` has no System entry.
 
-### F112. vnc_client: reconnect screen without the touchscreen — open
-
-Pad, hold-Esc and keyboard/mouse in Settings are operator-verified (2026-10-07). **Open:** the pad and keyboard on the reconnect
-screen (`vnc_client.c` `reconnect_ui`; reconnect-screen B does nothing), and **[inferred, not reproduced]** a stray remote click
-if A or B is still held when leaving Settings and the session reconnects (reproduce it first). Known limits: a press and release
-inside one 33 ms poll is lost; a pointer move repaints fully; the remote never sees Esc held. **Done when** each item works or is
-shown to be unreachable.
-
-
-### F118. An arcade-style start menu shared by all the games — open, not started, operator request 2026-10-04
+### F118. An arcade-style start menu shared by all the games — open, designed, not started, operator request 2026-10-04
 
 Replaces each game's green START button with one menu widget in `native_apps/common/` (not seven copies). The selected
 item is drawn like `> Start <` and the marker blinks slowly. Ping pattern: a ping on each of 3 blinks, then 3 silent
@@ -447,3 +438,5 @@ never-attempted candidate and the question any candidate must answer first.
 
 **Bundles hold built artifacts only — settled**, because the one consumer that installs device scripts runs
 from a clone and has `device-files/` beside it either way.
+
+**Design (defaults the operator may overrule, 2026-10-07).** New `native_apps/common/start_menu.h/.c` on the `GameOverScreen` pattern (init/update/draw/needs_redraw; the layout rects are the hit-test). The caller passes `get_time_ms()` as the game clock; blink is 1 s, 500 on / 500 off, and a new `audio_ping` (1319 Hz, 40 ms) fires on on-edges where `blink_idx % 6 < 3`, edge-detected, skipped when effects are off. UP/DOWN move through `ui_focus` (add `ui_focus.o` to `GAMEPAD_OBJ`), LEFT/RIGHT cycle a choice, JUMP/ACTION/PAUSE activate, BACK exits, touch acts on release. 2 PLAYERS is enabled only while `gamepad_player_mask(gm)&3==3` and offered only by games that implement 2P, pong first (P2 drives the right paddle, `pong.c:232`). EXIT entry last; TEST MODE / TRAINING are added as choices and the pause toggles kept. Migration order: widget + host test, pilot snake, pong (1P/2P + difficulty), tetris + frogger, samegame + platformer, brick_breaker, then retire `screen_draw_welcome*`.
