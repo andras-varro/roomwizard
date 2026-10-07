@@ -162,15 +162,6 @@ residues:
    rather than by a full `commissioning/provision.sh` run, so "it comes up on its own after a reboot" has not
    been observed.
 
-### B56. Mix Bus Test should refuse portrait with a message — open, operator ruling 2026-10-05
-
-The page is not to be laid out for portrait. When the display is portrait it shows a "not supported in portrait"
-message instead of running, as the calibration app does: `native_apps/control_panel/touch_wizard.c:197-209` clears,
-draws "CALIBRATE IN LANDSCAPE MODE" / "TURN PORTRAIT OFF AND RELAUNCH", `fb_swap()`s, sleeps 3 s and returns. The Mix
-Bus Test is `native_apps/tests/audio_mix_test.c`, whose `present_rect()` already returns early on `fb->portrait_mode`
-(`:471`) and so repaints nothing there. **Done when** launching it from the Audio page in portrait shows the message
-and returns, and landscape is unchanged.
-
 ### B57. Does MADC ADCIN6 follow what is plugged into the USB port? — open, n=1, needs a joint session (operator replugs while ch6 is read)
 
 `in_voltage6` read 26-29 mV on `.188` while an Xbox 360 pad was on the USB port and a steady 344-364 mV after the BT dongle replaced it
@@ -361,19 +352,24 @@ the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then
 
 ### F112. vnc_client: pad gaps left after the verified pad — open
 
-The pad (pointer, A/B drags, wheel, hold-Select, Settings navigation) is operator-verified. Keyboard typing into the Settings
-keypads is built and deployed to `.188` (`vnc_key_char` / `vnc_kp_key` in `vnc_pad.c`); **awaiting the operator's panel check**:
-(1) HOST: type 192.168.1.5 and `:` (Shift+;), letters ignored, keypad digits work, Backspace deletes and repeats, Enter commits,
-Esc discards; (2) PORT: 5900, `.` `:` ignored, a 6th digit refused; (3) PASSWORD: abC1-_! with Shift, 8-char cap, either Shift
-key, the on-screen SHIFT affects taps only; (4) ENCODINGS: lowercase, space, `-` `_` `.`; digits and Shift+letter ignored;
-(5) arrows move focus, Space taps; (6) main screen Enter/Esc unchanged, typing does nothing; (7) pad A/B still work. Defaults
-taken: the keyboard types only while a keypad is open; the password stays plaintext (masking and 0600 are separate work);
-reconnect-screen B does nothing. **Still open:** the pad and keyboard on the reconnect screen; and **[inferred, not
-reproduced]** a stray remote click if A or B is still held when leaving Settings and the session reconnects (reproduce it
-first). **Done when** the checklist passes and each remaining item works or is shown to be unreachable. **Also:** the exit gesture reuses the input tester's exit methods
-(`native_apps/control_panel/input_page.c`): hold Esc on a keyboard (`:420`), hold left+right mouse buttons
-(`ui_chord_button`, `:403`), and on a pad hold Select or Start, the pad's Back (`:420`, `:457-460`); the held-key
-state is `UiHold` (`common/ui_focus.h:79`).
+The pad (pointer, A/B drags, wheel, hold-Select, Settings navigation) is operator-verified. Operator check 2026-10-07 on the
+earlier build: holding keyboard Esc in a session did nothing; in Settings the pad navigated and typed but keyboard and mouse did
+nothing. Causes: hold-Esc was never built and Settings never opened mouse nodes (both measured from code); the keyboard was
+invisible, **[inferred, not measured]** because `input_classify` tests mouse before keyboard, so a combo receiver's node is MOUSE
+(no keyboard was plugged in at probe time; `/proc/bus/input/devices` showed only panjit_ts and the 8BitDo Pro 2). Built and
+deployed to `.188` (md5 match): hold Esc opens Settings (a short tap reaches the remote, sent on release; `vnc_esc_event` /
+`vnc_esc_hold_exit`), Settings opens mouse nodes (drawn arrow, left click = tap on release), keys accepted from any node with
+keyboard keys, one LOG_INFO per opened node. **Awaiting the operator's panel check:** (a) hold Esc in a session opens Settings, a
+short tap still reaches the remote; (b) in Settings the mouse moves an arrow and a left click activates; (c) keyboard arrows,
+Enter, Esc, Space work, and typing into the keypads (`vnc_key_char` / `vnc_kp_key`): HOST 192.168.1.5 and `:` (Shift+;), letters
+ignored, Backspace repeats; PORT 5900, `.` `:` ignored, 6th digit refused; PASSWORD abC1-_! with Shift, 8-char cap; ENCODINGS
+lowercase, space, `-` `_` `.`, digits ignored; main screen typing does nothing; pad A/B still work; (d) the operator names the
+keyboard and mouse (combo receiver?) and the LOG_INFO lines naming opened nodes are read. Known limits: a press and release
+inside one 33 ms poll is lost; a pointer move repaints fully; the remote never sees Esc held. Defaults taken: the keyboard types
+only while a keypad is open; the password stays plaintext (masking and 0600 are separate work); reconnect-screen B does nothing.
+**Still open:** the pad and keyboard on the reconnect screen; and **[inferred, not reproduced]** a stray remote click if A or B
+is still held when leaving Settings and the session reconnects (reproduce it first). **Done when** the checklist passes and
+each remaining item works or is shown to be unreachable.
 
 
 ### F118. An arcade-style start menu shared by all the games — open, not started, operator request 2026-10-04
@@ -386,16 +382,19 @@ yet and nothing calls `gamepad_player()`, so the 1P/2P chooser is the first cons
 from it and a 2-player choice reads P1 and P2 from the slots. The seven games' current start pages all differ in
 layout and style; the rework unifies them (operator, 2026-10-04).
 
-### F129. Control panel System page: timezone and SSH toggle built, three checks left
+### F129. Control panel System page: layout fix awaiting a look
 
 Built (`native_apps/control_panel/system_page.c`, pure logic in `sys_settings.c`): SSH mode toggle, clock in local time with
 abbreviation, date/time editor (SET runs `date -s` and `hwclock -w -u`), and a 10-zone curated timezone list whose APPLY
 writes `/etc/localtime` and `/etc/timezone` atomically (nothing in `device-files/` or `commissioning/` writes those files,
-measured by grep). Operator panel check 2026-10-07: timezone selection works; switching to KEY ONLY works. ⚠️ **`.188` is
-now in key-only sshd mode** (the operator switched it). **Remaining:** (1) the timezone confirm's second line overflowed the
-dialog; fixed (`ModalDialog` draws a too-wide line at scale 1) but the operator has not re-checked; (2) the PASSWORD
-direction of the SSH toggle is untested; (3) measured portrait receipt on `.188`: "system stack PAST CONTENT RIGHT, right
-430 of CONTENT_RIGHT 429" (1 px over; bottom +412 of 734). **Done when** those three are closed; then delete this entry.
+measured by grep). Operator-checked 2026-10-07: timezone selection; the confirm dialog's second line (font smaller, works);
+the SSH toggle both ways (KEY ONLY: the key logs in, no key is refused with a password; PASSWORD: a password is allowed and
+the key still logs in). The operator then saw PASSWORD+KEY under the KEY ONLY button and LOCAL time pushed to the right edge;
+fixed by per-section value columns (`draw_info_row_at`), SSH button 104, zone arrows 38, APPLY 76, and the receipt now reports
+an overlap as its own verdict. Measured on `.188`: portrait and landscape both "fits". **Remaining:** the operator looks at
+the System page in portrait and landscape (SSH value clear of its button, LOCAL/RTC right after their labels, narrower zone
+arrows and APPLY). **Done when** that look passes; then delete this entry and add to `SYSTEM_ANALYSIS.md` that
+`/etc/localtime` and `/etc/timezone` are written by the Control Panel only (nothing else on the device sets them).
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
@@ -454,16 +453,6 @@ close can fail the gate on unrelated documentation.** Narrow the scan rather tha
 on a line that also carries a key-binding marker (`Ctrl+`, `Alt+`, `Shift+`), or one inside a two-column
 key table, is not a citation. ⚠️ Needs a control in both directions — a real bare citation must still fire,
 and it must fire in a file of the same kind, or the scan goes blind where it used to see.
-
-### C17. A layout rule for `control_panel` pages and future apps — shared helper built, two steps left
-
-**Done so far.** `common/ui_flow.{c,h}` (`ui_flow_place` wraps buttons into rows; `ui_label_fits` is the ink-aware fit rule,
-ink = 6n*scale - scale with 4 px pad each side) is linked by `control_panel`, host test `tests/ui_flow_test.c`; the Input page
-uses it (touch band and testers keep scale 2 and wrap). Measured on `.188`: landscape unchanged (touch band 1 row, testers 1
-row, scale 2), portrait touch band 2 rows at scale 2, fits. Decisions taken as defaults: one shared helper in `common/`; wrap
-only on overflow; `dlopen`'d `CpPage` modules stay deferred (design requirements in `native_apps/CLAUDE.md` -> *control_panel*).
-**Remaining:** `display_page.c`'s private 3-to-2 column fallback moves onto `ui_flow_place`, and the operator looks at the
-Input page in portrait. **Done when** both are done; then delete this entry.
 
 ---
 

@@ -285,7 +285,7 @@ Double-click the "VNC to RoomWizard" icon on the desktop, or from a terminal:
 ## Settings Screen
 
 **Long-press the top-left corner** of the screen for 3 seconds to open the
-settings screen (or hold **Select** on a game pad for 1.5 s). From there you can:
+settings screen (or hold **Select** on a pad, or **Esc** on a keyboard, for 1.5 s). There a mouse moves an arrow and a left click taps. From there you can:
 
 - **Edit HOST and PORT** — touch the field to open a numeric keypad
 - **Edit PASSWORD** — touch to open a full alphanumeric keypad with shift toggle (max 8 chars, VncAuth limit)

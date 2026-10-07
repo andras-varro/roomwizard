@@ -166,18 +166,18 @@ Hotplug: the `/dev/input` fingerprint is checked every 1 s and devices are resca
 `/etc/input_config.conf`, documented once in
 [`../native_apps/README.md`](../native_apps/README.md#input-configuration).
 
-`release_remote_buttons()` runs before both exits (corner hold, pad Select hold), so a drag that enters the exit zone leaves no remote button down.
+`release_remote_buttons()` runs before every exit (corner hold, pad Select hold, keyboard Esc hold), so a drag that enters the exit zone leaves no remote button down.
 
 **Pad** (`vnc_pad.c`, pure; `native_apps/tests/vnc_pad_test.c`); the button mapping is in [`README.md`](README.md#usb-game-pad). Motion is integrated by elapsed time
 (`vnc_pad_motion`: a gap over `VNC_PAD_MAX_STEP_MS` counts as that long, a sub-pixel carry is kept, full-deflection speed is
 two thirds of the remote width per second clamped to `VNC_PAD_MIN_SPEED`..`VNC_PAD_MAX_SPEED`, d-pad is `VNC_PAD_DPAD_NORM`);
 A / B are held levels (so a drag works), a shoulder press is a one-shot wheel pulse, and Select held `UI_HOLD_EXIT_MS` (`UiHold`)
-opens Settings, like the 3 s corner hold. A physical keyboard types into the open Settings keypads only (pure `vnc_key_char`, `vnc_kp_key`, `vnc_kp_insert` in `vnc_pad.c`; host test `native_apps/tests/vnc_pad_test.c`); the reconnect screen takes no pad or keyboard yet.
+opens Settings, like the 3 s corner hold and a held keyboard Esc (`vnc_esc_event` / `vnc_esc_hold_exit`; a short tap is sent to the remote on release, the remote never sees Esc held). A physical keyboard types into the open Settings keypads only (pure `vnc_key_char`, `vnc_kp_key`, `vnc_kp_insert` in `vnc_pad.c`; host test `native_apps/tests/vnc_pad_test.c`); the reconnect screen takes no pad or keyboard yet.
 
 ## Settings GUI
 
 `vnc_settings.c/h` is a settings screen with a full alphanumeric keypad; all fields are
-editable. It opens its own keyboard and pad nodes while open (the session closed its nodes). Focus targets come from the
+editable. It opens its own keyboard, mouse and pad nodes while open (the session closed its nodes; a mouse gives a drawn RGB565 arrow, left click = tap on release, a press and release inside one 33 ms poll is lost). Focus targets come from the
 same geometry as the tap hit-test; the ring shows on the first nav key and a touch hides it; A / Enter / Space tap through
 `ui_tap_begin`, B / Esc is Back / Cancel; buttons held on entry and Select are ignored. The full-keypad action row is one
 shared table. It writes the config with no `fchmod`, so the file lands 0644 with the password in
