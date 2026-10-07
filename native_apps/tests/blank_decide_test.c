@@ -32,6 +32,17 @@ int main(void) {
     EXPECT("off idle", blank_decide(99999999LL, 1, false, false, false), BLANK_NONE);
     EXPECT("off event", blank_decide(0, 1, false, true, false), BLANK_NONE);
     EXPECT("off restores", blank_decide(0, 1, true, true, false), BLANK_DO_WAKE);
+    /* analog input: hat press, stick past the dead zone count; rest jitter and release do not */
+    EXPECT("hat press", blank_abs_is_input(1, -1, 1, 0, 0), true);
+    EXPECT("hat press neg", blank_abs_is_input(-1, -1, 1, 0, 0), true);
+    EXPECT("hat release", blank_abs_is_input(0, -1, 1, 0, 0), false);
+    EXPECT("stick far", blank_abs_is_input(20000, -32768, 32767, 0, 25), true);
+    EXPECT("stick far neg", blank_abs_is_input(-30000, -32768, 32767, 0, 25), true);
+    EXPECT("stick jitter", blank_abs_is_input(500, -32768, 32767, 0, 25), false);
+    EXPECT("stick edge in", blank_abs_is_input(8190, -32768, 32767, 0, 25), false);
+    EXPECT("stick edge out", blank_abs_is_input(8191, -32768, 32767, 0, 25), true);
+    EXPECT("stick offcentre", blank_abs_is_input(130, 0, 255, 127, 25), false);
+    EXPECT("degenerate range", blank_abs_is_input(5, 3, 3, 3, 25), false);
     /* 24 h does not overflow */
     EXPECT("big", blank_decide(86400000LL, 1440, false, false, true), BLANK_DO_BLANK);
     if (fails) { printf("%d failure(s)\n", fails); return 1; }

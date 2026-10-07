@@ -17,6 +17,7 @@
 #include "framebuffer.h"
 #include "hardware.h"
 #include "input_scan.h"
+#include "blank_decide.h"
 #define LOGGER_LIB_CLIENT
 #include "logger.h"
 
@@ -782,6 +783,21 @@ static bool poll_gamepad(GamepadManager *gm, int p) {
 
         if (ev.type == EV_ABS) {
             int code = ev.code;
+
+            /* Blanking: a hat press or a stick past its dead zone is input
+             * (rest jitter and the return to centre are not). */
+            {
+                int ai = axis_to_index(code);
+                bool is_hat = (code == m->hat_x_axis || code == m->hat_y_axis);
+                bool real = is_hat
+                    ? blank_abs_is_input(ev.value, -1, 1, 0, 0)
+                    : (ai >= 0 && blank_abs_is_input(ev.value,
+                          gm->axis_min[p][ai], gm->axis_max[p][ai],
+                          gm->axis_calib[p][ai].center,
+                          gm->axis_calib[p][ai].deadzone_pct));
+                if (real && hw_blank_note_activity())
+                    continue;               /* woke a dark panel: not a press */
+            }
 
             /* Left stick X / Y — configurable axis codes */
             if (code == m->stick_x_axis)
