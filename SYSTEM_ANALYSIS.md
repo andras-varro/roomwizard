@@ -1406,7 +1406,7 @@ Driver:  twl_rtc (TWL4030 integrated)
 ```
 
 Working correctly — `hwclock -r` matches `date`, and `commissioning/provision.sh` already does `hwclock -w`
-after `rdate`.
+after `rdate`. `/etc/localtime` and `/etc/timezone` are written by the Control Panel only (System page APPLY, atomically); nothing in `device-files/` or `commissioning/` writes them [measured by grep].
 
 **Hold-up is a supercapacitor, not a battery.** `U17` is a Panasonic/Matsushita **"Gold Cap"
 5.5 V 0.47 F** supercap (`GC5.5V0.47F`). MADC channel 9 reads **3184 mV**, meaning the cap is

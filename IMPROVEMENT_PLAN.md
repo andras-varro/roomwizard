@@ -348,28 +348,15 @@ by `frogger/gen_icon.py`, `platformer/gen_icon.py`, `samegame/gen_icon.py` (64x6
 rest committed as bare PPMs with no generator — and collected by the `*//*.ppm` glob in
 `native_apps/build-and-deploy.sh:307`; manifests name them in `app-manifests.sh:39-47`. **Fix:** one generator in
 the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then delete the three old scripts.
-**Done when** the launcher grid on the panel reads as the same family as the Control Panel's.
+**Done when** the launcher grid on the panel reads as the same family as the Control Panel's. Operator 2026-10-07 also wants a better icon for the Control Panel's System page, done with this rework: its page has `.icon = NULL` (`system_page.c:563`) and `ICONS` in `gen_cp_icons.py:178` has no System entry.
 
-### F112. vnc_client: pad gaps left after the verified pad — open
+### F112. vnc_client: reconnect screen without the touchscreen — open
 
-The pad (pointer, A/B drags, wheel, hold-Select, Settings navigation) is operator-verified. Operator check 2026-10-07 on the
-earlier build: holding keyboard Esc in a session did nothing; in Settings the pad navigated and typed but keyboard and mouse did
-nothing. Causes: hold-Esc was never built and Settings never opened mouse nodes (both measured from code); the keyboard was
-invisible, **[inferred, not measured]** because `input_classify` tests mouse before keyboard, so a combo receiver's node is MOUSE
-(no keyboard was plugged in at probe time; `/proc/bus/input/devices` showed only panjit_ts and the 8BitDo Pro 2). Built and
-deployed to `.188` (md5 match): hold Esc opens Settings (a short tap reaches the remote, sent on release; `vnc_esc_event` /
-`vnc_esc_hold_exit`), Settings opens mouse nodes (drawn arrow, left click = tap on release), keys accepted from any node with
-keyboard keys, one LOG_INFO per opened node. **Awaiting the operator's panel check:** (a) hold Esc in a session opens Settings, a
-short tap still reaches the remote; (b) in Settings the mouse moves an arrow and a left click activates; (c) keyboard arrows,
-Enter, Esc, Space work, and typing into the keypads (`vnc_key_char` / `vnc_kp_key`): HOST 192.168.1.5 and `:` (Shift+;), letters
-ignored, Backspace repeats; PORT 5900, `.` `:` ignored, 6th digit refused; PASSWORD abC1-_! with Shift, 8-char cap; ENCODINGS
-lowercase, space, `-` `_` `.`, digits ignored; main screen typing does nothing; pad A/B still work; (d) the operator names the
-keyboard and mouse (combo receiver?) and the LOG_INFO lines naming opened nodes are read. Known limits: a press and release
-inside one 33 ms poll is lost; a pointer move repaints fully; the remote never sees Esc held. Defaults taken: the keyboard types
-only while a keypad is open; the password stays plaintext (masking and 0600 are separate work); reconnect-screen B does nothing.
-**Still open:** the pad and keyboard on the reconnect screen; and **[inferred, not reproduced]** a stray remote click if A or B
-is still held when leaving Settings and the session reconnects (reproduce it first). **Done when** the checklist passes and
-each remaining item works or is shown to be unreachable.
+Pad, hold-Esc and keyboard/mouse in Settings are operator-verified (2026-10-07). **Open:** the pad and keyboard on the reconnect
+screen (`vnc_client.c` `reconnect_ui`; reconnect-screen B does nothing), and **[inferred, not reproduced]** a stray remote click
+if A or B is still held when leaving Settings and the session reconnects (reproduce it first). Known limits: a press and release
+inside one 33 ms poll is lost; a pointer move repaints fully; the remote never sees Esc held. **Done when** each item works or is
+shown to be unreachable.
 
 
 ### F118. An arcade-style start menu shared by all the games — open, not started, operator request 2026-10-04
@@ -381,20 +368,6 @@ touch. It is the intended home for per-play choices: a 1 player / 2 player choic
 yet and nothing calls `gamepad_player()`, so the 1P/2P chooser is the first consumer. **Done when** every game starts
 from it and a 2-player choice reads P1 and P2 from the slots. The seven games' current start pages all differ in
 layout and style; the rework unifies them (operator, 2026-10-04).
-
-### F129. Control panel System page: layout fix awaiting a look
-
-Built (`native_apps/control_panel/system_page.c`, pure logic in `sys_settings.c`): SSH mode toggle, clock in local time with
-abbreviation, date/time editor (SET runs `date -s` and `hwclock -w -u`), and a 10-zone curated timezone list whose APPLY
-writes `/etc/localtime` and `/etc/timezone` atomically (nothing in `device-files/` or `commissioning/` writes those files,
-measured by grep). Operator-checked 2026-10-07: timezone selection; the confirm dialog's second line (font smaller, works);
-the SSH toggle both ways (KEY ONLY: the key logs in, no key is refused with a password; PASSWORD: a password is allowed and
-the key still logs in). The operator then saw PASSWORD+KEY under the KEY ONLY button and LOCAL time pushed to the right edge;
-fixed by per-section value columns (`draw_info_row_at`), SSH button 104, zone arrows 38, APPLY 76, and the receipt now reports
-an overlap as its own verdict. Measured on `.188`: portrait and landscape both "fits". **Remaining:** the operator looks at
-the System page in portrait and landscape (SSH value clear of its button, LOCAL/RTC right after their labels, narrower zone
-arrows and APPLY). **Done when** that look passes; then delete this entry and add to `SYSTEM_ANALYSIS.md` that
-`/etc/localtime` and `/etc/timezone` are written by the Control Panel only (nothing else on the device sets them).
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
