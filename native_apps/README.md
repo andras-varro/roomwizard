@@ -29,7 +29,7 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 | `samegame` | Game | Touch / mouse cursor + keyboard navigation |
 | `platformer` | Game | Touch / keys / gamepad — reference input implementation; pause menu toggles TRAINING (10 lives, +1 per 50 coins) |
 | `app_launcher` | Launcher | Visual grid launcher — keyboard/mouse/gamepad nav, auto-starts on boot |
-| `control_panel` | Tool | **Unified hardware app** — the one you want; `control_panel <page>` opens one page directly. Home icon grid; tabs: Settings, Tests, Display; pages: LED, Monitor, Network, Information, USB, System (SSH mode read-only, clock, date/time editor) |
+| `control_panel` | Tool | **Unified hardware app** — the one you want; `control_panel <page>` opens one page directly (over SSH: `/etc/init.d/roomwizard-app stop`, then `/opt/games/control_panel /dev/fb0 /dev/input/event0 system`, then `start`; pages `audio display led usb bluetooth input network monitor system information`, case-insensitive; `--list-pages` prints them). Home icon grid; tabs: Settings, Tests, Display; pages: LED, Monitor, Network, Information, USB, System (SSH mode read-only, clock, date/time editor) |
 | `theremin` | Toy | "Tap-a-Theremin" — touch-controlled tone generator |
 | `touch_raw` | Tool | Digitizer reach: no calibration, no bezel — live crosshair + interior-only fit (hidden) |
 
@@ -39,7 +39,7 @@ hardware watchdog.
 
 `touch_raw` needs the framebuffer at 32 bpp and asserts that itself — run `fbset -depth 32` first if ScummVM or
 `vnc_client` left it at 16. Stop the launcher before running it (`/etc/init.d/roomwizard-app stop`), and start it
-again afterwards. The calibrated finger trail lives in `control_panel` Input -> MULTI-TOUCH (primary contact:
+again afterwards. The calibrated finger trail lives in `control_panel` Input -> MULTI-TOUCH (drawn for the primary contact only;
 80 px grid, trail, RAW/CAL/LIN readouts; also logs to `/tmp/touch_trace.log`).
 
 ### Control Panel

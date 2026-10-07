@@ -171,11 +171,11 @@ Bus Test is `native_apps/tests/audio_mix_test.c`, whose `present_rect()` already
 (`:471`) and so repaints nothing there. **Done when** launching it from the Audio page in portrait shows the message
 and returns, and landscape is unchanged.
 
-### B57. Does MADC ADCIN6 follow what is plugged into the USB port? — open, n=1, needs an operator replug
+### B57. Does MADC ADCIN6 follow what is plugged into the USB port? — open, n=1, needs a joint session (operator replugs while ch6 is read)
 
 `in_voltage6` read 26-29 mV on `.188` while an Xbox 360 pad was on the USB port and a steady 344-364 mV after the BT dongle replaced it
 ([`SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc`](SYSTEM_ANALYSIS.md#311-adc-and-temperature-twl4030-madc)); the two states
-differ in more than the device, so the link is unproven. **Done when** an operator swaps pad and dongle back and forth on the port
+differ in more than the device, so the link is unproven. It needs a joint session (operator confirmed 2026-10-07): the operator replugs while ch6 is read. **Done when** an operator swaps pad and dongle back and forth on the port
 (reading `in_voltage6_input` after each swap, and once with the port empty) and the table says which condition, if any, moves it.
 
 
@@ -327,13 +327,6 @@ untouched, so the recovery is still "reimage the card".
 | What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. Operator ruling 2026-09-29: the whole `LICENSE.md` overhaul is part of this item — our GPL kernel image and modules now ship (source-offer duty), native apps and ScummVM link glibc and libasound dynamically, the glibc row names only `gnueabihf`, and the obligation column is unreviewed. |
 | What does p5 become? | It frees 1.5 GB of space. |
 
-### F105. USB page auto-refresh — implemented, awaiting the operator's panel check
-
-The USB page now re-reads the bus itself while open (read-only, no re-probe; repaints only on a change). Remote-tested on .188
-(sysfs remove empties the list, `usb-host recover` brings the dongle row back, no input). **Checklist:**
-1. Open Control Panel, USB page.
-2. Plug in, then pull, a physical device: the list follows within ~1 s with no tap. Not yet seen: the "+N MORE" row
-   (needs more devices than fit; .188 has 7 and all fit).
 
 ### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
 
@@ -387,30 +380,19 @@ yet and nothing calls `gamepad_player()`, so the 1P/2P chooser is the first cons
 from it and a 2-player choice reads P1 and P2 from the slots. The seven games' current start pages all differ in
 layout and style; the rework unifies them (operator, 2026-10-04).
 
-### F120. `touch_trace` folded into the control panel MULTI-TOUCH screen — implemented, awaiting the operator's panel check
-
-`test_multitouch` (`native_apps/control_panel/input_page.c`) now draws an 80 px dim grid, the primary contact's
-yellow trail, RAW/CAL/LIN readouts and a red LIN crosshair, and keeps the `/tmp/touch_trace.log` header and columns;
-the standalone binary, build step, `GAMES_BINARIES` entry and smoke subject are deleted. **Not verified on the panel**
-(needs a touch). Checklist: (1) Control Panel -> Input -> MULTI-TOUCH: dim 80 px grid, labels bottom/left, header
-"Calib: ON"; (2) drag one finger: yellow trail, RAW/CAL readouts, red LIN readout + crosshair near the finger;
-(3) two fingers: both dots, trail follows the first only; (4) `head /tmp/touch_trace.log` shows the "# touch_trace"
-header then raw/cal/est rows. **Done when** all four pass; then delete this entry.
-
-### F129. Control panel settings page: SSH toggle still open; clock and SSH display implemented, awaiting the operator's panel check
+### F129. Control panel System page: timezone selection and SSH mode toggle in progress
 
 Part 1 is implemented (System page, `native_apps/control_panel/system_page.c`, pure logic in `sys_settings.c`): SSH mode
 read-only from `sshd_config`, UTC clock and RTC status, date/time editor whose SET confirms then runs `date -s` and
-`hwclock -w`. Measured on `.188` only: the stack receipt fits and the page shows PASSWORD, matching that unit. **Not
-verified: SET by touch, the page-2 tile, focus, portrait.** Panel check: (1) Control Panel page 2, System; (2) the SSH
-row matches the unit; (3) the UTC clock ticks; (4) MIN + wraps 59 to 00 and the day clamps; (5) SET, dialog, OK shows
-"DATE AND RTC SET" and RTC SYNCED; (6) after an online reboot network time sync overrides it (expected).
-Timezone is out of scope (the device has none).
+`hwclock -w`. Operator panel check (2026-10-07) of the page: **needs timezone support** — the clock showed 10:40 when local
+time was 11:40. Measured: the device clock is correct (NTP), `/etc/localtime` points at `/usr/share/zoneinfo/America/Chicago` and
+the operator is on US Eastern. In progress: timezone selection on the page. Not verified by touch: SET, focus, portrait.
 
-**Still open: an SSH mode toggle.** ⚠️ **Key-only must keep its guard**: `--ssh-auth=key` is refused unless a key login
+**SSH mode toggle** (operator approved building and testing it on `.188`, 2026-10-07; `.188` measured `PasswordAuthentication yes`
+and `PubkeyAuthentication yes`; in progress). ⚠️ **Key-only must keep its guard**: `--ssh-auth=key` is refused unless a key login
 is proven first (`commissioning/CLAUDE.md`), and there is no serial console, so a panel toggle must not lock the
 operator out — a panel button cannot prove a key exists, so decide what it may do (switch only back to password).
-**Done when** the panel changes the SSH mode and the change survives a reboot; delete the entry after the check above.
+**Done when** the panel changes the SSH mode and the change survives a reboot, and the clock follows a chosen timezone.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
@@ -419,13 +401,12 @@ tied to rooms, since a BeagleBone target has nothing to do with rooms, and it fi
 (F102) and the BeagleBone port (F106). Candidate names are open. **Done when** a name is chosen and the tree, docs,
 device paths and `LICENSE.md` follow it.
 
-### F136. Screen blanking after a configurable idle time — implemented, awaiting the operator's panel check
+### F136. Screen blanking after a configurable idle time — wake on D-pad and stick still open
 
-Implemented (`blank_minutes`, Display page SCREEN OFF cycler); measured on `.188` only that `blank_minutes=1` goes
-from brightness 100 to 0 after 75 s and that a restart restores 100. **Not verified: wake and swallow by touch, pad,
-key or mouse.** Panel check: (1) Display page, SCREEN OFF to 1 MIN; (2) leave about 70 s, the panel goes dark;
-(3) tap once on a button, the panel lights and nothing fires, tap again and it acts; (4) repeat with a USB key or
-pad press; then set it back to 10 MIN or NEVER. **Done when** the operator confirms 2-4.
+Implemented (`blank_minutes`, Display page SCREEN OFF cycler). Operator panel check (2026-10-07): works, and the waking tap works.
+**Remaining defect (measured by the operator):** the blank cancels and the backlight returns on a tap, a keyboard key, the mouse
+and controller A/B/X/Y, but **not on the D-pad or the analog stick**; it must wake on any input change. A code fix is in progress.
+**Done when** D-pad and stick wake the panel; then delete this entry.
 
 ## Structural and cleanup
 
