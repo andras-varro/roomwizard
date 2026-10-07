@@ -226,3 +226,90 @@ bool vnc_nav_dir(VncNav a, UiDir *d) {
     default:            return false;
     }
 }
+
+/* ── Typing into the Settings keypads ───────────────────────────────────── */
+
+/* US layout.  Returns the unshifted letter/digit/punctuation a key types, or 0. */
+static char key_plain(int code) {
+    switch (code) {
+    case KEY_A: return 'a'; case KEY_B: return 'b'; case KEY_C: return 'c';
+    case KEY_D: return 'd'; case KEY_E: return 'e'; case KEY_F: return 'f';
+    case KEY_G: return 'g'; case KEY_H: return 'h'; case KEY_I: return 'i';
+    case KEY_J: return 'j'; case KEY_K: return 'k'; case KEY_L: return 'l';
+    case KEY_M: return 'm'; case KEY_N: return 'n'; case KEY_O: return 'o';
+    case KEY_P: return 'p'; case KEY_Q: return 'q'; case KEY_R: return 'r';
+    case KEY_S: return 's'; case KEY_T: return 't'; case KEY_U: return 'u';
+    case KEY_V: return 'v'; case KEY_W: return 'w'; case KEY_X: return 'x';
+    case KEY_Y: return 'y'; case KEY_Z: return 'z';
+    case KEY_1: return '1'; case KEY_2: return '2'; case KEY_3: return '3';
+    case KEY_4: return '4'; case KEY_5: return '5'; case KEY_6: return '6';
+    case KEY_7: return '7'; case KEY_8: return '8'; case KEY_9: return '9';
+    case KEY_0: return '0';
+    case KEY_MINUS: case KEY_KPMINUS: return '-';
+    case KEY_DOT: case KEY_KPDOT: return '.';
+    case KEY_SPACE: return ' ';
+    default: return 0;
+    }
+}
+
+static char key_keypad_digit(int code) {
+    if (code >= KEY_KP7 && code <= KEY_KP9) return (char)('7' + (code - KEY_KP7));
+    if (code >= KEY_KP4 && code <= KEY_KP6) return (char)('4' + (code - KEY_KP4));
+    if (code >= KEY_KP1 && code <= KEY_KP3) return (char)('1' + (code - KEY_KP1));
+    if (code == KEY_KP0) return '0';
+    return 0;
+}
+
+VncKeyChar vnc_key_char(int code, int shift, int mode, char *ch) {
+    char c;
+    if (ch) *ch = 0;
+
+    switch (code) {
+    case KEY_BACKSPACE:                 return VNC_KC_BACKSPACE;
+    case KEY_ENTER: case KEY_KPENTER:   return VNC_KC_OK;
+    case KEY_ESC:                       return VNC_KC_CANCEL;
+    default: break;
+    }
+    if (mode != VNC_KP_NUMERIC && mode != VNC_KP_FULL && mode != VNC_KP_ALPHA)
+        return VNC_KC_NONE;
+
+    c = key_keypad_digit(code);         /* keypad digits ignore shift */
+    if (c) {
+        if (mode == VNC_KP_ALPHA) return VNC_KC_NONE;   /* no digit keys there */
+        goto emit;
+    }
+
+    if (code == KEY_SEMICOLON) {        /* ':' is shift+; and only NUMERIC has it */
+        if (mode != VNC_KP_NUMERIC || !shift) return VNC_KC_NONE;
+        c = ':';
+        goto emit;
+    }
+
+    c = key_plain(code);
+    if (!c) return VNC_KC_NONE;
+
+    if (c >= 'a' && c <= 'z') {
+        if (mode == VNC_KP_NUMERIC) return VNC_KC_NONE;
+        if (shift) {
+            if (mode != VNC_KP_FULL) return VNC_KC_NONE; /* ALPHA has no upper case */
+            c = (char)(c - 'a' + 'A');
+        }
+    } else if (c >= '0' && c <= '9') {
+        if (mode == VNC_KP_ALPHA) return VNC_KC_NONE;
+        if (shift) {                    /* only shift+1 ('!') exists, and only in FULL */
+            if (mode != VNC_KP_FULL || c != '1') return VNC_KC_NONE;
+            c = '!';
+        }
+    } else if (c == '-') {
+        if (mode == VNC_KP_NUMERIC) return VNC_KC_NONE;
+        if (shift) c = '_';             /* FULL and ALPHA both offer '_' */
+    } else if (c == '.') {
+        if (shift) return VNC_KC_NONE;
+    } else if (c == ' ') {
+        if (mode != VNC_KP_ALPHA || shift) return VNC_KC_NONE;
+    }
+
+emit:
+    if (ch) *ch = c;
+    return VNC_KC_CHAR;
+}

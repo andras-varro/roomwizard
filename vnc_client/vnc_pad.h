@@ -156,4 +156,36 @@ VncNav vnc_nav_key(int code, int value);
 /* PURE. The focus direction of a move action; false for any other action. */
 bool vnc_nav_dir(VncNav a, UiDir *d);
 
+/* ── Typing into the Settings keypads ───────────────────────────────────── */
+/*
+ * A physical keyboard may type exactly what the on-screen keypad of the same
+ * mode can produce (vnc_settings.c): the mode values below equal its
+ * KEYPAD_NUMERIC / KEYPAD_FULL / KEYPAD_ALPHA, in that order.
+ *
+ *   NUMERIC  0-9 (row or keypad), '.', ':' (shift+;)            host, port
+ *   FULL     a-z, A-Z (shift), 0-9, '.', '-', '_' (shift+-), '!' (shift+1)
+ *   ALPHA    a-z only (no shift key on that keypad), '_' '-' '.' ' '
+ *            (no digit keys there)                              encodings
+ *
+ * Backspace, Enter / keypad Enter and Esc are mode-independent.
+ */
+typedef enum { VNC_KP_NUMERIC = 0, VNC_KP_FULL = 1, VNC_KP_ALPHA = 2 } VncKeypadMode;
+
+typedef enum {
+    VNC_KC_NONE = 0,    /* not a keypad key in this mode */
+    VNC_KC_CHAR,        /* append *ch */
+    VNC_KC_BACKSPACE,   /* the keypad's <- / DEL */
+    VNC_KC_OK,          /* Enter, keypad Enter: the keypad's OK */
+    VNC_KC_CANCEL       /* Esc: the keypad's CANCEL */
+} VncKeyChar;
+
+/* PURE. One USB keyboard key (evdev code, shift held) as a keypad edit; *ch is
+ * set for VNC_KC_CHAR and 0 otherwise (ch may be NULL).  Stateless: the caller
+ * passes only press (value 1) and, for CHAR / BACKSPACE, autorepeat (value 2);
+ * OK / CANCEL on press only.  Caller order inside a keypad: ask this first and
+ * act on anything but NONE; only on NONE fall back to vnc_nav_key().  Enter and
+ * Esc come back here as OK / CANCEL, so a keypad never sees them as nav
+ * ACTIVATE / BACK; Space is a char in ALPHA only, and elsewhere stays nav. */
+VncKeyChar vnc_key_char(int code, int shift, int mode, char *ch);
+
 #endif /* VNC_PAD_H */

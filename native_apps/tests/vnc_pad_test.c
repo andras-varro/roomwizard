@@ -14,7 +14,7 @@
  * wheel pulses and the d-pad; 3 motion is integrated over elapsed time, not
  * per call, carries its sub-pixel remainder and caps a stall; 4 Select's hold;
  * 5 the map is the shared parser's defaults; 6 the speed for a desktop width;
- * 7 the Settings screen's focus actions from pad and keyboard events.
+ * 7 the Settings screen's focus actions from pad and keyboard events.  8 keyboard typing into the keypads (vnc_key_char).
  *
  * ⚠️ What it cannot see: which raw codes a real pad sends (input_pad_key()
  * and the scan are input_scan_test's), whether vnc_input.c feeds every event
@@ -288,6 +288,112 @@ static void group7_nav(void) {
     CHECK(!vnc_nav_dir(VNC_NAV_ACTIVATE, &d) && !vnc_nav_dir(VNC_NAV_NONE, &d), "no direction");
 }
 
+static char kc(int code, int shift, int mode, VncKeyChar *r) {
+    char ch = 'Z';
+    *r = vnc_key_char(code, shift, mode, &ch);
+    return ch;
+}
+
+static void group8_keychar(void) {
+    VncKeyChar r;
+    char c;
+    int i;
+    static const int rowk[10] = { KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9 };
+    static const int kpk[10]  = { KEY_KP0, KEY_KP1, KEY_KP2, KEY_KP3, KEY_KP4, KEY_KP5, KEY_KP6, KEY_KP7, KEY_KP8, KEY_KP9 };
+
+    /* digits: row and keypad, NUMERIC and FULL; never ALPHA */
+    for (i = 0; i < 10; i++) {
+        c = kc(rowk[i], 0, VNC_KP_NUMERIC, &r);
+        CHECK(r == VNC_KC_CHAR && c == '0' + i, "NUMERIC row digit %d", i);
+        c = kc(kpk[i], 0, VNC_KP_NUMERIC, &r);
+        CHECK(r == VNC_KC_CHAR && c == '0' + i, "NUMERIC keypad digit %d", i);
+        c = kc(kpk[i], 0, VNC_KP_FULL, &r);
+        CHECK(r == VNC_KC_CHAR && c == '0' + i, "FULL keypad digit %d", i);
+        c = kc(rowk[i], 0, VNC_KP_FULL, &r);
+        CHECK(r == VNC_KC_CHAR && c == '0' + i, "FULL row digit %d", i);
+        kc(rowk[i], 0, VNC_KP_ALPHA, &r);
+        CHECK(r == VNC_KC_NONE, "ALPHA has no digit %d", i);
+        kc(kpk[i], 0, VNC_KP_ALPHA, &r);
+        CHECK(r == VNC_KC_NONE, "ALPHA has no keypad digit %d", i);
+    }
+    /* '.' and ':' */
+    c = kc(KEY_DOT, 0, VNC_KP_NUMERIC, &r);
+    CHECK(r == VNC_KC_CHAR && c == '.', "NUMERIC dot");
+    c = kc(KEY_KPDOT, 0, VNC_KP_NUMERIC, &r);
+    CHECK(r == VNC_KC_CHAR && c == '.', "NUMERIC keypad dot");
+    c = kc(KEY_SEMICOLON, 1, VNC_KP_NUMERIC, &r);
+    CHECK(r == VNC_KC_CHAR && c == ':', "NUMERIC colon is shift+;");
+    kc(KEY_SEMICOLON, 0, VNC_KP_NUMERIC, &r);
+    CHECK(r == VNC_KC_NONE, "NUMERIC bare semicolon: nothing");
+    kc(KEY_SEMICOLON, 1, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_NONE, "FULL has no colon");
+    kc(KEY_SEMICOLON, 1, VNC_KP_ALPHA, &r);
+    CHECK(r == VNC_KC_NONE, "ALPHA has no colon");
+    /* letters */
+    kc(KEY_A, 0, VNC_KP_NUMERIC, &r);
+    CHECK(r == VNC_KC_NONE, "NUMERIC rejects a letter");
+    c = kc(KEY_A, 0, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_CHAR && c == 'a', "FULL a");
+    c = kc(KEY_A, 1, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_CHAR && c == 'A', "FULL shift+a is A");
+    c = kc(KEY_Z, 1, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_CHAR && c == 'Z', "FULL shift+z is Z");
+    c = kc(KEY_Q, 0, VNC_KP_ALPHA, &r);
+    CHECK(r == VNC_KC_CHAR && c == 'q', "ALPHA q");
+    kc(KEY_Q, 1, VNC_KP_ALPHA, &r);
+    CHECK(r == VNC_KC_NONE, "ALPHA has no upper case");
+    /* symbols */
+    c = kc(KEY_MINUS, 0, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_CHAR && c == '-', "FULL minus");
+    c = kc(KEY_MINUS, 1, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_CHAR && c == '_', "FULL shift+minus is underscore");
+    c = kc(KEY_MINUS, 1, VNC_KP_ALPHA, &r);
+    CHECK(r == VNC_KC_CHAR && c == '_', "ALPHA shift+minus is underscore");
+    c = kc(KEY_MINUS, 0, VNC_KP_ALPHA, &r);
+    CHECK(r == VNC_KC_CHAR && c == '-', "ALPHA minus");
+    kc(KEY_MINUS, 0, VNC_KP_NUMERIC, &r);
+    CHECK(r == VNC_KC_NONE, "NUMERIC has no minus");
+    c = kc(KEY_DOT, 0, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_CHAR && c == '.', "FULL dot");
+    c = kc(KEY_DOT, 0, VNC_KP_ALPHA, &r);
+    CHECK(r == VNC_KC_CHAR && c == '.', "ALPHA dot");
+    c = kc(KEY_1, 1, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_CHAR && c == '!', "FULL shift+1 is bang");
+    kc(KEY_2, 1, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_NONE, "FULL shift+2 (@) is not on the keypad");
+    kc(KEY_1, 1, VNC_KP_NUMERIC, &r);
+    CHECK(r == VNC_KC_NONE, "NUMERIC shift+1: nothing");
+    kc(KEY_1, 1, VNC_KP_ALPHA, &r);
+    CHECK(r == VNC_KC_NONE, "ALPHA shift+1: nothing");
+    /* space is a char in ALPHA only */
+    c = kc(KEY_SPACE, 0, VNC_KP_ALPHA, &r);
+    CHECK(r == VNC_KC_CHAR && c == ' ', "ALPHA space");
+    kc(KEY_SPACE, 0, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_NONE, "FULL space: nothing (stays nav activate)");
+    kc(KEY_SPACE, 0, VNC_KP_NUMERIC, &r);
+    CHECK(r == VNC_KC_NONE, "NUMERIC space: nothing");
+    /* edit actions, every mode */
+    for (i = 0; i < 3; i++) {
+        kc(KEY_BACKSPACE, 0, i, &r);
+        CHECK(r == VNC_KC_BACKSPACE, "backspace, mode %d", i);
+        kc(KEY_ENTER, 0, i, &r);
+        CHECK(r == VNC_KC_OK, "enter is OK, mode %d", i);
+        kc(KEY_KPENTER, 0, i, &r);
+        CHECK(r == VNC_KC_OK, "keypad enter is OK, mode %d", i);
+        kc(KEY_ESC, 0, i, &r);
+        CHECK(r == VNC_KC_CANCEL, "esc is CANCEL, mode %d", i);
+    }
+    /* unknown key, bad mode, NULL ch, ch cleared on non-char */
+    c = kc(KEY_F1, 0, VNC_KP_FULL, &r);
+    CHECK(r == VNC_KC_NONE && c == 0, "unknown key: NONE and ch cleared");
+    kc(KEY_A, 0, 7, &r);
+    CHECK(r == VNC_KC_NONE, "unknown mode types nothing");
+    CHECK(vnc_key_char(KEY_A, 0, VNC_KP_FULL, NULL) == VNC_KC_CHAR, "NULL ch is allowed");
+    /* nav is unchanged: Enter / Esc / Space still nav actions */
+    CHECK(vnc_nav_key(KEY_ENTER, 1) == VNC_NAV_ACTIVATE && vnc_nav_key(KEY_ESC, 1) == VNC_NAV_BACK &&
+          vnc_nav_key(KEY_SPACE, 1) == VNC_NAV_ACTIVATE, "vnc_nav_key unchanged");
+}
+
 int main(void) {
     group1_axis();
     group2_events();
@@ -296,6 +402,7 @@ int main(void) {
     group5_map();
     group6_speed();
     group7_nav();
+    group8_keychar();
     printf("vnc_pad_test: %d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }
