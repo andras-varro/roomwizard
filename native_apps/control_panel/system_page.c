@@ -197,17 +197,24 @@ static const char *const field_names[SYS_DT_FIELDS] =
 
 #define SYS_TZ_H        34
 #define SYS_SSH_H       36           /* the SSH band: info row + toggle button */
-#define SYS_SSH_BTN_W  130           /* "PASSWORD" at scale 2 is 96 px */
-#define SYS_TZ_ARROW_W  44
-#define SYS_TZ_APPLY_W  96
+#define SYS_SSH_BTN_W  104           /* "PASSWORD" at scale 2 is 96 px */
+#define SYS_VALUE_GAP    8           /* a section's widest label to its value column */
+#define SYS_TZ_ARROW_W  38
+#define SYS_TZ_APPLY_W  76           /* "APPLY" at scale 2 is 60 px; wider and Los_Angeles hits the arrows in portrait */
 
 static Button minus_btn[SYS_DT_FIELDS], plus_btn[SYS_DT_FIELDS], set_btn;
 static Button tz_prev_btn, tz_next_btn, tz_apply_btn;
 static int  sec_ssh_y, sec_clock_y, sec_set_y;
 static int  ssh_y, utc_y, rtc_y, tz_y, label_y, value_y, col_w, value_scale, note_y;
+static int  ssh_vx, clock_vx;   /* value columns: each section's widest label + SYS_VALUE_GAP */
 
 static void system_page_layout(void) {
     int y = CONTENT_Y + 6;
+    /* Each section's values start just past its own labels, not at
+     * draw_info_row()'s 150/270 column: in portrait that column put the LOCAL
+     * time against the right edge and PASSWORD+KEY under the toggle button. */
+    ssh_vx   = CONTENT_LEFT + 10 + text_measure_width("SSH LOGIN:", 2) + SYS_VALUE_GAP;
+    clock_vx = CONTENT_LEFT + 10 + text_measure_width("LOCAL:", 2) + SYS_VALUE_GAP;
     sec_ssh_y = y;    y += SYS_HEADER_H;
     ssh_y = y;                                  /* info row at the top of a SYS_SSH_H band */
     button_init_full(&ssh_btn, CONTENT_RIGHT - SYS_SSH_BTN_W, y, SYS_SSH_BTN_W, SYS_SSH_H - 2,
@@ -275,28 +282,30 @@ static void system_page_layout(void) {
         if (set_btn.y + set_btn.height - CONTENT_Y > low) low = set_btn.y + set_btn.height - CONTENT_Y;
         if (low > bottom) bottom = low;
         int right = set_btn.x + set_btn.width;
-        int value_x = SCREEN_SAFE_WIDTH < 600 ? 150 : 270;     /* draw_info_row()'s column */
-        int w = value_x + text_measure_width("2026-10-06 14:00:00 AEDT", 2);
+        const char *clash = NULL;          /* a text that would run under a button */
+        int w = clock_vx + text_measure_width("2026-10-06 14:00:00 AEDT", 2);
         if (w > right) right = w;
         /* The zone name sits between the arrows; the longest listed name must fit. */
         w = text_measure_width("America/Los_Angeles", 2);
-        if (w > tz_next_btn.x - (tz_prev_btn.x + tz_prev_btn.width) - 8) right = CONTENT_RIGHT + 1;
-        w = value_x + text_measure_width("14:00:00  OFF 99999 S", 2);
+        if (w > tz_next_btn.x - (tz_prev_btn.x + tz_prev_btn.width) - 8) clash = "ZONE NAME";
+        w = clock_vx + text_measure_width("14:00:00  OFF 99999 S", 2);
         if (w > right) right = w;
         w = CONTENT_LEFT + text_measure_width(SYS_NOTE, 1);
         if (w > right) right = w;
         /* the longest SSH value must end clear of the toggle button */
-        w = CONTENT_LEFT + (SCREEN_SAFE_WIDTH < 600 ? 150 : 270) + text_measure_width("PASSWORD+KEY", 2);
-        if (w + 8 > ssh_btn.x) right = CONTENT_RIGHT + 1;
+        w = ssh_vx + text_measure_width("PASSWORD+KEY", 2);
+        if (w + 8 > ssh_btn.x) clash = "SSH VALUE";
         w = ssh_btn.x + ssh_btn.width;
         if (w > right) right = w;
         const char *verdict = bottom > CONTENT_H     ? "⚠ PAST CONTENT BOTTOM"
                             : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
+                            : clash                  ? "⚠ OVERLAPS A BUTTON"
                             : "fits";
         printf("control_panel: system stack %s — bottom +%d of CONTENT_H %d, "
-               "right %d of CONTENT_RIGHT %d, SET %s (safe %dx%d, %s)\n",
+               "right %d of CONTENT_RIGHT %d, SET %s%s%s (safe %dx%d, %s)\n",
                verdict, bottom, CONTENT_H, right, CONTENT_RIGHT,
                set_btn.x > fields_right ? "beside" : "under",
+               clash ? ", clash " : "", clash ? clash : "",
                SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                CONTENT_WIDTH < 600 ? "portrait" : "landscape");
     }
@@ -311,12 +320,12 @@ static void system_page_draw(Framebuffer *fb) {
         [SSH_MODE_PASSWORD] = { "PASSWORD+KEY", COLOR_YELLOW },
     };
     draw_section_header(fb, sec_ssh_y, "REMOTE ACCESS");
-    draw_info_row(fb, ssh_y, "SSH LOGIN:", ssh_text[ssh_mode].text, ssh_text[ssh_mode].color);
+    draw_info_row_at(fb, ssh_y, "SSH LOGIN:", ssh_text[ssh_mode].text, ssh_text[ssh_mode].color, ssh_vx);
     button_draw(fb, &ssh_btn);
 
     draw_section_header(fb, sec_clock_y, "CLOCK AND TIMEZONE");
-    draw_info_row(fb, utc_y, "LOCAL:", now_str, COLOR_WHITE);
-    draw_info_row(fb, rtc_y, "RTC:", rtc_str, rtc_color);
+    draw_info_row_at(fb, utc_y, "LOCAL:", now_str, COLOR_WHITE, clock_vx);
+    draw_info_row_at(fb, rtc_y, "RTC:", rtc_str, rtc_color, clock_vx);
     {
         const char *zn = sys_tz_name(tz_sel);
         if (!zn) zn = "OTHER";

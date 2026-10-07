@@ -221,7 +221,12 @@ bool fit_value(const char *src, int x, int scale, char *out, size_t len) {
 
 int draw_info_row(Framebuffer *fb, int y, const char *label,
                   const char *value, uint32_t value_color) {
-    int value_x = CONTENT_LEFT + (CONTENT_WIDTH < 600 ? 150 : 270);
+    return draw_info_row_at(fb, y, label, value, value_color,
+                            CONTENT_LEFT + (CONTENT_WIDTH < 600 ? 150 : 270));
+}
+
+int draw_info_row_at(Framebuffer *fb, int y, const char *label,
+                     const char *value, uint32_t value_color, int value_x) {
     fb_draw_text(fb, CONTENT_LEFT + 10, y, label, COLOR_LABEL, 2);
     fb_draw_text(fb, value_x, y, value, value_color, 2);
     return y + 28;

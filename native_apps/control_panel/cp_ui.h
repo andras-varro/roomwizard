@@ -73,6 +73,9 @@ bool fit_value(const char *src, int x, int scale, char *out, size_t len);
  * (150 in portrait); returns the next row's y (28 lower). */
 int draw_info_row(Framebuffer *fb, int y, const char *label,
                   const char *value, uint32_t value_color);
+/* The same row with the value at a caller's column (absolute x). */
+int draw_info_row_at(Framebuffer *fb, int y, const char *label,
+                     const char *value, uint32_t value_color, int value_x);
 
 /* The first line of a file, newline stripped; 0, or -1 with buf empty. */
 int read_file_line(const char *path, char *buf, size_t len);
