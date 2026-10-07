@@ -177,6 +177,7 @@ step " 5/30" "common";       $CC "${WARN[@]}" -O2 -c common/common.c          -o
 step " 6/30" "highscore";    $CC "${WARN[@]}" -O2 -c common/highscore.c       -o build/highscore.o
 step " 7/30" "keyboard";     $CC "${WARN[@]}" -O2 -c common/keyboard.c        -o build/keyboard.o
 step " 8/30" "ui_layout";    $CC "${WARN[@]}" -O2 -c common/ui_layout.c       -o build/ui_layout.o
+                              $CC "${WARN[@]}" -O2 -c common/ui_flow.c         -o build/ui_flow.o
 step " 9/30" "audio";        $CC "${WARN[@]}" -O2 -c common/audio.c           -o build/audio.o
 step "10/30" "audio_gen";    $CC "${WARN[@]}" -O2 -c common/audio_gen.c       -o build/audio_gen.o
 step "11/30" "audio_out";    $CC "${WARN[@]}" -O2 "${AUDIO_CFLAGS[@]}" -c common/audio_out.c       -o build/audio_out.o
@@ -263,7 +264,7 @@ $CC "${WARN[@]}" -O2 -I. \
 # The standalone unified_calibrate was folded into it and deleted — it was a
 # second, independent copy of the same 9-tap fit, carrying the same defect.
 step "27/30" "control_panel"
-$CC "${WARN[@]}" -O2 -I. control_panel/control_panel.c control_panel/cp_page_name.c control_panel/usb_bus.c control_panel/touch_wizard.c control_panel/led_page.c control_panel/monitor_page.c control_panel/cpu_load.c control_panel/soc_temp.c control_panel/mon_graph.c sysmon/mon_ring.c control_panel/info_page.c control_panel/network_page.c control_panel/usb_page.c control_panel/input_page.c control_panel/audio_page.c control_panel/display_page.c control_panel/bluetooth_page.c control_panel/system_page.c control_panel/sys_settings.c control_panel/bt_ctl.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/ui_focus.o build/ppm.o build/icon_grid.o build/pointer.o -o build/control_panel -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. control_panel/control_panel.c control_panel/cp_page_name.c control_panel/usb_bus.c control_panel/touch_wizard.c control_panel/led_page.c control_panel/monitor_page.c control_panel/cpu_load.c control_panel/soc_temp.c control_panel/mon_graph.c sysmon/mon_ring.c control_panel/info_page.c control_panel/network_page.c control_panel/usb_page.c control_panel/input_page.c control_panel/audio_page.c control_panel/display_page.c control_panel/bluetooth_page.c control_panel/system_page.c control_panel/sys_settings.c control_panel/bt_ctl.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" $CALIB_OBJ build/ui_layout.o build/ui_flow.o build/ui_focus.o build/ppm.o build/icon_grid.o build/pointer.o -o build/control_panel -lm "${AUDIO_LIBS[@]}"
 
 # Touch diagnostic. It was previously absent from this script, which is why a
 # deployed copy of the old trace tool was stale (pre-bezel); that tool now lives in

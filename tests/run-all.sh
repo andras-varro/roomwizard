@@ -146,6 +146,7 @@ CTEST_ROWS=(
     "touch_calib_test|-I common|common/touch_calib.c common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
     "touch_map_test|-I common|common/touch_input.c common/framebuffer.c common/hardware.c common/config.c"
     "ui_focus_test|-I common|common/ui_focus.c"
+    "ui_flow_test|-I common|common/ui_flow.c"
     "ui_scale_test|-I common|common/framebuffer.c common/hardware.c common/config.c"
     "cp_page_name_test|-I.|control_panel/cp_page_name.c"
     "sys_settings_test|-I.|control_panel/sys_settings.c"
