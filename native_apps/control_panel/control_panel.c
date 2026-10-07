@@ -860,7 +860,8 @@ int main(int argc, char *argv[]) {
      * ../CLAUDE.md → App lifecycle carries the measurement. */
     setvbuf(stdout, NULL, _IOLBF, 0);
 
-    /* Test-only switch: `control_panel <page>` opens that page directly (over
+    /* Command-line page: `control_panel <page>` opens that page directly (a documented
+     * user feature, native_apps/README.md; start the applet on a page over
      * SSH).  The launcher passes the two DEVICE PATHS (the manifest args= is empty,
      * which means fb,touch) and this app ignores them, so any argument starting
      * with / is skipped; a launch with no page argument is unchanged.  Parsed
