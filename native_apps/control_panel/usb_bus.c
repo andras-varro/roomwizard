@@ -127,3 +127,15 @@ bool usb_port_dead(const UsbBusDev *d, int n, const char *mode_path) {
     fclose(f);
     return ok && m[0] == 'b' && m[1] == '_';
 }
+
+/* Field by field, not memcmp: scan() zeroes each entry, but a comparison that
+ * leans on padding would turn a compiler change into a repaint every tick. */
+bool usb_bus_same(const UsbBusDev *a, int na, const UsbBusDev *b, int nb) {
+    if (na != nb) return false;
+    for (int i = 0; i < na; i++)
+        if (strcmp(a[i].port, b[i].port) != 0 || strcmp(a[i].name, b[i].name) != 0 ||
+            strcmp(a[i].kind, b[i].kind) != 0 || a[i].vid != b[i].vid ||
+            a[i].pid != b[i].pid || a[i].card != b[i].card)
+            return false;
+    return true;
+}

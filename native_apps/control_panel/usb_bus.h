@@ -29,6 +29,9 @@ int usb_bus_scan(const char *root, UsbBusDev *out, int max);
 /* Devices that are not hubs — what "a device is attached" means. */
 int usb_bus_peripherals(const UsbBusDev *d, int n);
 
+/* Whether two readings list the same devices (port, name, kind, ids, card). */
+bool usb_bus_same(const UsbBusDev *a, int na, const UsbBusDev *b, int nb);
+
 /* musb's OTG state: "a_*" while it is the host, "b_*" once it has left host mode. */
 #define USB_MUSB_MODE \
     "/sys/devices/platform/68000000.ocp/480ab000.usb_otg_hs/musb-hdrc.0.auto/mode"

@@ -7,10 +7,11 @@
  * test a device, whatever bus it is on.  Exposed only as cp_usb_page
  * (cp_page.h); its state lives in this file.  It owns no config keys.
  *
- * A static bus costs nothing: the list is read at startup, once per opening
- * (after the page has painted, re-probing the port if it finds it empty, as
- * RESCAN does) and on RESCAN, and input() returns CP_PAGE_REDRAW only when
- * that reading, or the status line under it, changed.
+ * A static bus costs one sysfs read a second: the list is read at startup, once
+ * per opening (after the page has painted, re-probing the port if it finds it
+ * empty, as RESCAN does), on RESCAN, and once a second while the page is open;
+ * input() returns CP_PAGE_REDRAW only when a reading, or the status line under
+ * it, changed.  The once-a-second read never re-probes the port.
  */
 #include "cp_page.h"
 #include "cp_ui.h"
@@ -40,6 +41,7 @@
 /* ── Types and state ────────────────────────────────────────────────────── */
 
 #define STATUS_MS       2000   /* how long an empty-list result stays up */
+#define POLL_MS         1000   /* the open page re-reads the bus this often */
 
 typedef struct {
     UsbBusDev    bus[USB_BUS_MAX];    /* everything enumerated — what the list shows */
@@ -49,6 +51,7 @@ typedef struct {
     bool         recover_once;         /* ...one attempt, not the script's default */
     char         status_msg[64];       /* an empty-list result; "" = none */
     uint32_t     status_time_ms;
+    uint32_t     poll_ms;              /* last automatic read of the bus */
 } UsbState;
 
 static UsbState usb_state;
@@ -311,6 +314,7 @@ static CpPageResult usb_page_input(Config *cfg, int tx, int ty,
      * with one attempt, not three (usb_recover_port()). */
     if (state->scan_pending) {
         state->scan_pending = false;
+        state->poll_ms = now;
         usb_scan_bus(state);
         if (usb_port_looks_dead(state)) {
             state->recover_queued = true;
@@ -323,6 +327,22 @@ static CpPageResult usb_page_input(Config *cfg, int tx, int ty,
     if (state->status_msg[0] && now - state->status_time_ms > STATUS_MS) {
         state->status_msg[0] = '\0';
         act = CP_PAGE_REDRAW;
+    }
+
+    /* A device plugged or pulled while the page is open shows up with no tap.
+     * input() runs only while this page is open.  ⚠️ This path only READS the
+     * bus: the port re-probe blocks for seconds and stays on RESCAN and the
+     * opening scan.  The reading replaces the list and repaints only when it
+     * differs, so a static bus paints nothing. */
+    if (now - state->poll_ms >= POLL_MS) {
+        static UsbBusDev cur[USB_BUS_MAX];
+        state->poll_ms = now;
+        int cur_cnt = usb_bus_scan(USB_BUS_ROOT, cur, USB_BUS_MAX);
+        if (!usb_bus_same(state->bus, state->bus_cnt, cur, cur_cnt)) {
+            memcpy(state->bus, cur, sizeof(cur));
+            state->bus_cnt = cur_cnt;
+            act = CP_PAGE_REDRAW;
+        }
     }
 
     if (button_update(&usb_btn_rescan, tx, ty, touching, now)) {

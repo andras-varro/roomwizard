@@ -115,6 +115,21 @@ int main(void) {
     CHECK(!usb_port_dead(d, 4, "build/no_such_mode"), "G: unreadable mode overrides the count");
     remove(mode);
 
+    /* H: the auto-refresh's change test.  d[] holds the four-device reading. */
+    {
+        UsbBusDev c[USB_BUS_MAX];
+        memcpy(c, d, sizeof(c));
+        CHECK(usb_bus_same(d, 4, c, 4), "H: identical readings differ");
+        CHECK(!usb_bus_same(d, 4, c, 3), "H: a pulled device reads as same");
+        CHECK(usb_bus_same(d, 0, c, 0), "H: two empty readings differ");
+        c[2].pid ^= 1;
+        CHECK(!usb_bus_same(d, 4, c, 4), "H: a changed pid reads as same");
+        c[2].pid = d[2].pid; c[3].card = 5;
+        CHECK(!usb_bus_same(d, 4, c, 4), "H: a changed card reads as same");
+        c[3].card = d[3].card; c[1].name[0] ^= 1;
+        CHECK(!usb_bus_same(d, 4, c, 4), "H: a changed name reads as same");
+    }
+
     char cmd[300];
     snprintf(cmd, sizeof(cmd), "rm -rf %s", R);
     if (system(cmd) != 0) printf("warning: could not remove %s\n", R);
