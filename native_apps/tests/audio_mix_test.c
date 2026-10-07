@@ -664,6 +664,27 @@ int main(int argc, char *argv[])
         fprintf(stderr, "audio_mix_test: cannot open %s\n", fb_dev);
         audio_close(&audio); return 1;
     }
+
+    /* The row layout and present_rect() are landscape-only (present_rect()
+     * returns early in portrait), so refuse with a message instead of showing
+     * a screen that never updates.  fb_swap() rotates the whole frame in
+     * portrait, so this one full-frame swap is visible there.  At scale 2 the
+     * longer line is 30 chars * 12 px = 360 px, inside the 480 px portrait width. */
+    if (fb.portrait_mode) {
+        fb_clear(&fb, COLOR_BLACK);
+        text_draw_centered(&fb, (int)fb.width / 2, (int)fb.height / 2 - 20,
+                           "MIX BUS TEST NEEDS LANDSCAPE", COLOR_YELLOW, 2);
+        text_draw_centered(&fb, (int)fb.width / 2, (int)fb.height / 2 + 20,
+                           "TURN PORTRAIT OFF AND RELAUNCH", COLOR_YELLOW, 2);
+        fb_swap(&fb);
+        sleep(3);
+        fb_clear(&fb, COLOR_BLACK);
+        fb_swap(&fb);
+        fb_close(&fb);
+        audio_close(&audio);
+        return 0;
+    }
+
     TouchInput touch;
     if (touch_init(&touch, touch_dev) < 0) {
         fprintf(stderr, "audio_mix_test: cannot open %s\n", touch_dev);
