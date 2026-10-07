@@ -421,6 +421,8 @@ the move.
 | **Nothing enumerates unless it was plugged in at boot** | **A standing property of this hardware, not an open bug** (settled 2026-08-14). MUSB powers the port only when a device is present as the driver probes; otherwise VBUS collapses seconds later and stays off. Three mechanisms read out of the driver source have each been applied and **refuted on hardware** | **Control Panel → USB → RESCAN** — one tap, ~5 s, dead port → playable pad, verified on a panel. Over SSH it is `/etc/init.d/usb-host recover` with the device already plugged in. `$MUSB/vbus` is the diagnostic (`Vbus off` = dead port); `mode` is not — it reads `a_idle` while a pad works. `../IMPROVEMENT_PLAN.md` |
 | "rejected configuration due to insufficient bus power" | Our DTB keeps the vendor `power` `0x32` (100 mA, inferred from the DTB, not measured on a unit) | Connect the controller through a powered hub |
 
+**Simulating an unplug from sysfs (measured on `.188`):** `echo 1 > /sys/bus/usb/devices/1-1/remove` drops the node (the control panel USB page empties within ~3 s); `authorized=0` on `1-1` does **not** remove it from sysfs or `lsusb`, and toggling `usb1/authorized` did not re-enumerate — `/etc/init.d/usb-host recover` did (attempt 1).
+
 ---
 
 ## Failed Approaches (for reference)

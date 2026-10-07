@@ -327,16 +327,13 @@ untouched, so the recovery is still "reimage the card".
 | What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. Operator ruling 2026-09-29: the whole `LICENSE.md` overhaul is part of this item — our GPL kernel image and modules now ship (source-offer duty), native apps and ScummVM link glibc and libasound dynamically, the glibc row names only `gnueabihf`, and the obligation column is unreviewed. |
 | What does p5 become? | It frees 1.5 GB of space. |
 
-### F105. Auto-rescan on the USB page while it is open — open, operator idea 2026-09-30, later
+### F105. USB page auto-refresh — implemented, awaiting the operator's panel check
 
-The control panel's USB page re-reads the bus only on opening and on RESCAN (the Input page already polls `/dev/input`
-once a second, but that is the evdev node list, not the USB bus). Add a periodic re-read while it is open,
-repainting only when the list changes, as Network's 2 s change detection does. ⚠️ **Constraint: the
-automatic path must only READ.** The MUSB port re-probe blocks for a few seconds and stays on an explicit
-RESCAN (and the one opening scan of an empty port). **Done when** a device plugged in or pulled on .188 appears or disappears on the open page within
-the interval with no tap, an idle page does not repaint, and no re-probe runs unprompted. Not yet seen on
-the panel: the page's "+N MORE" row (shown when the list outgrows the rows that fit; .188 has 7 devices and
-all fit), so plug in enough devices to see it.
+The USB page now re-reads the bus itself while open (read-only, no re-probe; repaints only on a change). Remote-tested on .188
+(sysfs remove empties the list, `usb-host recover` brings the dongle row back, no input). **Checklist:**
+1. Open Control Panel, USB page.
+2. Plug in, then pull, a physical device: the list follows within ~1 s with no tap. Not yet seen: the "+N MORE" row
+   (needs more devices than fit; .188 has 7 and all fit).
 
 ### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
 
