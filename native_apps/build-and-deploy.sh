@@ -187,6 +187,7 @@ step "14/30" "ppm";          $CC "${WARN[@]}" -O2 -c common/ppm.c             -o
                               $CC "${WARN[@]}" -O2 -c common/icon_grid.c       -o build/icon_grid.o
                               $CC "${WARN[@]}" -O2 -c common/ui_focus.c        -o build/ui_focus.o
                               $CC "${WARN[@]}" -O2 -c common/pointer.c         -o build/pointer.o
+                              $CC "${WARN[@]}" -O2 -c common/start_menu.c      -o build/start_menu.o
 step "15/30" "logger";       $CC "${WARN[@]}" -O2 -c common/logger.c          -o build/logger.o
 step "16/30" "config";       $CC "${WARN[@]}" -O2 -c common/config.c          -o build/config.o
 step "17/30" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o build/gamepad.o
@@ -197,7 +198,12 @@ step "17/30" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o
 # so every binary that links gamepad.o links it too, and input_slots.o (which
 # player slot each device holds) rides along — name GAMEPAD_OBJ, never
 # build/gamepad.o alone.  control_panel links it too: keyboard/pad focus.
-GAMEPAD_OBJ=(build/gamepad.o build/input_scan.o build/input_slots.o)
+# start_menu.o (the games' start menu) rides here because it reads
+# gamepad_player_mask() and every game links this list — one place, so a new
+# game cannot miss it.  It needs only COMMON_OBJ besides, which every linker of
+# GAMEPAD_OBJ also names; it uses ui_focus.h's UiRect type but no ui_focus.o
+# function, so control_panel's own build/ui_focus.o stays the only copy linked.
+GAMEPAD_OBJ=(build/gamepad.o build/input_scan.o build/input_slots.o build/start_menu.o)
 
 COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
             build/common.o build/highscore.o build/keyboard.o

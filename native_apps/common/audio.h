@@ -581,6 +581,12 @@ void audio_thud(Audio *audio);
 /** ~1319 Hz, 25 ms — a brick destroyed, a block cleared.  Clip: fx_tick. */
 void audio_tick(Audio *audio);
 
+/** ~1319 Hz, 40 ms — a start menu calling for attention (start_menu.c pings
+ *  on the brackets' blink).  The tick's pitch, which the panel radiates, held
+ *  longer so it reads as a call rather than a hit.  A plain audio_tone(): no
+ *  clip, so the EFFECTS toggle is audio_tone()'s own gate. */
+void audio_ping(Audio *audio);
+
 /** ~1568 Hz, 30 ms — a bonus brick, a rare reward.  Clip: fx_sparkle, which has
  *  the FLATTEST band delta of the set (−0.05 dB). */
 void audio_sparkle(Audio *audio);

@@ -1187,6 +1187,12 @@ void audio_tick(Audio *audio)
     play_sequence(audio, s, 1);
 }
 
+/** A start menu's attention ping.  audio_tone() carries the EFFECTS gate. */
+void audio_ping(Audio *audio)
+{
+    audio_tone(audio, 1319, 40);
+}
+
 /** A bonus brick or rare reward.  Was 1500 Hz.  Clip: fx_sparkle. */
 void audio_sparkle(Audio *audio)
 {

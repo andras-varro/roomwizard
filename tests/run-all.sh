@@ -122,6 +122,7 @@ CTEST_ROWS=(
     "config_test|-I common|common/config.c"
     "cpu_load_test|-I.|control_panel/cpu_load.c"
     "soc_temp_test|-I.|control_panel/soc_temp.c"
+    "start_menu_test|-I common|common/start_menu.c common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/gamepad.c common/input_slots.c common/input_scan.c"
     "mon_ring_test|-I.|sysmon/mon_ring.c"
     "overtemp_test|-I.|sysmon/mon_ring.c"
     "blank_decide_test|-I common|"
