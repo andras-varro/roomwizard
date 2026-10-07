@@ -53,7 +53,8 @@ typedef struct {
     // mouse_button_mask with the mice's buttons.
     VncPad usb_node_pad[VNC_MAX_USB_NODES];
     VncPadMap pad_map;          // native codes, from /etc/input_config.conf
-    float pad_exit_progress;    // 0.0-1.0: the longest Select hold of any pad
+    float pad_exit_progress;    // 0.0-1.0: the longest Select or keyboard Esc hold
+    UiHold kbd_esc;             // a USB keyboard's Esc: tap goes to the remote, hold opens Settings
 
     // Mouse absolute position in remote desktop coordinates
     int mouse_abs_x;
@@ -111,25 +112,35 @@ void vnc_input_cleanup(VNCInput *input);
 // the Settings screen.  Settings opens only after vnc_input_cleanup() has
 // closed the session's nodes (or from the reconnect screen, where no session
 // holds any), so this opens its own set for the screen's lifetime rather than
-// sharing — nothing else is reading them meanwhile.  Mice are not opened.
+// sharing — nothing else is reading them meanwhile.  Mice are opened too: they
+// drive a pointer the caller turns into touch frames (ptr_*), and a mouse node
+// that also carries a keyboard (a combo receiver, classified MOUSE) types.
+#define VNC_NAV_MAX_NODES  (3 * VNC_MAX_PER_KIND)
 typedef struct {
-    InputNode nodes[2 * VNC_MAX_PER_KIND];
-    VncNavPad pad[2 * VNC_MAX_PER_KIND];   // index-aligned with nodes[]
+    InputNode nodes[VNC_NAV_MAX_NODES];
+    VncNavPad pad[VNC_NAV_MAX_NODES];      // index-aligned with nodes[]
+    bool      ptr_btn[VNC_NAV_MAX_NODES];  // a mouse node's left button, index-aligned
     int count;
     VncPadMap map;                         // from /etc/input_config.conf
     InputSigGate gate;                     // hot-plug rescan
     int kp_mode;                           // VncKeypadMode while a keypad is open, else -1 (set by the caller; -1 from open)
     int kp_shift;                          // VNC_KP_SHIFT_* bits of the physical shift keys
+    // The mouse pointer, in logical screen coordinates (touch's space),
+    // clamped to SCREEN_SAFE_*; starts at its centre.
+    int  ptr_x, ptr_y;
+    bool ptr_down;                         // left button held on any mouse (level)
+    bool ptr_moved;                        // the last vnc_nav_poll() moved it
 } VncNavInput;
 
-// Open every keyboard and pad, seeding what is already held so it never acts.
+// Open every keyboard, mouse and pad, seeding what is already held so it never acts.
 void vnc_nav_open(VncNavInput *nav);
 
 // Read every pending event; up to max actions into out[], in order.  Returns
-// how many.  Also rescans when /dev/input changes.
+// how many.  Also rescans when /dev/input changes, and updates ptr_*.
 // With nav->kp_mode >= 0 a keyboard also yields VNC_NAV_CHAR (char in ch[]),
 // BKSP, OK and CANCEL (vnc_kp_key first, vnc_nav_key on NONE); ch[] is
-// index-aligned with out[].
+// index-aligned with out[].  "A keyboard" is any node with keyboard keys,
+// whatever its kind; a mouse's buttons are never keys.
 int vnc_nav_poll(VncNavInput *nav, VncNav *out, char *ch, int max);
 
 // Close every node.

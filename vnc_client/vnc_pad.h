@@ -98,6 +98,24 @@ void vnc_pad_motion(VncPad *p, const VncPadMap *m, uint32_t now, int speed,
  * has lasted UI_HOLD_EXIT_MS. */
 bool vnc_pad_back_exit(const VncPad *p, uint32_t now, int *permille);
 
+/* A USB keyboard's Esc is forwarded to the remote on a short tap and opens
+ * Settings when held UI_HOLD_EXIT_MS, so the press itself is withheld. */
+typedef enum {
+    VNC_ESC_NONE = 0,   /* nothing to do yet (press, autorepeat, stray release) */
+    VNC_ESC_TAP,        /* released short of the hold: send Esc down + up */
+    VNC_ESC_EXIT        /* released after the hold completed: open Settings */
+} VncEsc;
+
+/* PURE. Feed one Esc EV_KEY value read at now.  1 starts the hold, 2
+ * (autorepeat) changes nothing, 0 ends it: TAP if it was short, EXIT if it had
+ * lasted UI_HOLD_EXIT_MS (a release is never a TAP after that), NONE if no
+ * press was seen. */
+VncEsc vnc_esc_event(UiHold *h, int value, uint32_t now);
+
+/* PURE. Progress of the Esc hold in permille (0 when not held); true once it
+ * has lasted UI_HOLD_EXIT_MS, before the key is released. */
+bool vnc_esc_hold_exit(const UiHold *h, uint32_t now, int *permille);
+
 /* PURE. The full-deflection speed for a remote desktop `remote_w` pixels wide:
  * a full stick crosses it in about 1.5 s. */
 int vnc_pad_speed_for_width(int remote_w);

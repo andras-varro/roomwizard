@@ -122,6 +122,25 @@ bool vnc_pad_back_exit(const VncPad *p, uint32_t now, int *permille) {
     return exit;
 }
 
+bool vnc_esc_hold_exit(const UiHold *h, uint32_t now, int *permille) {
+    bool exit = false;
+    int pm = ui_hold_progress(h->down, now, h->start_ms, UI_HOLD_EXIT_MS, &exit);
+    if (permille) *permille = pm;
+    return exit;
+}
+
+VncEsc vnc_esc_event(UiHold *h, int value, uint32_t now) {
+    if (value == 2) return VNC_ESC_NONE;
+    if (value != 0) {
+        ui_hold_key(h, value, now);
+        return VNC_ESC_NONE;
+    }
+    if (!h->down) return VNC_ESC_NONE;
+    bool done = vnc_esc_hold_exit(h, now, NULL);
+    ui_hold_key(h, 0, now);
+    return done ? VNC_ESC_EXIT : VNC_ESC_TAP;
+}
+
 int vnc_pad_speed_for_width(int remote_w) {
     int s = remote_w * 2 / 3;
     if (s < VNC_PAD_MIN_SPEED) s = VNC_PAD_MIN_SPEED;

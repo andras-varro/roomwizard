@@ -1,6 +1,7 @@
 #include "vnc_input.h"
 #include "vnc_renderer.h"
 #include "config.h"
+#include "../native_apps/common/logger.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -344,8 +345,25 @@ void vnc_input_send_key(VNCInput *input, uint32_t key, bool down) {
     DEBUG_PRINT("Key event: key=0x%04X down=%d", key, down);
 }
 
-/* Forward one EV_KEY as a VNC key event, if it is a key with a keysym. */
+static void release_remote_buttons(VNCInput *input);
+
+/* Forward one EV_KEY as a VNC key event, if it is a key with a keysym.  Esc is
+ * withheld: a short tap is sent as down+up on its release, and a hold of
+ * UI_HOLD_EXIT_MS opens Settings (pad_step() sees it complete). */
 static void forward_usb_key(VNCInput *input, const struct input_event *ev) {
+    if (ev->code == KEY_ESC) {
+        VncEsc e = vnc_esc_event(&input->kbd_esc, ev->value, get_ticks_ms());
+        uint32_t keysym = evdev_to_keysym[KEY_ESC];
+        if (e == VNC_ESC_TAP && keysym != 0) {
+            vnc_input_send_key(input, keysym, true);
+            vnc_input_send_key(input, keysym, false);
+        } else if (e == VNC_ESC_EXIT && !input->exit_requested) {
+            release_remote_buttons(input);
+            input->exit_requested = true;
+            DEBUG_PRINT("Exit: keyboard Esc held %d ms", UI_HOLD_EXIT_MS);
+        }
+        return;
+    }
     if (ev->code < 256) {
         uint32_t keysym = evdev_to_keysym[ev->code];
         if (keysym != 0) {
@@ -430,7 +448,7 @@ static bool poll_usb_pad(VNCInput *input, int idx, uint32_t now) {
 /* ── Once per loop: pad motion, pad buttons, Select's hold ──────────────── */
 static void pad_step(VNCInput *input, uint32_t now) {
     int sum_dx = 0, sum_dy = 0, best = 0;
-    bool any_pad = false, exit = false;
+    bool any_pad = false, exit = false, esc_exit = false;
     int speed = vnc_pad_speed_for_width(input->remote_width);
 
     for (int i = 0; i < input->usb_node_count; i++) {
@@ -444,21 +462,27 @@ static void pad_step(VNCInput *input, uint32_t now) {
         if (vnc_pad_back_exit(p, now, &pm)) exit = true;
         if (pm > best) best = pm;
     }
+    /* A keyboard's Esc hold counts with or without a pad present */
+    int esc_pm;
+    if (vnc_esc_hold_exit(&input->kbd_esc, now, &esc_pm)) esc_exit = true;
+    if (esc_pm > best) best = esc_pm;
     input->pad_exit_progress = (float)best / 1000.0f;
-    if (!any_pad) return;
 
-    int old_mask = input->mouse_button_mask;
-    input->mouse_button_mask = usb_mouse_buttons(input);
-    if (sum_dx != 0 || sum_dy != 0)
-        move_pointer(input, sum_dx, sum_dy);
-    if (sum_dx != 0 || sum_dy != 0 || old_mask != input->mouse_button_mask)
-        vnc_input_send_pointer(input, input->mouse_abs_x, input->mouse_abs_y,
-                               input->mouse_button_mask);
+    if (any_pad) {
+        int old_mask = input->mouse_button_mask;
+        input->mouse_button_mask = usb_mouse_buttons(input);
+        if (sum_dx != 0 || sum_dy != 0)
+            move_pointer(input, sum_dx, sum_dy);
+        if (sum_dx != 0 || sum_dy != 0 || old_mask != input->mouse_button_mask)
+            vnc_input_send_pointer(input, input->mouse_abs_x, input->mouse_abs_y,
+                                   input->mouse_button_mask);
+    }
 
-    if (exit && !input->exit_requested) {
+    if ((exit || esc_exit) && !input->exit_requested) {
         release_remote_buttons(input);
         input->exit_requested = true;
-        DEBUG_PRINT("Exit: pad Select held %d ms", UI_HOLD_EXIT_MS);
+        DEBUG_PRINT("Exit: %s held %d ms", esc_exit ? "keyboard Esc" : "pad Select",
+                    UI_HOLD_EXIT_MS);
     }
 }
 
@@ -556,6 +580,8 @@ static void poll_usb_devices(VNCInput *input) {
                     nd->kind == INPUT_KIND_PAD   ? "game pad" : "keyboard", nd->path);
         bool was_mouse = (nd->kind == INPUT_KIND_MOUSE ||
                           nd->kind == INPUT_KIND_PAD);
+        /* An Esc held on the unplugged keyboard must not run on into an exit */
+        if (nd->kind != INPUT_KIND_PAD) input->kbd_esc.down = false;
         drop_usb_node(input, i);
 
         /* A button held on the unplugged mouse or pad is released by its
@@ -699,10 +725,42 @@ void vnc_input_cleanup(VNCInput *input) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * Settings-screen input: keyboards and pads as focus actions
+ * Settings-screen input: keyboards and pads as focus actions, mice as a pointer
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-#define VNC_NAV_MAX_NODES  (2 * VNC_MAX_PER_KIND)
+/* Left-button level of a mouse node, from the kernel: a button held when the
+ * node is opened, or across a SYN_DROPPED, produces no event of its own. */
+static bool nav_left_held(int fd) {
+    unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+    memset(keys, 0, sizeof(keys));
+    if (ioctl(fd, EVIOCGKEY(sizeof(keys)), keys) < 0) return false;
+    return input_caps_test(keys, BTN_LEFT);
+}
+
+/* Move the Settings pointer by (dx, dy), kept inside the touch-safe rectangle
+ * so that wherever it can be, a finger could have pressed. */
+static void nav_ptr_move(VncNavInput *nav, int dx, int dy) {
+    int x = nav->ptr_x + dx, y = nav->ptr_y + dy;
+    if (x < SCREEN_SAFE_LEFT)       x = SCREEN_SAFE_LEFT;
+    if (x > SCREEN_SAFE_RIGHT - 1)  x = SCREEN_SAFE_RIGHT - 1;
+    if (y < SCREEN_SAFE_TOP)        y = SCREEN_SAFE_TOP;
+    if (y > SCREEN_SAFE_BOTTOM - 1) y = SCREEN_SAFE_BOTTOM - 1;
+    nav->ptr_x = x;
+    nav->ptr_y = y;
+}
+
+/* The OR of every mouse node's left button. */
+static bool nav_ptr_down(const VncNavInput *nav) {
+    for (int i = 0; i < nav->count; i++)
+        if (nav->nodes[i].kind == INPUT_KIND_MOUSE && nav->ptr_btn[i]) return true;
+    return false;
+}
+
+/* A mouse button, not a key: never handed to the keyboard path, even on a
+ * combo node.  BTN_MOUSE..BTN_TASK is the kernel's mouse-button block. */
+static bool nav_is_mouse_button(int code) {
+    return code >= BTN_MOUSE && code <= BTN_TASK;
+}
 
 /* A freshly opened pad node: its stick ranges, and every axis and button
  * level as it is now, seeded so none of it acts — A held from the tap that
@@ -733,23 +791,40 @@ static void seed_nav_pad(VncNavInput *nav, int i) {
 static void nav_scan(VncNavInput *nav) {
     static const int cap[INPUT_KIND_COUNT] = {
         [INPUT_KIND_KEYBOARD] = VNC_MAX_PER_KIND,
+        [INPUT_KIND_MOUSE]    = VNC_MAX_PER_KIND,
         [INPUT_KIND_PAD]      = VNC_MAX_PER_KIND,
+    };
+    static const char *const kind_name[INPUT_KIND_COUNT] = {
+        [INPUT_KIND_NONE] = "?", [INPUT_KIND_KEYBOARD] = "keyboard",
+        [INPUT_KIND_MOUSE] = "mouse", [INPUT_KIND_PAD] = "game pad",
     };
     int before = nav->count;
     input_sig_gate_baseline(&nav->gate, input_node_sig());
     nav->count = input_scan(nav->nodes, before, VNC_NAV_MAX_NODES, cap);
     for (int i = before; i < nav->count; i++) {
+        const InputNode *nd = &nav->nodes[i];
         memset(&nav->pad[i], 0, sizeof(nav->pad[i]));
-        if (nav->nodes[i].kind == INPUT_KIND_PAD)
+        nav->ptr_btn[i] = (nd->kind == INPUT_KIND_MOUSE) && nav_left_held(nd->fd);
+        if (nd->kind == INPUT_KIND_PAD)
             seed_nav_pad(nav, i);
-        DEBUG_PRINT("Settings input: %s at %s", nav->nodes[i].name, nav->nodes[i].path);
+        /* The witness for "the keyboard does nothing in Settings": which
+         * nodes this screen actually holds, and whether a mouse node types. */
+        logger_lib_write(LOG_LEVEL_INFO, __FILE__, __LINE__,
+                         "Settings input: %s%s '%s' at %s",
+                         kind_name[nd->kind],
+                         (nd->kind == INPUT_KIND_MOUSE && nd->keys) ? "+keyboard" : "",
+                         nd->name, nd->path);
     }
+    nav->ptr_down = nav_ptr_down(nav);
 }
 
 static void nav_drop(VncNavInput *nav, int i) {
     memmove(&nav->pad[i], &nav->pad[i + 1],
             (size_t)(nav->count - i - 1) * sizeof(nav->pad[0]));
+    memmove(&nav->ptr_btn[i], &nav->ptr_btn[i + 1],
+            (size_t)(nav->count - i - 1) * sizeof(nav->ptr_btn[0]));
     nav->count = input_scan_drop(nav->nodes, nav->count, i);
+    nav->ptr_down = nav_ptr_down(nav);
 }
 
 void vnc_nav_open(VncNavInput *nav) {
@@ -759,25 +834,42 @@ void vnc_nav_open(VncNavInput *nav) {
     input_config_defaults(&cfg);
     (void)input_config_load(&cfg, INPUT_CONFIG_PATH);
     vnc_pad_map_from_config(&nav->map, &cfg);
+    nav->ptr_x = SCREEN_SAFE_LEFT + SCREEN_SAFE_WIDTH / 2;
+    nav->ptr_y = SCREEN_SAFE_TOP + SCREEN_SAFE_HEIGHT / 2;
     nav_scan(nav);
 }
 
 int vnc_nav_poll(VncNavInput *nav, VncNav *out, char *ch, int max) {
     int n = 0;
+    nav->ptr_moved = false;
     if (input_sig_gate_poll(&nav->gate, get_ticks_ms()))
         nav_scan(nav);
 
     for (int i = 0; i < nav->count; ) {
         const InputNode *nd = &nav->nodes[i];
+        /* Keys go to the keyboard path from any node that has a keyboard's
+         * keys — a combo receiver's single node is classified MOUSE. */
+        const bool mouse = (nd->kind == INPUT_KIND_MOUSE);
+        const bool kbd = (nd->kind == INPUT_KIND_KEYBOARD) || (mouse && nd->keys);
+        InputSynDrop sd = { false, false };
         struct input_event ev;
         ssize_t r;
+        int dx = 0, dy = 0;
 
         errno = 0;
         while ((r = read(nd->fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
             VncNav a = VNC_NAV_NONE;
             char c = 0;
-            if (nd->kind == INPUT_KIND_KEYBOARD) {
-                if (ev.type == EV_KEY) {
+            if (mouse && input_syn_drop_skip(&sd, &ev))
+                continue;
+            if (mouse && ev.type == EV_REL) {
+                if (ev.code == REL_X)      dx += ev.value;
+                else if (ev.code == REL_Y) dy += ev.value;
+            } else if (mouse && ev.type == EV_KEY && nav_is_mouse_button(ev.code)) {
+                if (ev.code == BTN_LEFT)   /* right / middle: unused here */
+                    nav->ptr_btn[i] = (ev.value != 0);
+            } else if (kbd) {
+                if (ev.type == EV_KEY && !nav_is_mouse_button(ev.code)) {
                     VncKeyChar kc = vnc_kp_key(ev.code, ev.value, &nav->kp_shift,
                                                nav->kp_mode, &c);
                     if (nav->kp_mode >= 0 && kc != VNC_KC_NONE)
@@ -787,6 +879,8 @@ int vnc_nav_poll(VncNavInput *nav, VncNav *out, char *ch, int max) {
                     else
                         a = vnc_nav_key(ev.code, ev.value);
                 }
+            } else if (mouse) {
+                /* a plain mouse's other keys and axes: nothing */
             } else if (ev.type == EV_KEY) {
                 a = vnc_nav_pad_event(&nav->pad[i], &nav->map, EV_KEY,
                                       input_pad_key(nd->pad_layout, ev.code), ev.value);
@@ -804,8 +898,15 @@ int vnc_nav_poll(VncNavInput *nav, VncNav *out, char *ch, int max) {
             nav_drop(nav, i);
             continue;
         }
+        if (mouse && sd.resync)     /* a release may have gone with the overflow */
+            nav->ptr_btn[i] = nav_left_held(nd->fd);
+        if (dx != 0 || dy != 0) {   /* 1:1 — the form needs no acceleration */
+            nav_ptr_move(nav, dx, dy);
+            nav->ptr_moved = true;
+        }
         i++;
     }
+    nav->ptr_down = nav_ptr_down(nav);
     return n;
 }
 

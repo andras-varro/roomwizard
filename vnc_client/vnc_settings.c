@@ -256,6 +256,11 @@ typedef struct {
     int             focus;          /* index on the current screen */
     int             focus_main;     /* the main screen's, kept while a keypad is up */
     bool            focus_on;       /* ring shown */
+    /* Mouse pointer, copied from VncNavInput each frame so a move schedules a
+     * repaint through the same memcmp.  Shown from the first motion, hidden
+     * by a finger or a nav key. */
+    bool            ptr_on;
+    int             ptr_x, ptr_y;   /* logical, inside SCREEN_SAFE_* */
 } SettingsState;
 
 /* Forward declarations */
@@ -263,6 +268,7 @@ static void draw_main_screen(SettingsState *st);
 static void draw_keypad(SettingsState *st);
 static void draw_keypad_full(SettingsState *st);
 static void draw_focus(SettingsState *st);
+static void draw_pointer(SettingsState *st);
 static int  handle_main_touch(SettingsState *st, int tx, int ty);
 static int  handle_keypad_touch(SettingsState *st, int tx, int ty);
 static int  handle_keypad_full_touch(SettingsState *st, int tx, int ty);
@@ -424,6 +430,7 @@ static void draw_main_screen(SettingsState *st) {
                 "SAVE & RECONNECT", RGB565(0, 100, 0), RGB565_GREEN, 2);
 
     draw_focus(st);
+    draw_pointer(st);
     fb_swap(fb);
 }
 
@@ -602,6 +609,7 @@ static void draw_keypad(SettingsState *st) {
     }
 
     draw_focus(st);
+    draw_pointer(st);
     fb_swap(fb);
 }
 
@@ -841,6 +849,43 @@ static void draw_focus(SettingsState *st) {
     vnc_renderer_fill_rect(st->fb, f->x + f->w - 3, f->y, 3, f->h, c);
 }
 
+/* The mouse pointer: a 9x13 arrow, hot spot at its tip (top-left), white with
+ * a black outline so it shows on every background here.  Drawn last, straight
+ * into the RGB565 back buffer like vnc_renderer_fill_rect() — not through
+ * common/pointer.c, which works at 32bpp over a saved copy, whereas this screen
+ * repaints in full on every change anyway. */
+static void draw_pointer(SettingsState *st) {
+    static const char *const arrow[] = {
+        "B",
+        "BB",
+        "BWB",
+        "BWWB",
+        "BWWWB",
+        "BWWWWB",
+        "BWWWWWB",
+        "BWWWWWWB",
+        "BWWWWBBBB",
+        "BWWBWB",
+        "BWB BWB",
+        "BB  BWB",
+        "B    BB",
+    };
+    Framebuffer *fb = st->fb;
+    if (!st->ptr_on || !fb || !fb->back_buffer) return;
+    uint16_t *buf = (uint16_t *)fb->back_buffer;
+    const int sw = (int)fb->width;
+    const int sh = (int)fb->height;
+    for (int r = 0; r < (int)(sizeof(arrow) / sizeof(arrow[0])); r++) {
+        int y = st->ptr_y + r;
+        if (y < 0 || y >= sh) continue;
+        for (int c = 0; arrow[r][c]; c++) {
+            int x = st->ptr_x + c;
+            if (x < 0 || x >= sw || arrow[r][c] == ' ') continue;
+            buf[y * sw + x] = (arrow[r][c] == 'W') ? RGB565_WHITE : RGB565(0, 0, 0);
+        }
+    }
+}
+
 /* ── Draw FULL/ALPHA keypad overlay ────────────────────────────────── */
 
 static void draw_keypad_full(SettingsState *st) {
@@ -968,6 +1013,7 @@ static void draw_keypad_full(SettingsState *st) {
     }
 
     draw_focus(st);
+    draw_pointer(st);
     fb_swap(fb);
 }
 
@@ -1101,6 +1147,10 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
      * that opened Settings, A — is seeded and never acts. */
     VncNavInput nav;
     vnc_nav_open(&nav);
+    st.ptr_x = nav.ptr_x;
+    st.ptr_y = nav.ptr_y;
+    bool mouse_was_down = nav.ptr_down;   /* held on entry: no press edge */
+    bool mouse_armed = false;             /* a press was seen; its release taps */
 
     /* Drain any pending touch events */
     if (touch)
@@ -1144,9 +1194,11 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
             touch_poll(touch);
             ts = touch_get_state(touch);
         }
-        bool real_touching = ts.pressed || ts.held;
-        if (real_touching)
+        bool finger = ts.pressed || ts.held;
+        if (finger) {
             st.focus_on = false;    /* a finger hides the ring */
+            st.ptr_on = false;      /* and the pointer */
+        }
 
         /* Pad and keyboard: moves act at once; A and B queue a tap, and
          * nothing more is taken until that tap has been delivered. */
@@ -1154,6 +1206,36 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
         char   chs[16];
         nav.kp_mode = (st.screen == SCREEN_MAIN) ? -1 : (int)st.keypad_mode;
         int nact = vnc_nav_poll(&nav, acts, chs, 16);
+
+        /* The mouse is a finger at the pointer: the left button's press and
+         * release become this frame's touch, so a click acts on release over
+         * the same target a tap would.  A finger wins; a button already held
+         * when the screen opened (or while a finger was down) never acts. */
+        if (nav.ptr_moved) {
+            st.ptr_on = true;
+            st.ptr_x = nav.ptr_x;
+            st.ptr_y = nav.ptr_y;
+        }
+        bool m_pressed = false, m_released = false;
+        if (finger) {
+            mouse_armed = false;
+        } else if (nav.ptr_down && !mouse_was_down) {
+            m_pressed = mouse_armed = true;
+            st.focus_on = false;    /* a click hides the ring */
+        } else if (!nav.ptr_down && mouse_was_down && mouse_armed) {
+            m_released = true;
+            mouse_armed = false;
+        }
+        mouse_was_down = nav.ptr_down;
+        if (m_pressed || m_released || mouse_armed) {
+            ts.x = nav.ptr_x;
+            ts.y = nav.ptr_y;
+            ts.pressed = m_pressed;
+            ts.released = m_released;
+            ts.held = mouse_armed && !m_pressed;
+        }
+        bool real_touching = finger || mouse_armed;
+
         for (int i = 0; i < nact && tap.phase == 0 && !real_touching; i++) {
             UiDir d;
             if (acts[i] == VNC_NAV_CHAR || acts[i] == VNC_NAV_BKSP ||
@@ -1171,10 +1253,12 @@ int vnc_settings_run(VNCConfig *config, Framebuffer *fb, TouchInput *touch,
                 if (st.focus_on)
                     st.focus = ui_focus_move(rects, nrects, st.focus, d);
                 st.focus_on = true;     /* the first press only shows the ring */
+                st.ptr_on = false;      /* and hides the pointer */
             } else if (acts[i] == VNC_NAV_ACTIVATE) {
                 if (st.focus_on && st.focus >= 0 && st.focus < nrects)
                     ui_tap_begin(&tap, &rects[st.focus]);
                 st.focus_on = true;
+                st.ptr_on = false;
             } else if (acts[i] == VNC_NAV_BACK && back_idx < nrects) {
                 ui_tap_begin(&tap, &rects[back_idx]);
             }

@@ -15,6 +15,7 @@
  * per call, carries its sub-pixel remainder and caps a stall; 4 Select's hold;
  * 5 the map is the shared parser's defaults; 6 the speed for a desktop width;
  * 7 the Settings screen's focus actions from pad and keyboard events.  8 keyboard typing into the keypads (vnc_key_char).
+ * 10 a keyboard's Esc: tap goes to the remote, hold opens Settings.
  *
  * ⚠️ What it cannot see: which raw codes a real pad sends (input_pad_key()
  * and the scan are input_scan_test's), whether vnc_input.c feeds every event
@@ -432,6 +433,45 @@ static void group9_kp(void) {
     CHECK(vnc_kp_backspace(buf, &cur) && !vnc_kp_backspace(buf, &cur) && cur == 0 && buf[0] == 0, "backspace on empty is a no-op");
 }
 
+/* A keyboard's Esc: a tap reaches the remote, a hold opens Settings. */
+static void group10_esc(void) {
+    UiHold h;
+    int pm;
+    memset(&h, 0, sizeof(h));
+    CHECK(vnc_esc_event(&h, 0, 50) == VNC_ESC_NONE, "a release with no press: nothing");
+    CHECK(vnc_esc_event(&h, 1, 1000) == VNC_ESC_NONE, "press: withheld, nothing yet");
+    CHECK(h.down && !vnc_esc_hold_exit(&h, 1100, &pm) && pm > 0 && pm < 1000,
+          "held 100 ms: progress %d, no exit", pm);
+    CHECK(vnc_esc_event(&h, 0, 1100) == VNC_ESC_TAP, "short release: a tap for the remote");
+    CHECK(!h.down && !vnc_esc_hold_exit(&h, 9000, &pm) && pm == 0, "released: no hold left");
+
+    /* autorepeat neither starts nor restarts a hold */
+    CHECK(vnc_esc_event(&h, 2, 2000) == VNC_ESC_NONE && !h.down,
+          "a repeat with no press starts nothing");
+    vnc_esc_event(&h, 1, 3000);
+    CHECK(vnc_esc_event(&h, 2, 3000 + UI_HOLD_EXIT_MS - 10) == VNC_ESC_NONE,
+          "a repeat is never a tap or an exit");
+    CHECK(vnc_esc_hold_exit(&h, 3000 + UI_HOLD_EXIT_MS, &pm) && pm == 1000,
+          "held %d ms across repeats: exit, the repeat did not restart it", UI_HOLD_EXIT_MS);
+
+    /* a release after the hold is an exit, never a tap */
+    CHECK(vnc_esc_event(&h, 0, 3000 + UI_HOLD_EXIT_MS + 200) == VNC_ESC_EXIT,
+          "release after the hold: EXIT, not TAP");
+    CHECK(vnc_esc_event(&h, 0, 9000) == VNC_ESC_NONE, "a second release: nothing");
+
+    /* 1 ms short of the hold is still a tap */
+    vnc_esc_event(&h, 1, 20000);
+    CHECK(!vnc_esc_hold_exit(&h, 20000 + UI_HOLD_EXIT_MS - 1, &pm),
+          "1 ms short: no exit");
+    CHECK(vnc_esc_event(&h, 0, 20000 + UI_HOLD_EXIT_MS - 1) == VNC_ESC_TAP,
+          "1 ms short, released: a tap");
+
+    /* across the uint32 clock wrap */
+    vnc_esc_event(&h, 1, 0xFFFFFF00u);
+    CHECK(vnc_esc_hold_exit(&h, 0xFFFFFF00u + UI_HOLD_EXIT_MS, &pm),
+          "a hold spanning the wrap still completes");
+}
+
 int main(void) {
     group1_axis();
     group2_events();
@@ -442,6 +482,7 @@ int main(void) {
     group7_nav();
     group8_keychar();
     group9_kp();
+    group10_esc();
     printf("vnc_pad_test: %d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }
