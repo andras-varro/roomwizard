@@ -15,6 +15,7 @@
  */
 #include "cp_page.h"
 #include "cp_ui.h"
+#include "../common/ui_flow.h"
 #include "../common/common.h"
 #include "../common/hardware.h"
 
@@ -422,17 +423,17 @@ static void display_page_layout(void) {
     int cols    = 3;
     int btn_w   = (CONTENT_WIDTH - (cols - 1) * DISP_TEST_GAP) / cols;
     for (int i = 0; i < DISP_TEST_COUNT; i++)
-        if (text_measure_width(disp_tests[i].name, 2) > btn_w - 8) cols = 2;
+        if (!ui_label_fits(disp_tests[i].name, 2, btn_w)) cols = 2;
     btn_w       = (CONTENT_WIDTH - (cols - 1) * DISP_TEST_GAP) / cols;
     int grid_y  = sec_tests_y + 26;
-    for (int i = 0; i < DISP_TEST_COUNT; i++) {
-        int c = i % cols, r = i / cols;
-        button_init_full(&test_btns[i],
-                         CONTENT_LEFT + c * (btn_w + DISP_TEST_GAP),
-                         grid_y + r * (DISP_TEST_BTN_H + DISP_TEST_GAP),
-                         btn_w, DISP_TEST_BTN_H, disp_tests[i].name,
+    UiRect test_r[DISP_TEST_COUNT];
+    ui_flow_place(DISP_TEST_COUNT, btn_w, DISP_TEST_BTN_H, DISP_TEST_GAP,
+                  DISP_TEST_GAP, CONTENT_LEFT, grid_y, CONTENT_WIDTH, cols, 0,
+                  test_r);
+    for (int i = 0; i < DISP_TEST_COUNT; i++)
+        button_init_full(&test_btns[i], test_r[i].x, test_r[i].y,
+                         test_r[i].w, test_r[i].h, disp_tests[i].name,
                          RGB(34, 34, 34), COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-    }
 
     /* ⚠️ THE RECEIPT, in the settings stack's shape.  Everything here hangs off
      * CONTENT_Y, which comes from a per-unit touch inset, so a row pushed past
@@ -444,7 +445,7 @@ static void display_page_layout(void) {
     {
         int clipped = 0;
         for (int i = 0; i < DISP_TEST_COUNT; i++)
-            if (text_measure_width(disp_tests[i].name, 2) > test_btns[i].width - 8)
+            if (!ui_label_fits(disp_tests[i].name, 2, test_btns[i].width))
                 clipped++;
         char edges[48], reach[48], cut[48];
         int value_x = CONTENT_LEFT + (CONTENT_WIDTH < 600 ? 150 : 270);   /* draw_info_row()'s */
