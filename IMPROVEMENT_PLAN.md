@@ -361,10 +361,16 @@ the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then
 
 ### F112. vnc_client: pad gaps left after the verified pad — open
 
-The pad (pointer, A/B drags, wheel, hold-Select, Settings navigation) is operator-verified. **Still open:** keyboard
-typing into the Settings keypads; the pad on the reconnect screen; and **[inferred, not reproduced]** a stray remote
-click if A or B is still held when leaving Settings and the session reconnects. **Done when** each of the three
-works or is shown to be unreachable. **Also:** the exit gesture reuses the input tester's exit methods
+The pad (pointer, A/B drags, wheel, hold-Select, Settings navigation) is operator-verified. Keyboard typing into the Settings
+keypads is built and deployed to `.188` (`vnc_key_char` / `vnc_kp_key` in `vnc_pad.c`); **awaiting the operator's panel check**:
+(1) HOST: type 192.168.1.5 and `:` (Shift+;), letters ignored, keypad digits work, Backspace deletes and repeats, Enter commits,
+Esc discards; (2) PORT: 5900, `.` `:` ignored, a 6th digit refused; (3) PASSWORD: abC1-_! with Shift, 8-char cap, either Shift
+key, the on-screen SHIFT affects taps only; (4) ENCODINGS: lowercase, space, `-` `_` `.`; digits and Shift+letter ignored;
+(5) arrows move focus, Space taps; (6) main screen Enter/Esc unchanged, typing does nothing; (7) pad A/B still work. Defaults
+taken: the keyboard types only while a keypad is open; the password stays plaintext (masking and 0600 are separate work);
+reconnect-screen B does nothing. **Still open:** the pad and keyboard on the reconnect screen; and **[inferred, not
+reproduced]** a stray remote click if A or B is still held when leaving Settings and the session reconnects (reproduce it
+first). **Done when** the checklist passes and each remaining item works or is shown to be unreachable. **Also:** the exit gesture reuses the input tester's exit methods
 (`native_apps/control_panel/input_page.c`): hold Esc on a keyboard (`:420`), hold left+right mouse buttons
 (`ui_chord_button`, `:403`), and on a pad hold Select or Start, the pad's Back (`:420`, `:457-460`); the held-key
 state is `UiHold` (`common/ui_focus.h:79`).
@@ -380,19 +386,16 @@ yet and nothing calls `gamepad_player()`, so the 1P/2P chooser is the first cons
 from it and a 2-player choice reads P1 and P2 from the slots. The seven games' current start pages all differ in
 layout and style; the rework unifies them (operator, 2026-10-04).
 
-### F129. Control panel System page: timezone selection and SSH mode toggle in progress
+### F129. Control panel System page: timezone and SSH toggle built, three checks left
 
-Part 1 is implemented (System page, `native_apps/control_panel/system_page.c`, pure logic in `sys_settings.c`): SSH mode
-read-only from `sshd_config`, UTC clock and RTC status, date/time editor whose SET confirms then runs `date -s` and
-`hwclock -w`. Operator panel check (2026-10-07) of the page: **needs timezone support** — the clock showed 10:40 when local
-time was 11:40. Measured: the device clock is correct (NTP), `/etc/localtime` points at `/usr/share/zoneinfo/America/Chicago` and
-the operator is on US Eastern. In progress: timezone selection on the page. Not verified by touch: SET, focus, portrait.
-
-**SSH mode toggle** (operator approved building and testing it on `.188`, 2026-10-07; `.188` measured `PasswordAuthentication yes`
-and `PubkeyAuthentication yes`; in progress). ⚠️ **Key-only must keep its guard**: `--ssh-auth=key` is refused unless a key login
-is proven first (`commissioning/CLAUDE.md`), and there is no serial console, so a panel toggle must not lock the
-operator out — a panel button cannot prove a key exists, so decide what it may do (switch only back to password).
-**Done when** the panel changes the SSH mode and the change survives a reboot, and the clock follows a chosen timezone.
+Built (`native_apps/control_panel/system_page.c`, pure logic in `sys_settings.c`): SSH mode toggle, clock in local time with
+abbreviation, date/time editor (SET runs `date -s` and `hwclock -w -u`), and a 10-zone curated timezone list whose APPLY
+writes `/etc/localtime` and `/etc/timezone` atomically (nothing in `device-files/` or `commissioning/` writes those files,
+measured by grep). Operator panel check 2026-10-07: timezone selection works; switching to KEY ONLY works. ⚠️ **`.188` is
+now in key-only sshd mode** (the operator switched it). **Remaining:** (1) the timezone confirm's second line overflowed the
+dialog; fixed (`ModalDialog` draws a too-wide line at scale 1) but the operator has not re-checked; (2) the PASSWORD
+direction of the SSH toggle is untested; (3) measured portrait receipt on `.188`: "system stack PAST CONTENT RIGHT, right
+430 of CONTENT_RIGHT 429" (1 px over; bottom +412 of 734). **Done when** those three are closed; then delete this entry.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
@@ -400,13 +403,6 @@ operator out — a panel button cannot prove a key exists, so decide what it may
 tied to rooms, since a BeagleBone target has nothing to do with rooms, and it fits a Steelcase-free distro/rootfs
 (F102) and the BeagleBone port (F106). Candidate names are open. **Done when** a name is chosen and the tree, docs,
 device paths and `LICENSE.md` follow it.
-
-### F136. Screen blanking after a configurable idle time — wake on D-pad and stick still open
-
-Implemented (`blank_minutes`, Display page SCREEN OFF cycler). Operator panel check (2026-10-07): works, and the waking tap works.
-**Remaining defect (measured by the operator):** the blank cancels and the backlight returns on a tap, a keyboard key, the mouse
-and controller A/B/X/Y, but **not on the D-pad or the analog stick**; it must wake on any input change. A code fix is in progress.
-**Done when** D-pad and stick wake the panel; then delete this entry.
 
 ## Structural and cleanup
 
@@ -459,24 +455,15 @@ on a line that also carries a key-binding marker (`Ctrl+`, `Alt+`, `Shift+`), or
 key table, is not a citation. ⚠️ Needs a control in both directions — a real bare citation must still fire,
 and it must fire in a file of the same kind, or the scan goes blind where it used to see.
 
-### C17. A layout rule for `control_panel` pages and future apps — open, operator request 2026-10-01, later
+### C17. A layout rule for `control_panel` pages and future apps — shared helper built, two steps left
 
-**Measured from the code.** Every page computes its own geometry and chooses its own font scale; the button
-widget draws at the scale it is given (`button_init_full`, `common/common.c`) with no automatic fit.
-`control_panel/input_page.c`'s TOUCH row is always one row of four and drops the whole row to scale 1 if any
-label exceeds `width-8`; its KBD/MOUSE/PAD row is one row of three by the same rule. `display_page.c`'s test
-buttons are the only flow layout (3 columns, falling back to 2, font kept) and it is private to that page. No
-shared flow or wrap helper exists in `common/`; `ui_layout.c` has grid and list helpers that no control-panel
-page uses.
-
-**Operator preference:** keep the font size and the button width and wrap buttons into rows, like a WPF flow
-container. **Question to settle with the operator:** one shared flow helper in `common/` for every app, or
-per-page code. ⚠️ **The Input page's portrait receipt reports "1 label(s) cut" and over-reports:** RESET GEOMETRY
-at scale 1 is 84 px against a limit of `bw-8` = 83 (`bw` 91), yet the operator saw it render correctly, so the
-`-8` allowance in that receipt is stricter than the drawing. Settle the allowance with the helper.
-
-**One related question, the operator's.** Whether to take up the deferred `dlopen`'d `CpPage` modules, which an
-out-of-tree page would need (design requirements in `native_apps/CLAUDE.md` -> *control_panel*).
+**Done so far.** `common/ui_flow.{c,h}` (`ui_flow_place` wraps buttons into rows; `ui_label_fits` is the ink-aware fit rule,
+ink = 6n*scale - scale with 4 px pad each side) is linked by `control_panel`, host test `tests/ui_flow_test.c`; the Input page
+uses it (touch band and testers keep scale 2 and wrap). Measured on `.188`: landscape unchanged (touch band 1 row, testers 1
+row, scale 2), portrait touch band 2 rows at scale 2, fits. Decisions taken as defaults: one shared helper in `common/`; wrap
+only on overflow; `dlopen`'d `CpPage` modules stay deferred (design requirements in `native_apps/CLAUDE.md` -> *control_panel*).
+**Remaining:** `display_page.c`'s private 3-to-2 column fallback moves onto `ui_flow_place`, and the operator looks at the
+Input page in portrait. **Done when** both are done; then delete this entry.
 
 ---
 
