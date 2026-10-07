@@ -232,6 +232,8 @@ static void drop_usb_node(VNCInput *input, int i) {
             (size_t)(n - i - 1) * sizeof(input->usb_node_buttons[0]));
     memmove(&input->usb_node_pad[i], &input->usb_node_pad[i + 1],
             (size_t)(n - i - 1) * sizeof(input->usb_node_pad[0]));
+    memmove(&input->usb_node_keys[i], &input->usb_node_keys[i + 1],
+            (size_t)(n - i - 1) * sizeof(input->usb_node_keys[0]));
     input->usb_node_count = input_scan_drop(input->usb_nodes, n, i);
 }
 
@@ -265,6 +267,7 @@ void vnc_input_scan_devices(VNCInput *input) {
         input->usb_node_buttons[i] =
             (nd->kind == INPUT_KIND_MOUSE) ? seed_mouse_buttons(nd->fd) : 0;
         memset(&input->usb_node_pad[i], 0, sizeof(input->usb_node_pad[i]));
+        memset(&input->usb_node_keys[i], 0, sizeof(input->usb_node_keys[i]));
         if (nd->kind == INPUT_KIND_PAD)
             seed_pad(input, i, now);
         DEBUG_PRINT("USB %s found: '%s' at %s",
@@ -350,7 +353,8 @@ static void release_remote_buttons(VNCInput *input);
 /* Forward one EV_KEY as a VNC key event, if it is a key with a keysym.  Esc is
  * withheld: a short tap is sent as down+up on its release, and a hold of
  * UI_HOLD_EXIT_MS opens Settings (pad_step() sees it complete). */
-static void forward_usb_key(VNCInput *input, const struct input_event *ev) {
+static void forward_usb_key(VNCInput *input, const struct input_event *ev,
+                            VncKeyHeld *held) {
     if (ev->code == KEY_ESC) {
         VncEsc e = vnc_esc_event(&input->kbd_esc, ev->value, get_ticks_ms());
         uint32_t keysym = evdev_to_keysym[KEY_ESC];
@@ -370,21 +374,49 @@ static void forward_usb_key(VNCInput *input, const struct input_event *ev) {
             /* ev.value: 1=press, 2=repeat, 0=release
              * Forward repeats as key-down for VNC text entry */
             vnc_input_send_key(input, keysym, ev->value != 0);
+            vnc_keys_mark(held, ev->code, ev->value != 0);
         }
     }
 }
 
+/* After SYN_DROPPED on a node that forwards keys: send key-up for every key
+ * this node sent down that the kernel now reports up (its release was in the
+ * discarded events), and drop an Esc hold the kernel no longer sees held.  That
+ * clears the hold timer WITHOUT the release event vnc_esc_event() would turn
+ * into a tap or an exit, so a lost Esc release is neither.  A key held the
+ * whole time stays down; one pressed inside the drop is not picked up (its
+ * press is lost, and a later release finds nothing tracked). */
+static void resync_keys(VNCInput *input, int fd, VncKeyHeld *held) {
+    unsigned long kernel[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+    int rel[VNC_KEYS_TRACKED];
+
+    memset(kernel, 0, sizeof(kernel));
+    if (ioctl(fd, EVIOCGKEY(sizeof(kernel)), kernel) < 0) return;
+    int n = vnc_keys_to_release(held, kernel, rel, VNC_KEYS_TRACKED);
+    for (int i = 0; i < n; i++)
+        vnc_input_send_key(input, evdev_to_keysym[rel[i]], false);
+    if (input->kbd_esc.down && !input_caps_test(kernel, KEY_ESC))
+        input->kbd_esc.down = false;
+}
+
 /* ── Poll one USB keyboard node and forward as VNC key events ───────────── */
 /* Returns false if the node has gone away (read fails with ENODEV). */
-static bool poll_usb_keyboard(VNCInput *input, int fd) {
+static bool poll_usb_keyboard(VNCInput *input, int idx) {
+    int fd = input->usb_nodes[idx].fd;
     struct input_event ev;
     ssize_t r;
+    InputSynDrop sd = { false, false };
 
     errno = 0;
-    while ((r = read(fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev))
+    while ((r = read(fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
+        if (input_syn_drop_skip(&sd, &ev)) continue;
         if (ev.type == EV_KEY)
-            forward_usb_key(input, &ev);
-    return !(r < 0 && errno == ENODEV);
+            forward_usb_key(input, &ev, &input->usb_node_keys[idx]);
+    }
+    bool alive = !(r < 0 && errno == ENODEV);
+    if (alive && sd.resync)
+        resync_keys(input, fd, &input->usb_node_keys[idx]);
+    return alive;
 }
 
 /* Move the one pointer (mice and pads share it), clamped to the desktop. */
@@ -425,9 +457,11 @@ static bool poll_usb_pad(VNCInput *input, int idx, uint32_t now) {
     VncPad *p = &input->usb_node_pad[idx];
     struct input_event ev;
     ssize_t r;
+    InputSynDrop sd = { false, false };
 
     errno = 0;
     while ((r = read(nd->fd, &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
+        if (input_syn_drop_skip(&sd, &ev)) continue;
         int code = ev.code;
         if (ev.type == EV_KEY)
             code = input_pad_key(nd->pad_layout, code);
@@ -442,7 +476,17 @@ static bool poll_usb_pad(VNCInput *input, int idx, uint32_t now) {
                                    input->mouse_button_mask);
         }
     }
-    return !(r < 0 && errno == ENODEV);
+    bool alive = !(r < 0 && errno == ENODEV);
+    if (alive && sd.resync) {
+        /* SYN_DROPPED: a release or a stick return may have been discarded
+         * with the overflow (input_scan.h).  seed_pad() is the open-time
+         * snapshot: it resets the node (buttons, Select's hold, carry), then
+         * takes the stick and d-pad from EVIOCGABS and the held A/B from
+         * EVIOCGKEY.  pad_step() sends the changed mask on this loop, so a
+         * lost release reaches the remote; Select is not re-armed. */
+        seed_pad(input, idx, now);
+    }
+    return alive;
 }
 
 /* ── Once per loop: pad motion, pad buttons, Select's hold ──────────────── */
@@ -524,7 +568,7 @@ static bool poll_usb_mouse(VNCInput *input, int idx) {
                 else               input->usb_node_buttons[idx] &= ~bit;
                 input->mouse_button_mask = usb_mouse_buttons(input);
             } else {
-                forward_usb_key(input, &ev);   /* a keyboard+touchpad combo node */
+                forward_usb_key(input, &ev, &input->usb_node_keys[idx]);   /* a keyboard+touchpad combo node */
             }
         }
     }
@@ -534,6 +578,7 @@ static bool poll_usb_mouse(VNCInput *input, int idx) {
          * (input_scan.h), so take the level from the kernel. */
         input->usb_node_buttons[idx] = seed_mouse_buttons(fd);
         input->mouse_button_mask = usb_mouse_buttons(input);
+        resync_keys(input, fd, &input->usb_node_keys[idx]);
     }
 
     /* Apply acceleration to accumulated movement */
@@ -567,7 +612,7 @@ static void poll_usb_devices(VNCInput *input) {
         bool alive = true;
 
         if (nd->kind == INPUT_KIND_KEYBOARD)
-            alive = poll_usb_keyboard(input, nd->fd);
+            alive = poll_usb_keyboard(input, i);
         else if (nd->kind == INPUT_KIND_MOUSE && have_remote)
             alive = poll_usb_mouse(input, i);
         else if (nd->kind == INPUT_KIND_PAD && have_remote)

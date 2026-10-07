@@ -8,6 +8,7 @@
 #include "../native_apps/common/touch_input.h"
 #include "../native_apps/common/input_scan.h"
 #include "vnc_pad.h"
+#include "vnc_key_sync.h"
 
 // Per-kind limit on USB input nodes held open (same as common/gamepad.c).
 // Three kinds: keyboards, mice and game pads.
@@ -52,6 +53,11 @@ typedef struct {
     // index-aligned like usb_node_buttons[].  A pad's held A/B are OR-ed into
     // mouse_button_mask with the mice's buttons.
     VncPad usb_node_pad[VNC_MAX_USB_NODES];
+
+    // Keys each node has sent to the remote as down (any node that forwards
+    // keys: a keyboard, or a mouse combo), index-aligned like the above.  After
+    // SYN_DROPPED the kernel's level decides which are still held.
+    VncKeyHeld usb_node_keys[VNC_MAX_USB_NODES];
     VncPadMap pad_map;          // native codes, from /etc/input_config.conf
     float pad_exit_progress;    // 0.0-1.0: the longest Select or keyboard Esc hold
     UiHold kbd_esc;             // a USB keyboard's Esc: tap goes to the remote, hold opens Settings

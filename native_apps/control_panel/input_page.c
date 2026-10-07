@@ -1239,6 +1239,7 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
     bool on[MT_SLOTS] = {false};
     int slot = 0, lx = 0, ly = 0, max_fingers = 0;
     bool seen_mt = false, running = true, held = false;
+    InputSynDrop sd = {0};
 
     const int W = fb->width, H = fb->height;
     int rgx = touch->raw_max_x - touch->raw_min_x; if (rgx <= 0) rgx = 4095;
@@ -1368,6 +1369,7 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
         struct input_event ev;
         while (read(touch->fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
             dirty = true;
+            if (input_syn_drop_skip(&sd, &ev)) continue;
             if (ev.type == EV_ABS) {
                 switch (ev.code) {
                 case ABS_MT_SLOT: slot = ev.value; seen_mt = true; break;
@@ -1388,6 +1390,41 @@ static void test_multitouch(Framebuffer *fb, TouchInput *touch) {
                 }
             }
             if (poll(&pfd, 1, 0) <= 0) break;
+        }
+
+        /* After a SYN_DROPPED the kernel discarded unread events, so a lift
+         * among them is gone and the slot would stay drawn as held.  Its own
+         * per-slot state survives: re-read every slot (tracking id < 0 is up),
+         * the current slot and the single-touch levels.  Waits for the torn
+         * packet's SYN_REPORT, which may arrive in a later read. */
+        if (sd.resync && !sd.dropping) {
+            sd.resync = false;
+            dirty = true;
+            struct { __u32 code; __s32 v[MT_SLOTS]; } rq;
+            bool ok = true;
+            rq.code = ABS_MT_TRACKING_ID;
+            if (ioctl(touch->fd, EVIOCGMTSLOTS(sizeof(rq)), &rq) == 0) {
+                for (int i = 0; i < MT_SLOTS; i++) on[i] = rq.v[i] >= 0;
+            } else {
+                ok = false;
+                for (int i = 0; i < MT_SLOTS; i++) on[i] = false;   /* unknown: up */
+            }
+            if (ok) {
+                rq.code = ABS_MT_POSITION_X;
+                if (ioctl(touch->fd, EVIOCGMTSLOTS(sizeof(rq)), &rq) == 0)
+                    for (int i = 0; i < MT_SLOTS; i++) rx[i] = rq.v[i];
+                rq.code = ABS_MT_POSITION_Y;
+                if (ioctl(touch->fd, EVIOCGMTSLOTS(sizeof(rq)), &rq) == 0)
+                    for (int i = 0; i < MT_SLOTS; i++) ry[i] = rq.v[i];
+            }
+            struct input_absinfo ai;
+            if (ioctl(touch->fd, EVIOCGABS(ABS_MT_SLOT), &ai) == 0) slot = ai.value;
+            if (ioctl(touch->fd, EVIOCGABS(ABS_X), &ai) == 0) lx = ai.value;
+            if (ioctl(touch->fd, EVIOCGABS(ABS_Y), &ai) == 0) ly = ai.value;
+            unsigned char keys[(BTN_TOUCH / 8) + 1];
+            memset(keys, 0, sizeof(keys));
+            if (ioctl(touch->fd, EVIOCGKEY(sizeof(keys)), keys) >= 0)
+                held = (keys[BTN_TOUCH / 8] >> (BTN_TOUCH % 8)) & 1;
         }
     }
     if (log) fclose(log);

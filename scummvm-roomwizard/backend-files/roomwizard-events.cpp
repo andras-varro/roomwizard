@@ -648,13 +648,25 @@ bool RoomWizardEventSource::pollKeyboardFd(int slot, Common::Event &event) {
 	// (e.g. EAGAIN from a previous poll) don't trigger false disconnect detection.
 	errno = 0;
 
+	// Per-slot state outlives this call: the loop returns on the first event,
+	// so a drop and the packet it tears can straddle several calls, and the keys
+	// believed held are what a resync has to compare the kernel's levels against.
+	static InputSynDrop sd[MAX_KEYBOARDS];
+	static unsigned long held[MAX_KEYBOARDS][INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+	const int LB = 8 * (int)sizeof(unsigned long);
+
 	struct input_event ev;
 	while (read(fd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+		if (input_syn_drop_skip(&sd[slot], &ev)) continue;
 		if (ev.type != EV_KEY) continue;
 
 		// value: 0=release, 1=press, 2=auto-repeat (ignored — ScummVM repeats internally)
 		if (ev.value == 2) continue;
 		bool pressed = (ev.value == 1);
+		if (ev.code <= KEY_MAX) {
+			if (pressed) held[slot][ev.code / LB] |=  (1UL << (ev.code % LB));
+			else         held[slot][ev.code / LB] &= ~(1UL << (ev.code % LB));
+		}
 
 		// Update modifier state
 		switch (ev.code) {
@@ -684,8 +696,45 @@ bool RoomWizardEventSource::pollKeyboardFd(int slot, Common::Event &event) {
 		return true;
 	}
 
+	// SYN_DROPPED (input_scan.h): a release may have been discarded with the
+	// overflow.  Every key held here that the kernel says is up gets its KEYUP,
+	// so a lost release leaves the key up instead of stuck down.  The ring is
+	// drained at this point, so the snapshot and the events agree.
+	if (sd[slot].resync && errno != ENODEV && errno != EBADF) {
+		sd[slot].resync = false;
+		unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+		memset(keys, 0, sizeof(keys));
+		if (ioctl(fd, EVIOCGKEY(sizeof(keys)), keys) >= 0) {
+			bool first = true;
+			Common::Event out;
+			for (int code = 0; code <= KEY_MAX; code++) {
+				if (!(held[slot][code / LB] & (1UL << (code % LB)))) continue;
+				if (input_caps_test(keys, code)) continue;
+				held[slot][code / LB] &= ~(1UL << (code % LB));
+				switch (code) {
+				case KEY_LEFTSHIFT: case KEY_RIGHTSHIFT: _modifierFlags &= ~Common::KBD_SHIFT; break;
+				case KEY_LEFTCTRL:  case KEY_RIGHTCTRL:  _modifierFlags &= ~Common::KBD_CTRL;  break;
+				case KEY_LEFTALT:   case KEY_RIGHTALT:   _modifierFlags &= ~Common::KBD_ALT;   break;
+				default: break;
+				}
+				KeyMapping km = mapLinuxKey(code, _modifierFlags);
+				if (km.keycode == Common::KEYCODE_INVALID) continue;
+				out.type = Common::EVENT_KEYUP;
+				out.kbdRepeat = false;
+				out.kbd.keycode = km.keycode;
+				out.kbd.ascii = km.ascii;
+				out.kbd.flags = _modifierFlags;
+				if (first) { event = out; first = false; }
+				else pushEvent(out);
+			}
+			if (!first) return true;
+		}
+	}
+
 	// Check for disconnect
 	if (errno == ENODEV || errno == EBADF) {
+		memset(held[slot], 0, sizeof(held[slot]));
+		sd[slot].dropping = sd[slot].resync = false;
 		debug("RoomWizard: keyboard disconnected (event%d)", _keyboardNodes[slot]);
 		close(fd);
 		fd = -1;
@@ -917,24 +966,43 @@ bool RoomWizardEventSource::pollGamepad(Common::Event &event) {
 	// Bit assignments: 0=South(A), 1=East(B), 2=West(X), 3=North(Y),
 	//                  4=Start, 5=Select, 6=TL, 7=TR
 
+	InputSynDrop sd = { false, false };
+
+	// The edge loop below returns on the first change, so with several buttons
+	// to release the rest would be lost with this call's locals.  While a
+	// resync is unfinished the next call compares every bit against the
+	// remembered kernel levels again.
+	static bool resyncPending = false;
+	static int resyncLevels = 0;
+	if (resyncPending) {
+		buttonState = resyncLevels;
+		buttonChanges = 0xff;
+	}
+
+	// Kernel key code -> button bit above, or -1.  The map holds native (xpad)
+	// codes; a hid-generic pad's are not.
+	auto padBit = [&](int kcode) -> int {
+		int code = input_pad_key((InputPadLayout)_gamepadLayout, kcode);
+		if (code == _gamepadMap.btnSouth)  return 0;
+		if (code == _gamepadMap.btnEast)   return 1;
+		if (code == _gamepadMap.btnWest)   return 2;
+		if (code == _gamepadMap.btnNorth)  return 3;
+		if (code == _gamepadMap.btnStart)  return 4;
+		if (code == _gamepadMap.btnSelect) return 5;
+		if (code == _gamepadMap.btnTL)     return 6;
+		if (code == _gamepadMap.btnTR)     return 7;
+		return -1;
+	};
+
 	while (read(_gamepadFd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
+		if (input_syn_drop_skip(&sd, &ev)) continue;
 		if (ev.type == EV_ABS) {
 			if (ev.code == _gamepadMap.stickXAxis)      _gamepadAxisX = ev.value;
 			else if (ev.code == _gamepadMap.stickYAxis)  _gamepadAxisY = ev.value;
 			else if (ev.code == _gamepadMap.hatXAxis)    _gamepadHatX  = ev.value;
 			else if (ev.code == _gamepadMap.hatYAxis)    _gamepadHatY  = ev.value;
 		} else if (ev.type == EV_KEY) {
-			// The map holds native (xpad) codes; a hid-generic pad's are not.
-			int code = input_pad_key((InputPadLayout)_gamepadLayout, ev.code);
-			int bit = -1;
-			if (code == _gamepadMap.btnSouth)  bit = 0;
-			if (code == _gamepadMap.btnEast)   bit = 1;
-			if (code == _gamepadMap.btnWest)   bit = 2;
-			if (code == _gamepadMap.btnNorth)  bit = 3;
-			if (code == _gamepadMap.btnStart)  bit = 4;
-			if (code == _gamepadMap.btnSelect) bit = 5;
-			if (code == _gamepadMap.btnTL)     bit = 6;
-			if (code == _gamepadMap.btnTR)     bit = 7;
+			int bit = padBit(ev.code);
 
 			if (bit >= 0) {
 				if (ev.value) buttonState |=  (1 << bit);
@@ -950,6 +1018,37 @@ bool RoomWizardEventSource::pollGamepad(Common::Event &event) {
 		_gamepadFd = -1;
 		_gamepadLayout = INPUT_PAD_NATIVE;
 		return false;
+	}
+
+	// SYN_DROPPED (input_scan.h): a release, or an axis returning to centre,
+	// may have been discarded with the overflow.  Take the button levels from
+	// the kernel and let the loop below emit whichever edges differ; refresh
+	// the sticks and hat from EVIOCGABS so a lost re-centre cannot leave the
+	// cursor drifting.
+	if (sd.resync) {
+		unsigned long keys[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+		memset(keys, 0, sizeof(keys));
+		if (ioctl(_gamepadFd, EVIOCGKEY(sizeof(keys)), keys) >= 0) {
+			int lvl = 0;
+			for (int c = BTN_MISC; c <= KEY_MAX; c++) {
+				if (!input_caps_test(keys, c)) continue;
+				int b = padBit(c);
+				if (b >= 0) lvl |= (1 << b);
+			}
+			buttonChanges |= (buttonState ^ lvl) | (_prevGamepadButtons ^ lvl);
+			buttonState = lvl;
+			resyncPending = true;
+			resyncLevels = lvl;
+		}
+		struct input_absinfo info;
+		if (_gamepadMap.stickXAxis >= 0 && ioctl(_gamepadFd, EVIOCGABS(_gamepadMap.stickXAxis), &info) == 0)
+			_gamepadAxisX = info.value;
+		if (_gamepadMap.stickYAxis >= 0 && ioctl(_gamepadFd, EVIOCGABS(_gamepadMap.stickYAxis), &info) == 0)
+			_gamepadAxisY = info.value;
+		if (_gamepadMap.hatXAxis >= 0 && ioctl(_gamepadFd, EVIOCGABS(_gamepadMap.hatXAxis), &info) == 0)
+			_gamepadHatX = info.value;
+		if (_gamepadMap.hatYAxis >= 0 && ioctl(_gamepadFd, EVIOCGABS(_gamepadMap.hatYAxis), &info) == 0)
+			_gamepadHatY = info.value;
 	}
 
 	// Process button changes
@@ -1042,6 +1141,7 @@ bool RoomWizardEventSource::pollGamepad(Common::Event &event) {
 		}
 	}
 	_prevGamepadButtons = buttonState;
+	resyncPending = false;
 
 	// Cursor movement from analog stick + D-pad
 	uint32 now = 0;

@@ -16,6 +16,8 @@
  * 5 the map is the shared parser's defaults; 6 the speed for a desktop width;
  * 7 the Settings screen's focus actions from pad and keyboard events.  8 keyboard typing into the keypads (vnc_key_char).
  * 10 a keyboard's Esc: tap goes to the remote, hold opens Settings.
+ * 11 which tracked keys a keyboard reader releases after SYN_DROPPED
+ * (vnc_key_sync.h, header-only).
  *
  * ⚠️ What it cannot see: which raw codes a real pad sends (input_pad_key()
  * and the scan are input_scan_test's), whether vnc_input.c feeds every event
@@ -23,6 +25,7 @@
  * pointer events — those are checked on the panel in a live session.
  */
 #include "vnc_pad.h"
+#include "vnc_key_sync.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -472,6 +475,61 @@ static void group10_esc(void) {
           "a hold spanning the wrap still completes");
 }
 
+/* After SYN_DROPPED: tracked keys the kernel reports up are released. */
+static void group11_key_release(void) {
+    unsigned long kernel[INPUT_SCAN_NLONGS(KEY_MAX + 1)];
+    VncKeyHeld h;
+    int out[VNC_KEYS_TRACKED];
+    int n;
+
+    /* a lost release: A was sent down, the kernel says nothing is held */
+    memset(&h, 0, sizeof(h));
+    memset(kernel, 0, sizeof(kernel));
+    vnc_keys_mark(&h, KEY_A, true);
+    n = vnc_keys_to_release(&h, kernel, out, VNC_KEYS_TRACKED);
+    CHECK(n == 1 && out[0] == KEY_A, "a tracked key the kernel reports up is released (n=%d)", n);
+    CHECK(!vnc_keys_held(&h, KEY_A), "a released key is no longer tracked");
+    CHECK(vnc_keys_to_release(&h, kernel, out, VNC_KEYS_TRACKED) == 0,
+          "a second pass releases nothing");
+
+    /* a key still held stays down; only the lost one goes, in ascending order */
+    vnc_keys_mark(&h, KEY_LEFTSHIFT, true);
+    vnc_keys_mark(&h, KEY_A, true);
+    vnc_keys_mark(&h, KEY_RIGHT, true);
+    input_caps_set(kernel, KEY_LEFTSHIFT);
+    n = vnc_keys_to_release(&h, kernel, out, VNC_KEYS_TRACKED);
+    CHECK(n == 2 && out[0] == KEY_A && out[1] == KEY_RIGHT,
+          "shift still held: only A and RIGHT released, in order (n=%d)", n);
+    CHECK(vnc_keys_held(&h, KEY_LEFTSHIFT), "a key the kernel holds stays tracked");
+
+    /* a key the kernel holds that was never sent is not ours to touch */
+    memset(&h, 0, sizeof(h));
+    memset(kernel, 0, sizeof(kernel));
+    input_caps_set(kernel, KEY_B);
+    CHECK(vnc_keys_to_release(&h, kernel, out, VNC_KEYS_TRACKED) == 0 && !vnc_keys_held(&h, KEY_B),
+          "an untracked held key: nothing released, still untracked");
+
+    /* both ends of the 256-code range, past the first long on 32-bit */
+    memset(kernel, 0, sizeof(kernel));
+    vnc_keys_mark(&h, 0, true);
+    vnc_keys_mark(&h, 255, true);
+    vnc_keys_mark(&h, 256, true);   /* no keysym slot: ignored */
+    n = vnc_keys_to_release(&h, kernel, out, VNC_KEYS_TRACKED);
+    CHECK(n == 2 && out[0] == 0 && out[1] == 255, "codes 0 and 255 released, 256 never tracked (n=%d)", n);
+
+    /* the output cap is honoured */
+    vnc_keys_mark(&h, 10, true);
+    vnc_keys_mark(&h, 20, true);
+    n = vnc_keys_to_release(&h, kernel, out, 1);
+    CHECK(n == 1 && out[0] == 10 && vnc_keys_held(&h, 20), "max 1: one released, the other kept tracked");
+
+    /* release then press again is tracked afresh */
+    vnc_keys_mark(&h, KEY_A, true);
+    vnc_keys_mark(&h, KEY_A, false);
+    CHECK(vnc_keys_to_release(&h, kernel, out, VNC_KEYS_TRACKED) == 1 && out[0] == 20,
+          "a key released normally is not released again");
+}
+
 int main(void) {
     group1_axis();
     group2_events();
@@ -483,6 +541,7 @@ int main(void) {
     group8_keychar();
     group9_kp();
     group10_esc();
+    group11_key_release();
     printf("vnc_pad_test: %d passed, %d failed\n", passes, fails);
     return fails ? 1 : 0;
 }
