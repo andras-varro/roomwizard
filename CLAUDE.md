@@ -376,7 +376,7 @@ its own manifests + PPM icons — this is how projects plug into the launcher wi
 `framebuffer.c` (double-buffered 800×480, bpp-aware primitives), `gamepad.c` (**the** unified input
 abstraction across touch + USB keyboard + mouse + Xbox pad — new apps should use this rather than
 reading evdev directly), `touch_input.c`, `touch_calib.c`, `hardware.c`, `common.c`, `ui_layout.c`,
-`audio.c`, `audio_gen.c`, `config.c`, `keyboard.c`, `highscore.c`, `ppm.c`, `logger.c`, `ui_focus.c`, `pointer.c`. The
+`audio.c`, `audio_gen.c`, `config.c`, `keyboard.c`, `highscore.c`, `ppm.c`, `logger.c`, `ui_focus.c`, `pointer.c`, `start_menu.c`. The
 per-function table and what never to do instead: `native_apps/CLAUDE.md`.
 
 ScummVM has its own evdev reader (`roomwizard-events.cpp`, on the shared `input_scan.c`) but **not its own audio**: `oss-mixer.cpp` opens no `/dev/dsp` and drives the device through `common/audio_out.o` (`configure.patch`; measured by grep of `backend-files/`); it never links `audio.o`.

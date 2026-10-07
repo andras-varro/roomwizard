@@ -29,9 +29,7 @@ logger.o`; `control_panel` also links `GAMEPAD_OBJ` and `ui_focus.o`; the two to
 `$CALIB_OBJ` = `touch_calib.o`. Add new objects to `build-and-deploy.sh`. `audio_gen.o` is not
 optional — `audio.c` calls into it for every frame count, byte count, envelope and write.
 
-**A new *binary* goes in `GAMES_BINARIES` and nowhere else** (root `../CLAUDE.md` for what that array
-drives). It used to be two hand-written lists and one binary was missing from the `chmod` one — a defect
-neither testable nor visible on this host. Do not add a second list.
+**A new *binary* goes in `GAMES_BINARIES` and nowhere else** (root `../CLAUDE.md` for what that array drives). Do not add a second list.
 
 **The deploy verifies itself.** After `chmod`, every executable is md5-compared against `build/` and a
 mismatch is fatal with a per-file diff — a truncated scp, a full filesystem and a surviving process
@@ -52,6 +50,7 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 | `ui_layout.c`, `ui_flow.c` | grid/list layout; `ui_flow_place` wraps buttons into rows, `ui_label_fits` is the ink-width fit rule (used by the Input and Display pages; host test `tests/ui_flow_test.c`) | manual pixel arithmetic |
 | `icon_grid.c` | the paged icon-tile grid (layout + receipt, tile, paging, hit-test, 96 px icon load) — the launcher's, and the home screen of any tile menu; `icon_grid_nav()` / `icon_grid_nav_exit()` are the one keyboard/pad navigation for both (reading order across pages, Left/Right wrap last<->first, Up from a top row reaches the exit X); **`IconGridFocus`** (`icon_grid_focus_init/_dir/_frame/_land`, pure, `icon_grid_focus_test.c`) is the one ring-visibility/selection state of both homes: a touch press hides the ring and keeps the selection, the first nav key reveals without moving, one direction per frame (U>D>L>R), a touch page flip re-anchors so Enter never acts on an unseen tile, Enter with the ring hidden only reveals, returning to home lands on the tile used. Both homes act on touch **release** over the same tile; Esc/Backspace/pad Select-Start on home = leave (launcher power dialog, Control Panel quits); ring only, no tile highlight, no key-hint line; the mouse acts through `pointer.c` | a second tile grid or a per-app `focus_shown`; the launcher's frame was md5-identical before and after the extraction |
 | `ui_focus.c` | pure (no framebuffer, no widget type): spatial focus `ui_focus_move()` (nearest centre in the pressed direction, wraps at the edges), the synthetic tap `UiTap` (press frame then release frame at the focused rect's centre) and `ui_hold_progress()` hold timing, `ui_chord_button()`/`ui_hold_either()` (the mouse tester's two-button hold); linked by `control_panel` and `vnc_client` (the pad hold-Select and Settings focus); tests `ui_focus_test.c`, `icon_grid_nav_test.c` | a per-page focus walk, or a page that reads keys to activate its own widgets |
+| `start_menu.c` | the arcade start menu and attract cycle (MENU, DEMO, SCORES); per-game entries; the pure core is `start_menu_step` (`tests/start_menu_test.c`) | a loop that skips OR-ing `start_menu_needs_redraw()` into its redraw test: the marker freezes |
 | `audio.c` | beeps, tones, streaming, the per-frame mix pump | opening `/dev/dsp` yourself |
 | `audio_gen.c` | the audio logic with no device in it: frame/byte arithmetic, the tone envelope, the one gliding oscillator, the mix bus, mono→interleaved, the frame-aligned write loop | a second sine loop, a `frames * 4` with the channel count spelled into the constant, or an audio thread |
 | `audio_wav.c` | the one streaming RIFF reader: chunk walk, `(L+R)/2` downmix, the `AudioVoiceFill` adapter | assuming a 44-byte header, or loading a whole file to play it |

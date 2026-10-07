@@ -341,15 +341,24 @@ rest committed as bare PPMs with no generator — and collected by the `*//*.ppm
 the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then delete the three old scripts.
 **Done when** the launcher grid on the panel reads as the same family as the Control Panel's. Operator 2026-10-07 also wants a better icon for the Control Panel's System page, done with this rework: its page has `.icon = NULL` (`system_page.c:563`) and `ICONS` in `gen_cp_icons.py:178` has no System entry.
 
-### F118. An arcade-style start menu shared by all the games — open, designed, not started, operator request 2026-10-04
+### F118. An arcade-style start menu shared by all the games — open, step 1 of 7 done, operator request 2026-10-04
 
-Replaces each game's green START button with one menu widget in `native_apps/common/` (not seven copies). The selected
-item is drawn like `> Start <` and the marker blinks slowly. Ping pattern: a ping on each of 3 blinks, then 3 silent
-blinks, then repeat; the pings run on the game clock. Entries are per game, and selection works by pad, keyboard and
-touch. It is the intended home for per-play choices: a 1 player / 2 player choice (reads the Input page's player slots). **Also owns "games honour the player slots"** : no game has a multiplayer mode
-yet and nothing calls `gamepad_player()`, so the 1P/2P chooser is the first consumer. **Done when** every game starts
-from it and a 2-player choice reads P1 and P2 from the slots. The seven games' current start pages all differ in
-layout and style; the rework unifies them (operator, 2026-10-04).
+Step 1 is done: the widget is `native_apps/common/start_menu.h`/`.c` (`StartMenu`; `start_menu_step` is the pure, device-free
+core, `start_menu_update`/`start_menu_draw` the rest; `audio_ping` in `audio.h`), host test `native_apps/tests/start_menu_test.c`.
+No game uses it yet and its draw has not been seen on the panel. Operator decisions 2026-10-07: **entries are per game** (no 1P/2P
+entry unless the game has a 2-player mode; pong is the trial, P2 drives the right paddle instead of the AI; no DIFFICULTY entry
+unless the game has difficulty). Platformer: EASY replaces TRAINING, else NORMAL. Brick breaker: EASY replaces TEST mode, else
+NORMAL. Snake: EASY is 1/2 the current speed, NORMAL 3/4, HARD the current speed. **Pings:** 3 on, 3 off, stop after 60 s with no
+input; any navigation input restarts the 60 s. **Attract mode** is part of this entry: after 15 s idle the screen cycles MENU ->
+DEMO -> SCORES -> MENU, 15 s each, forever; a demo ends early when its AI dies (`start_menu_demo_over`); any input returns to MENU
+and is swallowed. **Sound:** silent after 60 s idle; within the first 60 s a game may play its music bed in the demo
+(`start_menu_sound_allowed`). **Demo AI**, best-effort per game: pong both paddles on the existing AI; brick paddle follows the
+ball; snake greedy to food avoiding itself; samegame largest group; tetris simple placement score; frogger hop when the lane is
+clear; platformer run right and jump. The backlight-blanking idle setting wins: no rendering while blanked [inferred design, not
+built]. **Order:** pilot snake (menu + difficulty), pong (1P/2P + demo), tetris + frogger, samegame + platformer, brick_breaker
+(high score as subtitle), per-game demos, then retire `screen_draw_welcome*` (`start_menu.c`'s `sm_draw_block` duplicates
+`common.c`'s line splitter; merge it then). **Done when** every game starts from the menu, 2-player pong reads P1/P2 from the
+slots, and the attract cycle runs on the panel.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 
