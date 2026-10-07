@@ -483,7 +483,10 @@ static bool in_rect(int x, int y, int rx, int ry, int rw, int rh) {
 
 /*
  * Show the reconnect UI screen and wait for countdown expiry, user
- * pressing [CONNECT NOW], or user pressing [CANCEL].
+ * pressing [CONNECT NOW], or user pressing [CANCEL].  Touch, a game pad
+ * (d-pad / stick move the focus ring, A activates, B cancels), a USB keyboard
+ * (arrows, Enter / Space, Esc) and a mouse (arrow, click acts on release) all
+ * work.
  *
  * Returns:
  *   1 = user pressed Connect Now (or countdown expired) → try reconnect
@@ -502,7 +505,31 @@ static int reconnect_ui(int attempt, int wait_seconds) {
     int remaining = wait_seconds;
     int drawn_remaining = -1;       /* != remaining, so the first pass draws */
 
-    while (g_running && remaining >= 0) {
+    /* Pad, keyboard and mouse, through the same VncNavInput the Settings screen
+     * uses.  No session holds any USB node here, so this opens its own and
+     * seeds whatever is already held (A or B from the session or Settings that
+     * led here, a mouse button): none of it acts until released and pressed
+     * again. */
+    VncNavInput nav;
+    vnc_nav_open(&nav);
+    nav.kp_mode = -1;
+    bool mouse_was_down = nav.ptr_down;   /* held on entry: no press edge */
+    bool mouse_armed = false;             /* a press was seen; its release acts */
+    bool focus_on = false;                /* ring hidden until the first nav input */
+    bool ptr_on = false;
+    int  ptr_x = nav.ptr_x, ptr_y = nav.ptr_y;
+    int  focus = 0;
+    int  decided = -2;                    /* -2: still waiting, else the return value */
+    /* Snapshot of what the screen last showed beyond the countdown */
+    bool d_focus_on = false, d_ptr_on = false;
+    int  d_focus = -1, d_ptr_x = -1, d_ptr_y = -1;
+
+    /* Left to right; the focus order and the return code of each button. */
+    static const int btn_code[3] = { 0, 2, 1 };   /* CANCEL, SETTINGS, CONNECT */
+    const int btn_x[3] = { RECONNECT_BTN_CANCEL_X, RECONNECT_BTN_SETTINGS_X,
+                           RECONNECT_BTN_CONNECT_X };
+
+    while (g_running && remaining >= 0 && decided == -2) {
         /* Poll touch — trigger buttons on finger-up (release),
          * not finger-down, to avoid accidental activations.        */
         int tx = -1, ty = -1;
@@ -521,23 +548,72 @@ static int reconnect_ui(int attempt, int wait_seconds) {
          * bezel margins are and whatever the panel's dead band turns out to be. */
         int btn_y = SCREEN_SAFE_BOTTOM - RECONNECT_BTN_H - RECONNECT_BTN_BOTTOM_MARGIN;
 
-        if (tx >= 0) {
-            if (in_rect(tx, ty, RECONNECT_BTN_CANCEL_X, btn_y,
-                        RECONNECT_BTN_W, RECONNECT_BTN_H)) {
-                LOG_INFO(&g_logger, "Reconnect CANCEL hit at (%d,%d)", tx, ty);
-                return 0;
-            }
-            if (in_rect(tx, ty, RECONNECT_BTN_SETTINGS_X, btn_y,
-                        RECONNECT_BTN_W, RECONNECT_BTN_H)) {
-                LOG_INFO(&g_logger, "Reconnect SETTINGS hit at (%d,%d)", tx, ty);
-                return 2;
-            }
-            if (in_rect(tx, ty, RECONNECT_BTN_CONNECT_X, btn_y,
-                        RECONNECT_BTN_W, RECONNECT_BTN_H)) {
-                LOG_INFO(&g_logger, "Reconnect CONNECT NOW hit at (%d,%d)", tx, ty);
-                return 1;
+        UiRect rects[3];
+        for (int i = 0; i < 3; i++)
+            rects[i] = (UiRect){ btn_x[i], btn_y, RECONNECT_BTN_W, RECONNECT_BTN_H };
+
+        /* Pad and keyboard: the first move or activate only shows the ring; a
+         * finger hides it.  B / Esc is CANCEL.  A press edge is required
+         * (vnc_nav_poll), so a button held at entry never acts. */
+        VncNav acts[16];
+        char   chs[16];
+        int nact = vnc_nav_poll(&nav, acts, chs, 16);
+        bool finger = g_touch_ok && (tx >= 0 || touch_get_state(&g_touch).held);
+        if (finger) {
+            focus_on = false;
+            ptr_on = false;
+        }
+
+        /* The mouse is a finger at the pointer: a click acts on release over
+         * the button under the arrow, as the Settings screen does. */
+        if (nav.ptr_moved) {
+            ptr_on = true;
+            ptr_x = nav.ptr_x;
+            ptr_y = nav.ptr_y;
+        }
+        if (finger) {
+            mouse_armed = false;
+        } else if (nav.ptr_down && !mouse_was_down) {
+            mouse_armed = true;
+            focus_on = false;
+        } else if (!nav.ptr_down && mouse_was_down && mouse_armed) {
+            mouse_armed = false;
+            tx = nav.ptr_x;
+            ty = nav.ptr_y;
+        }
+        mouse_was_down = nav.ptr_down;
+
+        for (int i = 0; i < nact && decided == -2 && !finger && !mouse_armed; i++) {
+            UiDir d;
+            if (vnc_nav_dir(acts[i], &d)) {
+                if (focus_on)
+                    focus = ui_focus_move(rects, 3, focus, d);
+                focus_on = true;        /* the first press only shows the ring */
+                ptr_on = false;
+            } else if (acts[i] == VNC_NAV_ACTIVATE) {
+                if (focus_on && focus >= 0 && focus < 3) {
+                    LOG_INFO(&g_logger, "Reconnect button %d activated by pad/keyboard", focus);
+                    decided = btn_code[focus];
+                }
+                focus_on = true;
+                ptr_on = false;
+            } else if (acts[i] == VNC_NAV_BACK) {
+                LOG_INFO(&g_logger, "Reconnect CANCEL by pad/keyboard back");
+                decided = 0;
             }
         }
+
+        if (decided == -2 && tx >= 0) {
+            for (int i = 0; i < 3; i++) {
+                if (in_rect(tx, ty, rects[i].x, rects[i].y, rects[i].w, rects[i].h)) {
+                    LOG_INFO(&g_logger, "Reconnect button %d hit at (%d,%d)", i, tx, ty);
+                    decided = btn_code[i];
+                    break;
+                }
+            }
+        }
+        if (decided != -2)
+            break;
 
         /* ── Draw screen, only when it actually changed ───────────
          * Nothing on this screen moves except the one-second countdown and its
@@ -545,7 +621,9 @@ static int reconnect_ui(int attempt, int wait_seconds) {
          * surface plus three buttons every 33 ms — ~15 % of the single core for a
          * static image.  Touch still polls at 30 Hz above, so latency is
          * unchanged. */
-        if (remaining != drawn_remaining) {
+        if (remaining != drawn_remaining || focus_on != d_focus_on ||
+            (focus_on && focus != d_focus) || ptr_on != d_ptr_on ||
+            (ptr_on && (ptr_x != d_ptr_x || ptr_y != d_ptr_y))) {
             vnc_renderer_clear_screen(&g_fb);
 
             draw_centered_text(&g_fb, 100, "CONNECTION LOST", RGB565_RED, 3);
@@ -585,8 +663,18 @@ static int reconnect_ui(int attempt, int wait_seconds) {
                         RECONNECT_BTN_W, RECONNECT_BTN_H,
                         "CONNECT NOW", RGB565(0, 60, 0), RGB565_GREEN);
 
+            if (focus_on && focus >= 0 && focus < 3)
+                vnc_draw_focus_ring(&g_fb, &rects[focus]);
+            if (ptr_on)
+                vnc_draw_pointer(&g_fb, ptr_x, ptr_y);
+
             fb_swap(&g_fb);
             drawn_remaining = remaining;
+            d_focus_on = focus_on;
+            d_focus = focus;
+            d_ptr_on = ptr_on;
+            d_ptr_x = ptr_x;
+            d_ptr_y = ptr_y;
         }
 
         /* Update countdown */
@@ -599,7 +687,9 @@ static int reconnect_ui(int attempt, int wait_seconds) {
         usleep(33000);
     }
 
+    vnc_nav_close(&nav);
     if (!g_running) return -1;
+    if (decided != -2) return decided;
     return 1;   /* countdown expired → try connecting */
 }
 

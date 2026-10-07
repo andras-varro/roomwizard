@@ -841,12 +841,15 @@ static void draw_focus(SettingsState *st) {
     int back;
     int n = focus_rects(st, r, &back);
     if (!st->focus_on || st->focus < 0 || st->focus >= n) return;
-    const UiRect *f = &r[st->focus];
+    vnc_draw_focus_ring(st->fb, &r[st->focus]);
+}
+
+void vnc_draw_focus_ring(Framebuffer *fb, const UiRect *f) {
     const uint16_t c = RGB565(0, 255, 255);
-    vnc_renderer_fill_rect(st->fb, f->x, f->y, f->w, 3, c);
-    vnc_renderer_fill_rect(st->fb, f->x, f->y + f->h - 3, f->w, 3, c);
-    vnc_renderer_fill_rect(st->fb, f->x, f->y, 3, f->h, c);
-    vnc_renderer_fill_rect(st->fb, f->x + f->w - 3, f->y, 3, f->h, c);
+    vnc_renderer_fill_rect(fb, f->x, f->y, f->w, 3, c);
+    vnc_renderer_fill_rect(fb, f->x, f->y + f->h - 3, f->w, 3, c);
+    vnc_renderer_fill_rect(fb, f->x, f->y, 3, f->h, c);
+    vnc_renderer_fill_rect(fb, f->x + f->w - 3, f->y, 3, f->h, c);
 }
 
 /* The mouse pointer: a 9x13 arrow, hot spot at its tip (top-left), white with
@@ -855,6 +858,10 @@ static void draw_focus(SettingsState *st) {
  * common/pointer.c, which works at 32bpp over a saved copy, whereas this screen
  * repaints in full on every change anyway. */
 static void draw_pointer(SettingsState *st) {
+    if (st->ptr_on) vnc_draw_pointer(st->fb, st->ptr_x, st->ptr_y);
+}
+
+void vnc_draw_pointer(Framebuffer *fb, int px, int py) {
     static const char *const arrow[] = {
         "B",
         "BB",
@@ -870,16 +877,15 @@ static void draw_pointer(SettingsState *st) {
         "BB  BWB",
         "B    BB",
     };
-    Framebuffer *fb = st->fb;
-    if (!st->ptr_on || !fb || !fb->back_buffer) return;
+    if (!fb || !fb->back_buffer) return;
     uint16_t *buf = (uint16_t *)fb->back_buffer;
     const int sw = (int)fb->width;
     const int sh = (int)fb->height;
     for (int r = 0; r < (int)(sizeof(arrow) / sizeof(arrow[0])); r++) {
-        int y = st->ptr_y + r;
+        int y = py + r;
         if (y < 0 || y >= sh) continue;
         for (int c = 0; arrow[r][c]; c++) {
-            int x = st->ptr_x + c;
+            int x = px + c;
             if (x < 0 || x >= sw || arrow[r][c] == ' ') continue;
             buf[y * sw + x] = (arrow[r][c] == 'W') ? RGB565_WHITE : RGB565(0, 0, 0);
         }
