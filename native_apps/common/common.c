@@ -711,7 +711,10 @@ void modal_dialog_draw(ModalDialog *dlg, Framebuffer *fb) {
             size_t n = nl ? (size_t)(nl - line) : strlen(line);
             memcpy(buf, line, n);
             buf[n] = '\0';
-            text_draw_centered(fb, fb->width / 2, y, buf, dlg->message_color, 2);
+            /* A line too wide for the box drops to scale 1 rather than
+             * spilling over its edges; the 10 px each side is the frame. */
+            int ms = (text_measure_width(buf, 2) <= dw - 20) ? 2 : 1;
+            text_draw_centered(fb, fb->width / 2, y, buf, dlg->message_color, ms);
             y += 22;
             line = nl ? nl + 1 : NULL;
         }
