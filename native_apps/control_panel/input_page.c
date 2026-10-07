@@ -25,6 +25,7 @@
 #include "cp_ui.h"
 #include "../common/common.h"
 #include "../common/input_scan.h"
+#include "../common/ui_flow.h"
 
 #include <fcntl.h>
 #include <linux/input.h>
@@ -500,8 +501,8 @@ static Button *const touch_btns[TOUCH_SLOTS] = {
     [TOUCH_SLOT_MULTI] = &input_btn_multitouch,
     [TOUCH_SLOT_RESET] = &input_btn_reset_geom,
 };
-/* At most 14 characters: a landscape quarter (184 px) holds that at scale 2,
- * a portrait quarter (~94 px) at scale 1. */
+/* At most 14 characters: a landscape quarter (184 px) holds that at scale 2;
+ * portrait wraps them into rows instead of shrinking the font. */
 static const char *const touch_labels[TOUCH_SLOTS] = {
     [TOUCH_SLOT_CALIB] = "CALIBRATE",
     [TOUCH_SLOT_DIAG]  = "DIAGNOSTIC",
@@ -521,8 +522,25 @@ static const uint32_t touch_colors[TOUCH_SLOTS] = {
 static int sec_touch_y;       /* the touch tools' section header */
 static int touch_scale;       /* their row's text scale, see layout */
 static int sec_test_y;        /* the testers' section header */
-static int count_y;           /* the "N FOUND" line under each button */
+static int count_y[3];        /* the "N FOUND" line under each tester button */
 static int test_scale;        /* the row's text scale, see layout */
+static int touch_rows, test_rows;   /* rows the flow used, see layout */
+static int touch_h;           /* the touch band's height with those rows */
+
+/* Rows are where a band wraps, never what its font does: the button keeps
+ * scale 2 and widens to the longest label (ui_label_fits is the one rule). */
+#define INPUT_TEST_ROW_GAP 26   /* under a tester button: its count line, then air */
+
+/* The width every button of a band takes at scale: the share the row would
+ * give it, widened to the longest label.  Never narrower than the share, so a
+ * band that fits today is unchanged. */
+static int band_item_w(const char *const *labels, int n, int share, int scale) {
+    int w = share;
+    for (int i = 0; i < n; i++)
+        if (labels[i])
+            while (!ui_label_fits(labels[i], scale, w)) w++;
+    return w;
+}
 
 /* ── PLAYERS: which pad or keyboard is P1..P4 ───────────────────────────── */
 /* One Cycler per player slot.  Its entries are AUTO (unpinned), then every
@@ -636,38 +654,62 @@ static bool player_step(Config *cfg, int slot, int dir) {
  * a third for the testers — up to INPUT_BTN_MAX_W, centred under its header. */
 static void input_page_layout(void) {
     sec_touch_y = CONTENT_Y + 2;
+    int touch_by = sec_touch_y + 26 + INPUT_CALIB_ROW_H;
+    int touch_bw = (CONTENT_WIDTH - (TOUCH_SLOTS - 1) * INPUT_BTN_GAP) / TOUCH_SLOTS;
+    if (touch_bw > INPUT_BTN_MAX_W) touch_bw = INPUT_BTN_MAX_W;
+    int test_bw = (CONTENT_WIDTH - 2 * INPUT_BTN_GAP) / 3;
+    if (test_bw > INPUT_BTN_MAX_W) test_bw = INPUT_BTN_MAX_W;
+    player_cols = CONTENT_WIDTH >= 600 ? 2 : 1;
+    int player_rows = (INPUT_SLOTS + player_cols - 1) / player_cols;
+
+    /* Two passes.  Pass 0 keeps scale 2 and wraps; it is kept unless the stack
+     * then runs past CONTENT_H, or a single button per row still cannot hold
+     * its label at scale 2.  Pass 1 is the old shape: scale 1, one row each. */
+    int touch_w = 0, test_w = 0;
+    for (int pass = 0; pass < 2; pass++) {
+        int sc = pass == 0 ? 2 : 1;
+        touch_scale = test_scale = sc;
+        touch_w = band_item_w(touch_labels, TOUCH_SLOTS, touch_bw, sc);
+        test_w  = band_item_w(test_labels, 3, test_bw, sc);
+        if (pass == 0 && (touch_w > CONTENT_WIDTH || test_w > CONTENT_WIDTH)) continue;
+        UiRect probe[TOUCH_SLOTS];
+        touch_rows = ui_flow_place(TOUCH_SLOTS, touch_w, INPUT_BTN_H, INPUT_BTN_GAP,
+                                   INPUT_BTN_GAP, CONTENT_LEFT, touch_by,
+                                   CONTENT_WIDTH, TOUCH_SLOTS, 1, probe);
+        test_rows = ui_flow_place(3, test_w, INPUT_BTN_H, INPUT_BTN_GAP,
+                                  INPUT_TEST_ROW_GAP, CONTENT_LEFT, 0,
+                                  CONTENT_WIDTH, 3, 1, probe);
+        touch_h = INPUT_TOUCH_H + (touch_rows - 1) * (INPUT_BTN_H + INPUT_BTN_GAP);
+        int players_y = CONTENT_Y + 2 + touch_h + 26
+                      + (test_rows - 1) * (INPUT_BTN_H + INPUT_TEST_ROW_GAP)
+                      + INPUT_BTN_H + 8 + 8 + 10;
+        int bottom = players_y + 26 + (player_rows - 1) * (PLAYER_ROW_H + PLAYER_ROW_GAP)
+                   + PLAYER_ROW_H - CONTENT_Y;
+        if (bottom <= CONTENT_H) break;
+    }
     {
-        int by = sec_touch_y + 26 + INPUT_CALIB_ROW_H;
-        int bw = (CONTENT_WIDTH - (TOUCH_SLOTS - 1) * INPUT_BTN_GAP) / TOUCH_SLOTS;
-        if (bw > INPUT_BTN_MAX_W) bw = INPUT_BTN_MAX_W;
-        int sx = CONTENT_LEFT + (CONTENT_WIDTH - (TOUCH_SLOTS * bw
-                                 + (TOUCH_SLOTS - 1) * INPUT_BTN_GAP)) / 2;
-        /* As the testers' row: one scale for the whole row. */
-        touch_scale = 2;
-        for (int i = 0; i < TOUCH_SLOTS; i++)
-            if (touch_labels[i] && text_measure_width(touch_labels[i], 2) > bw - 8)
-                touch_scale = 1;
+        UiRect r[TOUCH_SLOTS];
+        ui_flow_place(TOUCH_SLOTS, touch_w, INPUT_BTN_H, INPUT_BTN_GAP, INPUT_BTN_GAP,
+                      CONTENT_LEFT, touch_by, CONTENT_WIDTH, TOUCH_SLOTS, 1, r);
         for (int i = 0; i < TOUCH_SLOTS; i++)
             if (touch_btns[i])
-                button_init_full(touch_btns[i], sx + i * (bw + INPUT_BTN_GAP), by, bw,
-                                 INPUT_BTN_H, touch_labels[i],
-                                 touch_colors[i], COLOR_WHITE, RGB(0,200,80), touch_scale);
+                button_init_full(touch_btns[i], r[i].x, r[i].y, r[i].w, r[i].h,
+                                 touch_labels[i], touch_colors[i], COLOR_WHITE,
+                                 RGB(0,200,80), touch_scale);
     }
-    sec_test_y = CONTENT_Y + 2 + INPUT_TOUCH_H;
+    sec_test_y = CONTENT_Y + 2 + touch_h;
     int by = sec_test_y + 26;
-    int bw = (CONTENT_WIDTH - 2 * INPUT_BTN_GAP) / 3;
-    if (bw > INPUT_BTN_MAX_W) bw = INPUT_BTN_MAX_W;
-    int sx = CONTENT_LEFT + (CONTENT_WIDTH - (3 * bw + 2 * INPUT_BTN_GAP)) / 2;
-    /* Scale 2 where it fits; a portrait third is too narrow for "MOUSE TEST"
-     * at scale 2, so the whole row drops to 1 rather than one button alone. */
-    test_scale = 2;
-    for (int i = 0; i < 3; i++)
-        if (text_measure_width(test_labels[i], 2) > bw - 8) test_scale = 1;
-    for (int i = 0; i < 3; i++)
-        button_init_full(test_btns[i], sx + i * (bw + INPUT_BTN_GAP), by, bw,
-                         INPUT_BTN_H, test_labels[i],
-                         BTN_COLOR_PRIMARY, COLOR_WHITE, RGB(0,200,80), test_scale);
-    count_y = by + INPUT_BTN_H + 8;
+    {
+        UiRect r[3];
+        ui_flow_place(3, test_w, INPUT_BTN_H, INPUT_BTN_GAP, INPUT_TEST_ROW_GAP,
+                      CONTENT_LEFT, by, CONTENT_WIDTH, 3, 1, r);
+        for (int i = 0; i < 3; i++) {
+            button_init_full(test_btns[i], r[i].x, r[i].y, r[i].w, r[i].h,
+                             test_labels[i], BTN_COLOR_PRIMARY, COLOR_WHITE,
+                             RGB(0,200,80), test_scale);
+            count_y[i] = r[i].y + INPUT_BTN_H + 8;
+        }
+    }
     button_init_full(&input_btn_kback, SCREEN_SAFE_LEFT+10, SCREEN_SAFE_TOP+8,
                      90, 40, "< BACK", BTN_COLOR_WARNING, COLOR_WHITE, RGB(255,200,0), 2);
     button_init_full(&input_btn_mback, SCREEN_SAFE_LEFT+10, SCREEN_SAFE_TOP+8,
@@ -678,8 +720,7 @@ static void input_page_layout(void) {
     /* PLAYERS under the testers: two columns where the content is landscape
      * wide (four full-width rows would end ~20 px past a 375 px CONTENT_H),
      * one column of four in portrait.  Row-major, so P1 P2 / P3 P4. */
-    sec_players_y = count_y + 8 + 10;
-    player_cols = CONTENT_WIDTH >= 600 ? 2 : 1;
+    sec_players_y = count_y[2] + 8 + 10;
     {
         int col_w = (CONTENT_WIDTH - (player_cols - 1) * PLAYER_COL_GAP) / player_cols;
         for (int s = 0; s < INPUT_SLOTS; s++) {
@@ -702,7 +743,10 @@ static void input_page_layout(void) {
     {
         const Cycler *last = &player_cyc[INPUT_SLOTS - 1];
         int bottom = last->y + last->height - CONTENT_Y;
-        int right  = input_btn_gtest.x + input_btn_gtest.width;
+        int right  = 0;
+        for (int i = 0; i < 3; i++)
+            if (test_btns[i]->x + test_btns[i]->width > right)
+                right = test_btns[i]->x + test_btns[i]->width;
         if (last->x + last->width > right) right = last->x + last->width;
         int clipped = 0;
         char cut[24];
@@ -711,24 +755,24 @@ static void input_page_layout(void) {
                       2, cut, sizeof(cut)))
             clipped++;
         for (int i = 0; i < 3; i++)
-            if (text_measure_width(test_labels[i], test_scale) > test_btns[i]->width - 8)
+            if (!ui_label_fits(test_labels[i], test_scale, test_btns[i]->width))
                 clipped++;
         for (int i = 0; i < TOUCH_SLOTS; i++) {
             if (!touch_btns[i]) continue;
             if (touch_btns[i]->x + touch_btns[i]->width > right)
                 right = touch_btns[i]->x + touch_btns[i]->width;
-            if (text_measure_width(touch_labels[i], touch_scale) > touch_btns[i]->width - 8)
+            if (!ui_label_fits(touch_labels[i], touch_scale, touch_btns[i]->width))
                 clipped++;
         }
         const char *verdict = bottom > CONTENT_H     ? "⚠ PAST CONTENT BOTTOM"
                             : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
                             : "fits";
         printf("control_panel: input stack %s — bottom +%d of CONTENT_H %d, "
-               "right %d of CONTENT_RIGHT %d, %d label(s) cut, touch band %d px "
-               "at scale %d, testers at scale %d, players in %d column(s) of %d px "
+               "right %d of CONTENT_RIGHT %d, %d label(s) cut, touch band %d px in %d row(s) "
+               "at scale %d, testers in %d row(s) at scale %d, players in %d column(s) of %d px "
                "(safe %dx%d, %s)\n",
                verdict, bottom, CONTENT_H, right, CONTENT_RIGHT, clipped,
-               INPUT_TOUCH_H, touch_scale, test_scale,
+               touch_h, touch_rows, touch_scale, test_rows, test_scale,
                player_cols, player_cyc[0].width + PLAYER_LABEL_W,
                SCREEN_SAFE_WIDTH, SCREEN_SAFE_HEIGHT,
                CONTENT_WIDTH < 600 ? "portrait" : "landscape");
@@ -763,7 +807,7 @@ static void input_page_draw(Framebuffer *fb) {
         char cnt[24];
         if (s->kind_cnt[i] > 0) snprintf(cnt, sizeof(cnt), "%d FOUND", s->kind_cnt[i]);
         else                    snprintf(cnt, sizeof(cnt), "NONE FOUND");
-        fb_draw_text(fb, b->x + (b->width - text_measure_width(cnt, 1)) / 2, count_y,
+        fb_draw_text(fb, b->x + (b->width - text_measure_width(cnt, 1)) / 2, count_y[i],
                      cnt, s->kind_cnt[i] > 0 ? COLOR_LABEL : COLOR_DISABLED, 1);
     }
 
