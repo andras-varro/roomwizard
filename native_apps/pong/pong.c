@@ -1,6 +1,6 @@
 /*
  * Pong Game - Native C Implementation
- * Single player vs AI
+ * One player vs AI, or two players (P2 on the right paddle)
  * Touch, keyboard, gamepad, and mouse input supported
  */
 
@@ -19,6 +19,7 @@
 #include "../common/audio.h"
 #include "../common/audio_bed.h"
 #include "../common/gamepad.h"
+#include "../common/start_menu.h"
 
 #define PADDLE_WIDTH 15
 #define PADDLE_HEIGHT 80
@@ -43,7 +44,7 @@
 #define BALL_MAX_SUBSTEPS 32
 
 typedef enum {
-    SCREEN_WELCOME,
+    SCREEN_MENU,
     SCREEN_PLAYING,
     SCREEN_PAUSED,
     SCREEN_GAME_OVER
@@ -83,9 +84,20 @@ int offset_x;
 int offset_y;
 Button menu_button;
 Button exit_button;
-Button start_button;
 ModalDialog pause_dialog;
-GameScreen current_screen = SCREEN_WELCOME;
+GameScreen current_screen = SCREEN_MENU;
+
+// Start menu (../common/start_menu.h): START, PLAYERS, DIFFICULTY, EXIT
+static StartMenu menu;
+static int menu_start_idx, menu_players_idx, menu_diff_idx, menu_exit_idx;
+static const char *const DIFF_NAMES[3] = { "EASY", "NORMAL", "HARD" };
+static bool two_player = false;     // P2 drives the right paddle instead of the AI
+static bool demo_running = false;   // attract-cycle DEMO: both paddles AI, silent, no score kept
+#define DEMO_POINTS 5               // the demo ends early at this many points in total
+static bool demo_on(void) { return demo_running; }
+
+static const char *player_label(void) { return demo_running ? "AI" : two_player ? "P1" : "YOU"; }
+static const char *ai_label(void)     { return demo_running ? "AI" : two_player ? "P2" : "AI"; }
 bool portrait_mode = false;
 static HighScoreTable hs_table;
 static GameOverScreen gos;
@@ -98,8 +110,8 @@ static LedPulse led_pulse;
  * blocking name entry. */
 static uint32_t last_ms;
 static float frame_dt;
-static float ai_jitter;      /* current AI aim error, px */
-static float ai_jitter_ms;   /* time since it was last re-rolled */
+static float ai_jitter[2];      /* current aim error per AI paddle (0 = left, 1 = right), px */
+static float ai_jitter_ms[2];   /* time since it was last re-rolled */
 
 static void play_clock_restart(void) {
     last_ms = get_time_ms();
@@ -111,7 +123,7 @@ void init_game();
 void reset_game();
 void reset_ball();
 void update_game();
-void update_ai(float dt);
+static void update_ai_paddle(Paddle *pad, int who, float dt);
 void draw_game();
 void handle_input();
 void signal_handler(int sig);
@@ -146,9 +158,15 @@ void init_game() {
     button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&start_button, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                fb.height / 2 + 40, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
-                BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    start_menu_init(&menu, "PONG",
+                    "TOUCH OR D-PAD: MOVE PADDLE\n"
+                    "FIRST TO 11 WINS", get_time_ms());
+    menu_start_idx   = start_menu_add_action(&menu, "START");
+    menu_players_idx = start_menu_players(&menu);
+    menu_diff_idx    = start_menu_add_choice(&menu, "DIFFICULTY", DIFF_NAMES, 3, 1);
+    menu_exit_idx    = start_menu_add_action(&menu, "EXIT");
+    start_menu_select(&menu, menu_start_idx, get_time_ms());
+    start_menu_set_attract(&menu, true);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
     modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
@@ -208,12 +226,19 @@ void reset_ball() {
 static void enter_game_over(void) {
     char info[64];
     bool player_won = (game.winner == 1);
-    if (player_won)
-        snprintf(info, sizeof(info), "YOU WIN! %d - %d", game.player.score, game.ai.score);
-    else
-        snprintf(info, sizeof(info), "AI WINS %d - %d", game.ai.score, game.player.score);
-    gameover_init(&gos, &fb, game.player.score,
-                  player_won ? "YOU WIN!" : "AI WINS!", info, &hs_table, &touch);
+    if (two_player) {
+        /* No high score for a head-to-head match: a NULL table skips the check. */
+        snprintf(info, sizeof(info), "%d - %d", game.player.score, game.ai.score);
+        gameover_init(&gos, &fb, game.player.score,
+                      player_won ? "P1 WINS!" : "P2 WINS!", info, NULL, &touch);
+    } else {
+        if (player_won)
+            snprintf(info, sizeof(info), "YOU WIN! %d - %d", game.player.score, game.ai.score);
+        else
+            snprintf(info, sizeof(info), "AI WINS %d - %d", game.ai.score, game.player.score);
+        gameover_init(&gos, &fb, game.player.score,
+                      player_won ? "YOU WIN!" : "AI WINS!", info, &hs_table, &touch);
+    }
 
     hw_led_pulse_start(&led_pulse, player_won ? LED_GREEN : LED_RED,
                        3, 200, get_time_ms());
@@ -228,7 +253,7 @@ static void enter_game_over(void) {
         audio_gameover(&audio);
 }
 
-void update_ai(float dt) {
+static void update_ai_paddle(Paddle *pad, int who, float dt) {
     float step = (AI_SPEED_BASE + AI_SPEED_PER_LEVEL * game.difficulty) * dt;
     float target;
     float max_pos;
@@ -245,26 +270,33 @@ void update_ai(float dt) {
     
     /* The aim error is re-rolled on a timer, not per frame, so how much the AI
      * wobbles does not depend on the frame rate. */
-    ai_jitter_ms += dt * 1000.0f;
-    if (ai_jitter_ms >= AI_JITTER_MS) {
-        ai_jitter_ms = 0.0f;
-        ai_jitter = (game.difficulty < 3) ? (float)((rand() % 20) - 10) : 0.0f;
+    ai_jitter_ms[who] += dt * 1000.0f;
+    if (ai_jitter_ms[who] >= AI_JITTER_MS) {
+        ai_jitter_ms[who] = 0.0f;
+        ai_jitter[who] = (game.difficulty < 3) ? (float)((rand() % 20) - 10) : 0.0f;
     }
     if (game.difficulty < 3) {
-        target += ai_jitter;
+        target += ai_jitter[who];
     }
 
     /* Never step past the target: at a low frame rate one step can exceed the
      * +-5 px deadband and the paddle would oscillate around it. */
-    if (game.ai.y < target - 5) {
-        game.ai.y += fminf(step, target - game.ai.y);
-    } else if (game.ai.y > target + 5) {
-        game.ai.y -= fminf(step, game.ai.y - target);
+    if (pad->y < target - 5) {
+        pad->y += fminf(step, target - pad->y);
+    } else if (pad->y > target + 5) {
+        pad->y -= fminf(step, pad->y - target);
     }
     
-    if (game.ai.y < 0) game.ai.y = 0;
-    if (game.ai.y > max_pos) game.ai.y = max_pos;
+    if (pad->y < 0) pad->y = 0;
+    if (pad->y > max_pos) pad->y = max_pos;
 }
+
+/* Game effects.  The demo runs silent and dark, and is never a match: it does
+ * not end at WINNING_SCORE (update_game() ends it at DEMO_POINTS). */
+static void sfx_tone(int hz, int ms) { if (!demo_on()) audio_tone(&audio, hz, ms); }
+static void sfx_blip(void)           { if (!demo_on()) audio_blip(&audio); }
+static void sfx_led(LEDColor c)      { if (!demo_on()) hw_set_led(c, 100); }
+static bool match_won(int score)     { return !demo_on() && score >= WINNING_SCORE; }
 
 /* One integration substep of sdt seconds.  Returns true when the ball hit a
  * paddle or a point was scored: the caller stops substepping for this frame, so
@@ -288,7 +320,7 @@ static bool ball_step(float sdt, bool *wall_sounded) {
              * `.188` 2026-08-20) are in ../CLAUDE.md → Mixing.  No counter sees
              * this — a voice stopped early is not `lost`, `drop` or `clip`. */
             if (!*wall_sounded) {
-                audio_tone(&audio, 2000, 60);
+                sfx_tone(2000, 60);
                 *wall_sounded = true;
             }
         }
@@ -304,8 +336,8 @@ static bool ball_step(float sdt, bool *wall_sounded) {
             float hit_pos = (game.ball.x + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
             game.ball.vx += (hit_pos - 0.5f) * BALL_ENGLISH;
             
-            hw_set_led(LED_GREEN, 100);
-            audio_tone(&audio, 440, 90);
+            sfx_led(LED_GREEN);
+            sfx_tone(440, 90);
             hw_leds_off();
             return true;
         }
@@ -321,8 +353,8 @@ static bool ball_step(float sdt, bool *wall_sounded) {
             float hit_pos = (game.ball.x + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
             game.ball.vx += (hit_pos - 0.5f) * BALL_ENGLISH;
             
-            hw_set_led(LED_RED, 100);
-            audio_tone(&audio, 440, 90);
+            sfx_led(LED_RED);
+            sfx_tone(440, 90);
             hw_leds_off();
             return true;
         }
@@ -330,11 +362,11 @@ static bool ball_step(float sdt, bool *wall_sounded) {
         // Ball out top = player scores
         if (game.ball.y < 0) {
             game.player.score++;
-            hw_set_led(LED_GREEN, 100);
-            audio_blip(&audio);
+            sfx_led(LED_GREEN);
+            sfx_blip();
             hw_leds_off();
             
-            if (game.player.score >= WINNING_SCORE) {
+            if (match_won(game.player.score)) {
                 game.game_over = true;
                 game.winner = 1;
                 current_screen = SCREEN_GAME_OVER;
@@ -347,11 +379,11 @@ static bool ball_step(float sdt, bool *wall_sounded) {
         // Ball out bottom = AI scores
         else if (game.ball.y > play_area_height) {
             game.ai.score++;
-            hw_set_led(LED_RED, 100);
-            audio_blip(&audio);
+            sfx_led(LED_RED);
+            sfx_blip();
             hw_leds_off();
 
-            if (game.ai.score >= WINNING_SCORE) {
+            if (match_won(game.ai.score)) {
                 game.game_over = true;
                 game.winner = 2;
                 current_screen = SCREEN_GAME_OVER;
@@ -370,7 +402,7 @@ static bool ball_step(float sdt, bool *wall_sounded) {
             game.ball.vy = -game.ball.vy;
             game.ball.y = (game.ball.y <= 0) ? 0 : play_area_height - BALL_SIZE;
             if (!*wall_sounded) {
-                audio_tone(&audio, 2000, 60);
+                sfx_tone(2000, 60);
                 *wall_sounded = true;
             }
         }
@@ -386,8 +418,8 @@ static bool ball_step(float sdt, bool *wall_sounded) {
             float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.player.y) / PADDLE_HEIGHT;
             game.ball.vy += (hit_pos - 0.5f) * BALL_ENGLISH;
             
-            hw_set_led(LED_GREEN, 100);
-            audio_tone(&audio, 440, 90);
+            sfx_led(LED_GREEN);
+            sfx_tone(440, 90);
             hw_leds_off();
             return true;
         }
@@ -403,8 +435,8 @@ static bool ball_step(float sdt, bool *wall_sounded) {
             float hit_pos = (game.ball.y + BALL_SIZE / 2 - game.ai.y) / PADDLE_HEIGHT;
             game.ball.vy += (hit_pos - 0.5f) * BALL_ENGLISH;
             
-            hw_set_led(LED_RED, 100);
-            audio_tone(&audio, 440, 90);
+            sfx_led(LED_RED);
+            sfx_tone(440, 90);
             hw_leds_off();
             return true;
         }
@@ -412,11 +444,11 @@ static bool ball_step(float sdt, bool *wall_sounded) {
         // Ball out of bounds - score
         if (game.ball.x < 0) {
             game.ai.score++;
-            hw_set_led(LED_RED, 100);
-            audio_blip(&audio);
+            sfx_led(LED_RED);
+            sfx_blip();
             hw_leds_off();
             
-            if (game.ai.score >= WINNING_SCORE) {
+            if (match_won(game.ai.score)) {
                 game.game_over = true;
                 game.winner = 2;
                 current_screen = SCREEN_GAME_OVER;
@@ -427,11 +459,11 @@ static bool ball_step(float sdt, bool *wall_sounded) {
             return true;
         } else if (game.ball.x > play_area_width) {
             game.player.score++;
-            hw_set_led(LED_GREEN, 100);
-            audio_blip(&audio);
+            sfx_led(LED_GREEN);
+            sfx_blip();
             hw_leds_off();
 
-            if (game.player.score >= WINNING_SCORE) {
+            if (match_won(game.player.score)) {
                 game.game_over = true;
                 game.winner = 1;
                 current_screen = SCREEN_GAME_OVER;
@@ -446,7 +478,7 @@ static bool ball_step(float sdt, bool *wall_sounded) {
 }
 
 void update_game() {
-    if (current_screen != SCREEN_PLAYING) return;
+    if (current_screen != SCREEN_PLAYING && !demo_on()) return;
     if (game.game_over || game.paused) return;
 
     float dt = frame_dt;
@@ -465,7 +497,63 @@ void update_game() {
         if (ball_step(sdt, &wall_sounded)) break;
     }
 
-    update_ai(dt);
+    if (demo_on()) {
+        update_ai_paddle(&game.player, 0, dt);
+        update_ai_paddle(&game.ai, 1, dt);
+        /* The demo ends early once it has shown a few points; the scores stay
+         * until the next demo resets the field. */
+        if (game.player.score + game.ai.score >= DEMO_POINTS)
+            start_menu_demo_over(&menu);
+    } else if (!two_player) {
+        update_ai_paddle(&game.ai, 1, dt);
+    }
+}
+
+/* Touch drives a paddle to the finger (landscape: Y, portrait: X). */
+static void paddle_to_touch(Paddle *p, int x, int y) {
+    if (portrait_mode) {
+        p->y = (x - offset_x) - PADDLE_HEIGHT / 2;
+        if (p->y < 0) p->y = 0;
+        if (p->y > play_area_width - PADDLE_HEIGHT) p->y = play_area_width - PADDLE_HEIGHT;
+    } else {
+        p->y = (y - offset_y) - PADDLE_HEIGHT / 2;
+        if (p->y < 0) p->y = 0;
+        if (p->y > play_area_height - PADDLE_HEIGHT) p->y = play_area_height - PADDLE_HEIGHT;
+    }
+}
+
+/* Analog stick and d-pad/keyboard from `in` move a paddle; clamped to max_pos. */
+static void paddle_from_pad(Paddle *p, const InputState *in, float max_pos) {
+    // Analog stick: proportional speed from axis_ly (landscape) or axis_lx (portrait)
+    int axis_val = portrait_mode ? in->axis_lx : in->axis_ly;
+    if (axis_val != 0)
+        p->y += (axis_val / 1000.0f) * PADDLE_MAX_ANALOG * frame_dt;
+
+    // D-pad / keyboard: fixed speed movement (uses held for smooth continuous movement)
+    if (portrait_mode) {
+        if (in->buttons[BTN_ID_LEFT].held)  p->y -= PADDLE_SPEED * frame_dt;
+        if (in->buttons[BTN_ID_RIGHT].held) p->y += PADDLE_SPEED * frame_dt;
+    } else {
+        if (in->buttons[BTN_ID_UP].held)    p->y -= PADDLE_SPEED * frame_dt;
+        if (in->buttons[BTN_ID_DOWN].held)  p->y += PADDLE_SPEED * frame_dt;
+    }
+
+    if (p->y < 0) p->y = 0;
+    if (p->y > max_pos) p->y = max_pos;
+}
+
+/* The demo: SCREEN_MENU while the attract cycle is on its DEMO page.  Entering
+ * it resets the playfield; the real game is reset again on START, so nothing
+ * of the demo leaks into it. */
+static void demo_sync(void) {
+    bool want = (current_screen == SCREEN_MENU &&
+                 start_menu_attract(&menu) == SM_ATTRACT_DEMO);
+    if (want && !demo_running) {
+        game.difficulty = 2;
+        reset_game();
+        play_clock_restart();
+    }
+    demo_running = want;
 }
 
 void handle_input() {
@@ -484,6 +572,38 @@ void handle_input() {
     /* Hot-plug check: rescans only when /dev/input changed or a device went away */
     gamepad_tick(&gamepad, current_time);
 
+    /* Start menu — ahead of the BACK rule below, so that BACK during the
+     * SCORES/DEMO pages is swallowed like any other input there (the widget's
+     * rule), and on the menu itself arrives as SM_EXIT.  The widget keeps its
+     * own edges, so a button or finger still down from the screen before acts
+     * only after a fresh press. */
+    if (current_screen == SCREEN_MENU) {
+        int r = start_menu_update(&menu, &input, state.x, state.y,
+                                  state.pressed || state.held,
+                                  &gamepad, &audio, current_time);
+        if (r == SM_EXIT || r == menu_exit_idx) {
+            fb_fade_out(&fb);
+            running = false;
+        } else if (r == menu_start_idx) {
+            static const int DIFF_LEVEL[3] = { 1, 2, 3 };   /* EASY, NORMAL (as always), HARD */
+            int d = start_menu_value(&menu, menu_diff_idx);
+            if (d < 0 || d > 2) d = 1;
+            game.difficulty = DIFF_LEVEL[d];
+            two_player = (start_menu_player_count(&menu) == 2);
+            demo_running = false;
+            reset_game();
+            current_screen = SCREEN_PLAYING;
+            play_clock_restart();
+            /* Non-blocking: a usleep() here delayed the first frame of play
+             * by 100 ms from inside handle_input().
+             * After reset_game(), which cancels any pending pulse. */
+            hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
+        } else {
+            demo_sync();
+        }
+        return;
+    }
+
     // BTN_BACK always exits to launcher
     if (input.buttons[BTN_ID_BACK].pressed) {
         fb_fade_out(&fb);
@@ -491,32 +611,6 @@ void handle_input() {
         return;
     }
 
-    // Handle welcome screen
-    if (current_screen == SCREEN_WELCOME) {
-        if (state.pressed) {
-            bool touched = button_is_touched(&start_button, state.x, state.y);
-            if (button_check_press(&start_button, touched, current_time)) {
-                reset_game();
-                current_screen = SCREEN_PLAYING;
-                play_clock_restart();
-                /* Non-blocking: a usleep() here delayed the first frame of play
-                 * by 100 ms from inside handle_input().
-                 * After reset_game(), which cancels any pending pulse. */
-                hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
-            }
-        }
-        // Gamepad/keyboard: start game with Jump, Action, or Pause
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed ||
-            input.buttons[BTN_ID_PAUSE].pressed) {
-            reset_game();
-            current_screen = SCREEN_PLAYING;
-            play_clock_restart();
-            hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
-        }
-        return;
-    }
-    
     // Handle game over screen — gameover_update() manages buttons in draw phase
     if (current_screen == SCREEN_GAME_OVER) {
         // Allow gamepad restart
@@ -602,54 +696,30 @@ void handle_input() {
         }
     }
     
-    // Move player paddle to touch position (existing touch behavior)
-    if ((state.held || state.pressed) && !game.game_over && !game.paused) {
-        if (portrait_mode) {
-            // Portrait: move paddle horizontally using touch X
-            int relative_x = state.x - offset_x;
-            game.player.y = relative_x - PADDLE_HEIGHT / 2;
-            
-            if (game.player.y < 0) game.player.y = 0;
-            if (game.player.y > play_area_width - PADDLE_HEIGHT) {
-                game.player.y = play_area_width - PADDLE_HEIGHT;
-            }
-        } else {
-            // Landscape: move paddle vertically using touch Y
-            int relative_y = state.y - offset_y;
-            game.player.y = relative_y - PADDLE_HEIGHT / 2;
-            
-            if (game.player.y < 0) game.player.y = 0;
-            if (game.player.y > play_area_height - PADDLE_HEIGHT) {
-                game.player.y = play_area_height - PADDLE_HEIGHT;
-            }
+    if (game.game_over || game.paused) return;
+
+    float max_pos = portrait_mode ?
+        (float)(play_area_width - PADDLE_HEIGHT) :
+        (float)(play_area_height - PADDLE_HEIGHT);
+
+    if (!two_player) {
+        /* One player: touch anywhere, and every device at once, drive the left
+         * (bottom, in portrait) paddle; the AI owns the other. */
+        if (state.held || state.pressed)
+            paddle_to_touch(&game.player, state.x, state.y);
+        paddle_from_pad(&game.player, &input, max_pos);
+    } else {
+        /* Two players: P1 = slot 0 pad/keyboard, P2 = slot 1 (gamepad_player()
+         * carries no touch).  The finger drives the paddle on its half of the
+         * screen: left/right in landscape, bottom/top in portrait (P1 is the
+         * bottom paddle there). */
+        if (state.held || state.pressed) {
+            bool p1_half = portrait_mode ? (state.y >= (int)(fb.height / 2))
+                                         : (state.x < (int)(fb.width / 2));
+            paddle_to_touch(p1_half ? &game.player : &game.ai, state.x, state.y);
         }
-    }
-
-    // Gamepad/keyboard paddle movement (when not touching)
-    if (!game.game_over && !game.paused) {
-        float max_pos = portrait_mode ?
-            (float)(play_area_width - PADDLE_HEIGHT) :
-            (float)(play_area_height - PADDLE_HEIGHT);
-
-        // Analog stick: proportional speed from axis_ly (landscape) or axis_lx (portrait)
-        int axis_val = portrait_mode ? input.axis_lx : input.axis_ly;
-        if (axis_val != 0) {
-            float step = (axis_val / 1000.0f) * PADDLE_MAX_ANALOG * frame_dt;
-            game.player.y += step;
-        }
-
-        // D-pad / keyboard: fixed speed movement (uses held for smooth continuous movement)
-        if (portrait_mode) {
-            if (input.buttons[BTN_ID_LEFT].held)  game.player.y -= PADDLE_SPEED * frame_dt;
-            if (input.buttons[BTN_ID_RIGHT].held) game.player.y += PADDLE_SPEED * frame_dt;
-        } else {
-            if (input.buttons[BTN_ID_UP].held)    game.player.y -= PADDLE_SPEED * frame_dt;
-            if (input.buttons[BTN_ID_DOWN].held)  game.player.y += PADDLE_SPEED * frame_dt;
-        }
-
-        // Clamp paddle position
-        if (game.player.y < 0) game.player.y = 0;
-        if (game.player.y > max_pos) game.player.y = max_pos;
+        paddle_from_pad(&game.player, gamepad_player(&gamepad, 0), max_pos);
+        paddle_from_pad(&game.ai, gamepad_player(&gamepad, 1), max_pos);
     }
 }
 
@@ -660,26 +730,26 @@ static void draw_playing_field(void) {
     if (portrait_mode) {
         // Portrait: AI score on left, Player score on right, both at top
         char ai_score[16];
-        snprintf(ai_score, sizeof(ai_score), "AI: %d", game.ai.score);
+        snprintf(ai_score, sizeof(ai_score), "%s: %d", ai_label(), game.ai.score);
         text_draw_centered(&fb, fb.width / 3, 35, ai_score, COLOR_RED, 3);
         
         char player_score[16];
-        snprintf(player_score, sizeof(player_score), "YOU: %d", game.player.score);
+        snprintf(player_score, sizeof(player_score), "%s: %d", player_label(), game.player.score);
         text_draw_centered(&fb, fb.width * 2 / 3, 35, player_score, COLOR_GREEN, 3);
     } else {
         // Landscape: player score left, AI score right
         char player_score[16];
-        snprintf(player_score, sizeof(player_score), "YOU: %d", game.player.score);
+        snprintf(player_score, sizeof(player_score), "%s: %d", player_label(), game.player.score);
         text_draw_centered(&fb, fb.width / 3, 35, player_score, COLOR_GREEN, 3);
         
         char ai_score[16];
-        snprintf(ai_score, sizeof(ai_score), "AI: %d", game.ai.score);
+        snprintf(ai_score, sizeof(ai_score), "%s: %d", ai_label(), game.ai.score);
         text_draw_centered(&fb, fb.width * 2 / 3, 35, ai_score, COLOR_RED, 3);
     }
     
     // Draw menu and exit buttons
-    draw_menu_button(&fb, &menu_button);
-    draw_exit_button(&fb, &exit_button);
+    if (!demo_on()) draw_menu_button(&fb, &menu_button);
+    if (!demo_on()) draw_exit_button(&fb, &exit_button);
     
     // Draw play area border
     fb_draw_rect(&fb, offset_x - 2, offset_y - 2,
@@ -739,20 +809,28 @@ static void draw_playing_field(void) {
 void draw_game() {
     fb_clear(&fb, COLOR_BLACK);
     
-    // Handle welcome screen — custom drawing for properly centered multi-line text
-    if (current_screen == SCREEN_WELCOME) {
-        text_draw_centered(&fb, fb.width / 2, SCREEN_VISIBLE_TOP + 70, "PONG", COLOR_CYAN, 4);
-        text_draw_centered(&fb, fb.width / 2, fb.height / 2 - 10,
-                          "TOUCH TO MOVE PADDLE", COLOR_WHITE, 1);
-        text_draw_centered(&fb, fb.width / 2, fb.height / 2 + 10,
-                          "FIRST TO 11 WINS", COLOR_WHITE, 1);
-        button_draw(&fb, &start_button);
-        return;
+    // Start menu, or the attract cycle's DEMO (the field, silent) and SCORES pages
+    if (current_screen == SCREEN_MENU) {
+        SmAttract ph = start_menu_attract(&menu);
+        if (ph == SM_ATTRACT_MENU) {
+            start_menu_draw(&menu, &fb);
+            return;
+        }
+        if (ph == SM_ATTRACT_SCORES) {
+            start_menu_draw_scores(&menu, &fb, &hs_table);
+            return;
+        }
+        /* DEMO: the playing field below, drawn with the real draw code */
     }
     
     // Draw the playing field as background (used by PLAYING, PAUSED, GAME_OVER)
     draw_playing_field();
-    
+
+    if (demo_on()) {
+        text_draw_centered(&fb, fb.width / 2, SCREEN_VISIBLE_TOP + 20, "DEMO", COLOR_CYAN, 2);
+        return;
+    }
+
     // Handle pause screen overlay
     if (current_screen == SCREEN_PAUSED) {
         modal_dialog_draw(&pause_dialog, &fb);
@@ -852,8 +930,8 @@ int main(int argc, char *argv[]) {
         hw_led_pulse_update(&led_pulse, get_time_ms());
 
         /* Dirty-flag: active gameplay always redraws; static screens on change */
-        if (current_screen == SCREEN_PLAYING) {
-            needs_redraw = true;  /* continuous rendering (ball + AI always moving) */
+        if (current_screen == SCREEN_PLAYING || demo_on()) {
+            needs_redraw = true;  /* continuous rendering (ball + AI always moving; the demo is gameplay) */
         } else if (current_screen != prev_screen) {
             needs_redraw = true;  /* screen transition */
         } else {
@@ -870,6 +948,13 @@ int main(int argc, char *argv[]) {
          * give it frames until it says it is settled, or the overlay never
          * appears without a tap. */
         if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+            needs_redraw = true;
+
+        /* The start menu's bracket blink and attract page changes arrive with no
+         * input; without this the blink freezes.  Off the MENU page it reports
+         * once per page edge, so the demo (redrawn every frame above) is not
+         * affected. */
+        if (current_screen == SCREEN_MENU && start_menu_needs_redraw(&menu))
             needs_redraw = true;
 
         /* One bed transition, ABOVE the redraw block and before the pump.
