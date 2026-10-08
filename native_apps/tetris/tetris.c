@@ -21,6 +21,7 @@
 #include "../common/audio.h"
 #include "../common/audio_bed.h"
 #include "../common/gamepad.h"
+#include "../common/start_menu.h"
 
 #define BOARD_WIDTH 10
 #define BOARD_HEIGHT 20
@@ -42,7 +43,7 @@
 #define DROP_SOFT_MS         50   /* while DOWN is held */
 
 typedef enum {
-    SCREEN_WELCOME,
+    SCREEN_MENU,
     SCREEN_PLAYING,
     SCREEN_PAUSED,
     SCREEN_GAME_OVER
@@ -161,9 +162,11 @@ int last_touch_x = -1;
 int last_touch_y = -1;
 Button menu_button;
 Button exit_button;
-Button start_button;
 ModalDialog pause_dialog;
-GameScreen current_screen = SCREEN_WELCOME;
+GameScreen current_screen = SCREEN_MENU;
+// Start menu (../common/start_menu.h): START, EXIT (tetris has no difficulty setting)
+StartMenu menu;
+int menu_start_idx, menu_exit_idx;
 HighScoreTable hs_table;
 static GameOverScreen gos;
 Audio audio;
@@ -236,13 +239,15 @@ void init_game() {
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT,
                 "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    // The welcome screen positions start_button itself (screen_draw_welcome
-    // lays it out below the measured instruction block); these coordinates only
-    // cover a hit-test that arrives before the first draw, so they just have to
-    // be inside the touchable rectangle.
-    button_init(&start_button, LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
-                LAYOUT_BOTTOM_BTN_Y, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
-                BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    /* No DEMO yet: the attract cycle is MENU -> SCORES, drawn by draw_game(). */
+    start_menu_init(&menu, "TETRIS",
+                    "L/R: MOVE   UP/A: ROTATE\n"
+                    "DOWN: SOFT DROP   X: HARD DROP\n"
+                    "TAP LEFT/RIGHT/CENTER/BOTTOM", get_time_ms());
+    menu_start_idx = start_menu_add_action(&menu, "START");
+    menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
+    start_menu_select(&menu, menu_start_idx, get_time_ms());
+    start_menu_set_attract(&menu, false);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
     modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
@@ -492,31 +497,31 @@ void handle_input() {
     /* Hot-plug check: rescans only when /dev/input changed or a device went away */
     gamepad_tick(&gamepad, current_time);
 
+    /* Start menu — ahead of the BACK rule below, so BACK during the SCORES
+     * page is swallowed like any input there, and on the menu itself arrives
+     * as SM_EXIT.  The widget keeps its own edges. */
+    if (current_screen == SCREEN_MENU) {
+        int r = start_menu_update(&menu, &input, state.x, state.y,
+                                  state.pressed || state.held,
+                                  &gamepad, &audio, current_time);
+        if (r == SM_EXIT || r == menu_exit_idx) {
+            fb_fade_out(&fb);
+            running = false;
+        } else if (r == menu_start_idx) {
+            reset_game();
+            game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
+            current_screen = SCREEN_PLAYING;
+            /* Non-blocking: a usleep() here delayed the first frame of play
+             * by 100 ms from inside handle_input(). */
+            hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
+        }
+        return;
+    }
+
     // BTN_BACK always exits to launcher
     if (input.buttons[BTN_ID_BACK].pressed) {
         fb_fade_out(&fb);
         running = false;
-        return;
-    }
-
-    // Handle welcome screen
-    if (current_screen == SCREEN_WELCOME) {
-        if (state.pressed) {
-            bool touched = button_is_touched(&start_button, state.x, state.y);
-            if (button_check_press(&start_button, touched, current_time)) {
-                current_screen = SCREEN_PLAYING;
-                /* Non-blocking: a usleep() here delayed the first frame of play
-                 * by 100 ms from inside handle_input(). */
-                hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
-            }
-        }
-        // Gamepad/keyboard: start game
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed ||
-            input.buttons[BTN_ID_PAUSE].pressed) {
-            current_screen = SCREEN_PLAYING;
-            hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
-        }
         return;
     }
     
@@ -839,21 +844,16 @@ void draw_playing_field() {
 }
 
 void draw_game() {
-    fb_clear(&fb, COLOR_BLACK);
-    
-    // Welcome screen — the shared implementation measures the instruction block
-    // and lays TAP TO START out below it.  This used to be four hand-placed
-    // text_draw_centered() calls plus a button at a fixed fb.height/2 + 40, and
-    // the fourth line landed inside the button.
-    if (current_screen == SCREEN_WELCOME) {
-        draw_welcome_screen(&fb, "TETRIS",
-            "L/R: MOVE   UP/A: ROTATE\n"
-            "DOWN: SOFT DROP   X: HARD DROP\n"
-            "TAP LEFT/RIGHT/CENTER/BOTTOM\n"
-            "PRESS START OR TAP TO BEGIN",
-            &start_button);
+    // Start menu, or the attract cycle's SCORES page (the widget clears too)
+    if (current_screen == SCREEN_MENU) {
+        if (start_menu_attract(&menu) == SM_ATTRACT_MENU)
+            start_menu_draw(&menu, &fb);
+        else
+            start_menu_draw_scores(&menu, &fb, &hs_table);
         return;
     }
+
+    fb_clear(&fb, COLOR_BLACK);
     
     // Draw the playing field as background (used by PLAYING, PAUSED, GAME_OVER)
     draw_playing_field();
@@ -991,6 +991,10 @@ int main(int argc, char *argv[]) {
          * give it frames until it says it is settled, or the overlay never
          * appears without a tap. */
         if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+            needs_redraw = true;
+
+        /* Bracket blink and attract phase changes arrive with no input. */
+        if (current_screen == SCREEN_MENU && start_menu_needs_redraw(&menu))
             needs_redraw = true;
 
         /* One bed transition, ABOVE the redraw block and before the pump.

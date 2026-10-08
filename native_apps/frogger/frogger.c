@@ -23,6 +23,7 @@
 #include "../common/audio_bed.h"
 #include "../common/logger.h"
 #include "../common/gamepad.h"
+#include "../common/start_menu.h"
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Constants
@@ -94,7 +95,7 @@
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 typedef enum {
-    SCREEN_WELCOME,
+    SCREEN_MENU,
     SCREEN_PLAYING,
     SCREEN_PAUSED,
     SCREEN_GAME_OVER
@@ -186,7 +187,17 @@ Audio audio;
 HighScoreTable hs_table;
 static GameOverScreen gos;
 bool running = true;
-GameScreen current_screen = SCREEN_WELCOME;
+GameScreen current_screen = SCREEN_MENU;
+
+/* Start menu (../common/start_menu.h): START, DIFFICULTY, EXIT.  Difficulty
+ * scales every lane's speed on top of the level ramp; NORMAL is the game as
+ * it always played, EASY a quarter slower, HARD a quarter faster. */
+enum { DIFF_EASY, DIFF_NORMAL, DIFF_HARD, DIFF_COUNT };
+static const char *const DIFF_NAMES[DIFF_COUNT] = { "EASY", "NORMAL", "HARD" };
+static const float DIFF_SPEED[DIFF_COUNT] = { 0.75f, 1.0f, 1.25f };
+static StartMenu menu;
+static int menu_start_idx, menu_diff_idx, menu_exit_idx;
+static int difficulty = DIFF_NORMAL;
 
 static Lane lanes[NUM_LANE_CONFIGS];
 static Frog frog;
@@ -218,7 +229,6 @@ static int hud_height;
 /* UI Buttons */
 Button menu_button;
 Button exit_button;
-Button start_button;
 ModalDialog pause_dialog;
 
 /* ─── Lane configuration table ──────────────────────────────────────────── */
@@ -428,6 +438,7 @@ static void init_lanes(void) {
 static float lane_speed_px_s(const Lane *lane) {
     float speed_mult = 1.0f + (state.level - 1) * 0.15f;
     if (speed_mult > 2.5f) speed_mult = 2.5f;
+    speed_mult *= DIFF_SPEED[difficulty];
     return lane->cells_per_s * (float)cell_size * speed_mult * lane->direction;
 }
 
@@ -445,15 +456,6 @@ static void init_buttons(void) {
     button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    /* screen_draw_welcome() positions start_button below the measured
-     * instruction block; these coordinates only cover a hit-test that
-     * arrives before the first draw, so they just have to be touchable. */
-    button_init(&start_button,
-                LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
-                LAYOUT_BOTTOM_BTN_Y,
-                BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
-                "TAP TO START",
-                BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
     modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
@@ -505,6 +507,18 @@ static void init_game(void) {
      * highlighted.  The whole playfield is the tap target now.  ⚠️ The latch
      * itself is fixed — poll_touch() writes only the per-frame `derived` array —
      * so what still argues against regions here is the redundancy, not the latch. */
+
+    /* No DEMO yet: the attract cycle is MENU -> SCORES, drawn by draw_all(). */
+    start_menu_init(&menu, "FROGGER",
+                    "TAP AHEAD OF THE FROG TO HOP\n"
+                    "OR USE A D-PAD / ARROW KEYS\n"
+                    "CROSS ROAD AND RIVER\n"
+                    "REACH THE LILY PADS", get_time_ms());
+    menu_start_idx = start_menu_add_action(&menu, "START");
+    menu_diff_idx  = start_menu_add_choice(&menu, "DIFFICULTY", DIFF_NAMES, DIFF_COUNT, DIFF_NORMAL);
+    menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
+    start_menu_select(&menu, menu_start_idx, get_time_ms());
+    start_menu_set_attract(&menu, false);
 
     reset_game();
 }
@@ -782,37 +796,35 @@ static void handle_input(void) {
     /* Hot-plug check: rescans only when /dev/input changed or a device went away */
     gamepad_tick(&gamepad, now);
 
+    /* Start menu — ahead of the BACK rule below, so that BACK during the
+     * SCORES page is swallowed like any other input there (the widget's
+     * rule), and on the menu itself arrives as SM_EXIT.  The widget keeps
+     * its own edges, so a button or finger still down from the screen
+     * before acts only after a fresh press. */
+    if (current_screen == SCREEN_MENU) {
+        int r = start_menu_update(&menu, &input, ts.x, ts.y,
+                                  ts.pressed || ts.held,
+                                  &gamepad, &audio, now);
+        if (r == SM_EXIT || r == menu_exit_idx) {
+            fb_fade_out(&fb);
+            running = false;
+        } else if (r == menu_start_idx) {
+            difficulty = start_menu_value(&menu, menu_diff_idx);
+            if (difficulty < 0 || difficulty >= DIFF_COUNT) difficulty = DIFF_NORMAL;
+            reset_game();
+            current_screen = SCREEN_PLAYING;
+            last_frame_ms  = get_time_ms();
+            /* Non-blocking: effect 1 is this file's own green flash,
+             * serviced by update_led_effects() once per frame. */
+            start_led_effect(1);
+        }
+        return;
+    }
+
     // BTN_BACK always exits to launcher
     if (input.buttons[BTN_ID_BACK].pressed) {
         fb_fade_out(&fb);
         running = false;
-        return;
-    }
-
-    /* ── Welcome screen ─────────────────────────────────────────────── */
-    if (current_screen == SCREEN_WELCOME) {
-        if (ts.pressed) {
-            bool touched = button_is_touched(&start_button, ts.x, ts.y);
-            if (button_check_press(&start_button, touched, now)) {
-                current_screen = SCREEN_PLAYING;
-                last_frame_ms  = get_time_ms();
-                /* Non-blocking: the hw_set_led() + usleep(100000) + hw_leds_off()
-                 * that was here froze the panel for 100 ms from inside the input
-                 * handler — no touch poll, no redraw, and no audio_pump()
-                 * either, which is a starved stream as well as a dropped frame.
-                 * Effect 1 is this file's own 200 ms green flash, serviced by
-                 * update_led_effects() once per frame. */
-                start_led_effect(1);
-            }
-        }
-        // Gamepad/keyboard: start game
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed ||
-            input.buttons[BTN_ID_PAUSE].pressed) {
-            current_screen = SCREEN_PLAYING;
-            last_frame_ms  = get_time_ms();
-            start_led_effect(1);
-        }
         return;
     }
 
@@ -1385,19 +1397,16 @@ static void draw_playing_field(void) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void draw_all(void) {
-    fb_clear(&fb, COLOR_BLACK);
-
-    /* ── Welcome screen ──────────────────────────────────────────────── */
-    if (current_screen == SCREEN_WELCOME) {
-        draw_welcome_screen(&fb, "FROGGER",
-            "TAP AHEAD OF THE FROG TO HOP\n"
-            "OR USE A D-PAD / ARROW KEYS\n"
-            "CROSS ROAD AND RIVER\n"
-            "REACH THE LILY PADS\n"
-            "PRESS START OR TAP TO BEGIN",
-            &start_button);
+    /* ── Start menu, or the attract cycle's SCORES page (widget clears too) ── */
+    if (current_screen == SCREEN_MENU) {
+        if (start_menu_attract(&menu) == SM_ATTRACT_MENU)
+            start_menu_draw(&menu, &fb);
+        else
+            start_menu_draw_scores(&menu, &fb, &hs_table);
         return;
     }
+
+    fb_clear(&fb, COLOR_BLACK);
 
     /* Draw the playing field as background for PLAYING, PAUSED, GAME_OVER */
     draw_hud();
@@ -1543,6 +1552,11 @@ int main(int argc, char *argv[]) {
          * give it frames until it says it is settled, or the overlay never
          * appears without a tap. */
         if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+            needs_redraw = true;
+
+        /* The start menu's bracket blink and attract phase changes arrive
+         * with no input; without this the blink freezes. */
+        if (current_screen == SCREEN_MENU && start_menu_needs_redraw(&menu))
             needs_redraw = true;
 
         /* One bed transition, ABOVE the redraw block and before the pump.
