@@ -21,6 +21,7 @@
 #include "../common/audio.h"
 #include "../common/audio_bed.h"
 #include "../common/gamepad.h"
+#include "../common/start_menu.h"
 
 /* ========================================================================== */
 /* CONSTANTS                                                                  */
@@ -71,7 +72,7 @@
 /* ========================================================================== */
 
 typedef enum {
-    SCREEN_WELCOME,
+    SCREEN_MENU,
     SCREEN_PLAYING,
     SCREEN_PAUSED,
     SCREEN_GAME_OVER
@@ -159,14 +160,24 @@ static InputState input;
 static SameGameState game;
 static LEDEffect led_effect;
 static bool running = true;
-static GameScreen current_screen = SCREEN_WELCOME;
+static GameScreen current_screen = SCREEN_MENU;
 static HighScoreTable hs_table;
+
+/* Start menu (../common/start_menu.h): START, DIFFICULTY, EXIT.  Difficulty is
+ * the number of block colours dealt: fewer colours make bigger groups.  NORMAL
+ * (all NUM_COLORS) is the game as it always played.  Scores are recorded at
+ * every level, into the one table. */
+enum { DIFF_EASY, DIFF_NORMAL, DIFF_COUNT };
+static const char *const DIFF_NAMES[DIFF_COUNT] = { "EASY", "NORMAL" };
+static const int DIFF_COLORS[DIFF_COUNT] = { 4, NUM_COLORS };
+static StartMenu menu;
+static int menu_start_idx, menu_diff_idx, menu_exit_idx;
+static int difficulty = DIFF_NORMAL;
 static GameOverScreen gos;
 
 /* UI Buttons */
 static Button menu_button;
 static Button exit_button;
-static Button start_button;
 static ModalDialog pause_dialog;
 
 /* Color lookup tables */
@@ -324,12 +335,6 @@ static void init_layout(void) {
     button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    /* screen_draw_welcome() positions start_button below the measured
-     * instruction block; these coordinates only cover a hit-test that
-     * arrives before the first draw, so they just have to be touchable. */
-    button_init(&start_button, LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
-                LAYOUT_BOTTOM_BTN_Y, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
-                BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
     modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
@@ -350,6 +355,16 @@ static void init_game(void) {
     hs_init(&hs_table, "samegame");
     hs_load(&hs_table);
 
+    /* No DEMO yet: the attract cycle is MENU -> SCORES, drawn by draw_game(). */
+    start_menu_init(&menu, "SAMEGAME",
+                    "TAP GROUPS OF 2+ SAME-COLORED BLOCKS\n"
+                    "TAP AGAIN TO REMOVE THEM", get_time_ms());
+    menu_start_idx = start_menu_add_action(&menu, "START");
+    menu_diff_idx  = start_menu_add_choice(&menu, "DIFFICULTY", DIFF_NAMES, DIFF_COUNT, DIFF_NORMAL);
+    menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
+    start_menu_select(&menu, menu_start_idx, get_time_ms());
+    start_menu_set_attract(&menu, false);
+
     reset_game();
 }
 
@@ -363,7 +378,7 @@ static void reset_game(void) {
 
     for (c = 0; c < game.cols; c++) {
         for (r = 0; r < game.rows; r++) {
-            game.grid[c][r] = (rand() % NUM_COLORS) + 1;
+            game.grid[c][r] = (rand() % DIFF_COLORS[difficulty]) + 1;
         }
     }
 
@@ -1280,13 +1295,12 @@ static void draw_mouse_hover(int mx, int my) {
 static void draw_game(void) {
     fb_clear(&fb, COLOR_BLACK);
 
-    if (current_screen == SCREEN_WELCOME) {
-        draw_welcome_screen(&fb, "SAMEGAME",
-            "TAP GROUPS OF 2+ SAME-COLORED BLOCKS\n"
-            "TAP AGAIN TO REMOVE THEM", &start_button);
-        /* Draw mouse cursor on welcome screen too */
-        if (input.mouse_connected)
-            draw_mouse_cursor(input.mouse_x, input.mouse_y);
+    /* Start menu, or the attract cycle's SCORES page (the widget clears too) */
+    if (current_screen == SCREEN_MENU) {
+        if (start_menu_attract(&menu) == SM_ATTRACT_MENU)
+            start_menu_draw(&menu, &fb);
+        else
+            start_menu_draw_scores(&menu, &fb, &hs_table);
         return;
     }
 
@@ -1403,42 +1417,31 @@ static void handle_input(void) {
     /* Hot-plug check: rescans only when /dev/input changed or a device went away */
     gamepad_tick(&gamepad, now);
 
+    /* Start menu — ahead of the BACK rule below, so BACK during the SCORES
+     * page is swallowed like any other input there (the widget's rule) and on
+     * the menu itself arrives as SM_EXIT. */
+    if (current_screen == SCREEN_MENU) {
+        int r = start_menu_update(&menu, &input, state.x, state.y,
+                                  state.pressed || state.held,
+                                  &gamepad, &audio, now);
+        if (r == SM_EXIT || r == menu_exit_idx) {
+            fb_fade_out(&fb);
+            running = false;
+        } else if (r == menu_start_idx) {
+            difficulty = start_menu_value(&menu, menu_diff_idx);
+            if (difficulty < 0 || difficulty >= DIFF_COUNT) difficulty = DIFF_NORMAL;
+            reset_game();
+            current_screen = SCREEN_PLAYING;
+            /* Non-blocking: effect 1 is this game's own 100 ms green flash. */
+            start_led_effect(1);
+        }
+        return;
+    }
+
     /* BTN_BACK always exits to launcher */
     if (input.buttons[BTN_ID_BACK].pressed) {
         fb_fade_out(&fb);
         running = false;
-        return;
-    }
-
-    /* Welcome screen */
-    if (current_screen == SCREEN_WELCOME) {
-        /* The green start flash goes through this game's own LED effect system —
-         * effect 1 is already exactly a 100 ms green flash.  It used to be
-         * hw_set_led() + usleep(100000) + hw_leds_off(), i.e. a 100 ms freeze
-         * inside handle_input() before the first frame of play. */
-        /* Touch: tap start button */
-        if (state.pressed) {
-            bool touched = button_is_touched(&start_button, state.x, state.y);
-            if (button_check_press(&start_button, touched, now)) {
-                current_screen = SCREEN_PLAYING;
-                start_led_effect(1);
-            }
-        }
-        /* Mouse: click start button */
-        if (input.mouse_left_pressed) {
-            bool touched = button_is_touched(&start_button, input.mouse_x, input.mouse_y);
-            if (button_check_press(&start_button, touched, now)) {
-                current_screen = SCREEN_PLAYING;
-                start_led_effect(1);
-            }
-        }
-        /* Gamepad/keyboard: start game with Jump, Action, or Pause */
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed ||
-            input.buttons[BTN_ID_PAUSE].pressed) {
-            current_screen = SCREEN_PLAYING;
-            start_led_effect(1);
-        }
         return;
     }
 
@@ -1684,6 +1687,11 @@ int main(int argc, char *argv[]) {
          * SCREEN_GAME_OVER, which worked but pinned a static overlay to 30 fps;
          * asking the component is the same fix the other six games now use. */
         if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+            needs_redraw = true;
+
+        /* The start menu's bracket blink and attract phase changes arrive
+         * with no input; without this the blink freezes. */
+        if (current_screen == SCREEN_MENU && start_menu_needs_redraw(&menu))
             needs_redraw = true;
 
         /* One bed transition, ABOVE the redraw block and before the pump.

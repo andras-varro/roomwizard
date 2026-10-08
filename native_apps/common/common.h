@@ -164,8 +164,6 @@ void button_draw_exit(Framebuffer *fb, Button *btn);
 // Backward compatibility aliases for old game_common API
 #define draw_menu_button button_draw_menu
 #define draw_exit_button button_draw_exit
-#define draw_welcome_screen screen_draw_welcome
-#define draw_welcome_screen_warn screen_draw_welcome_warn
 
 // ============================================================================
 // TEXT UTILITIES
@@ -199,33 +197,6 @@ int button_calc_min_width(const char *text, int scale, int padding);
 
 // Auto-size button to fit text
 void button_auto_size(Button *btn, int padding);
-
-// ============================================================================
-// SCREEN TEMPLATES
-// ============================================================================
-
-// Draw welcome screen with title and start button.
-//
-// `instructions` may contain '\n'; each line is measured and centred
-// individually (fb_draw_text does NOT interpret '\n' — passing a multi-line
-// string straight to it renders one long line and mis-centres it).
-//
-// The function also *positions* `start_btn`: it is laid out below the measured
-// instruction block, centred in the safe area and clamped to it, so the drawn
-// rectangle and the hit-test rectangle can never disagree.  Callers no longer
-// need to pick welcome-screen coordinates in button_init().
-void screen_draw_welcome(Framebuffer *fb, const char *game_title,
-                        const char *instructions, Button *start_btn);
-
-// As screen_draw_welcome(), plus an optional amber `warning` block drawn below
-// the instructions (also '\n'-splittable).  Pass NULL for no warning; then this
-// is exactly screen_draw_welcome().  Used to tell the player that the game
-// needs a USB keyboard or gamepad and none is connected.
-void screen_draw_welcome_warn(Framebuffer *fb, const char *game_title,
-                             const char *instructions, const char *warning,
-                             Button *start_btn);
-
-
 
 // ============================================================================
 // ICON DRAWING HELPERS
@@ -311,9 +282,9 @@ uint32_t get_time_ms(void);
 #define LAYOUT_EXIT_BTN_Y       (SCREEN_SAFE_TOP + fb_ui_px_y(10))
 #define LAYOUT_BOTTOM_BTN_Y     (SCREEN_SAFE_BOTTOM - BTN_LARGE_HEIGHT - fb_ui_px_y(20))  // Bottom buttons
 
-// Welcome-screen text metrics (screen_draw_welcome*): instruction/warning text
-// scale, the gap between wrapped lines, and the gap between blocks (title,
-// instructions, warning, start button).
+// Start-menu text metrics (start_menu.c): instruction/warning text scale, the
+// gap between wrapped lines, and the gap between blocks (title, instructions,
+// warning, entries).
 #define WELCOME_INST_SCALE  2
 #define WELCOME_LINE_GAP    8
 #define WELCOME_BLOCK_GAP   16

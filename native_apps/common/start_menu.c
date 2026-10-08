@@ -210,7 +210,7 @@ static int sm_block_height(const char *text, int scale)
 static void sm_layout(StartMenu *m)
 {
     int th2 = text_measure_height(2);
-    m->title_y = SCREEN_VISIBLE_TOP + 50;       /* where the welcome screen puts it */
+    m->title_y = SCREEN_VISIBLE_TOP + 50;       /* below the bezel band */
     int y = m->title_y + text_measure_height(SM_TITLE_SCALE) + WELCOME_BLOCK_GAP;
 
     m->sub_y = y;

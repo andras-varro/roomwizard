@@ -28,6 +28,7 @@
 #include "../common/audio.h"
 #include "../common/audio_bed.h"
 #include "../common/gamepad.h"
+#include "../common/start_menu.h"
 
 /* ══════════════════════════════════════════════════════════════════════════
  *  Constants
@@ -119,7 +120,7 @@ static int brick_rows = BRICK_ROWS_BASE;
  * ══════════════════════════════════════════════════════════════════════════ */
 
 typedef enum {
-    SCREEN_WELCOME,
+    SCREEN_MENU,
     SCREEN_PLAYING,
     SCREEN_PAUSED,
     SCREEN_LEVEL_COMPLETE,
@@ -248,7 +249,16 @@ static GameState    game;
 static HighScoreTable hs;
 static bool         running = true;
 static uint32_t     frame_time_ms;  /* updated each frame */
-static bool test_mode = false;     /* --test: special test levels */
+static bool test_mode = false;     /* special test levels: the menu's EASY, or --test */
+
+/* Start menu (../common/start_menu.h): START, DIFFICULTY, EXIT.  EASY is the
+ * old TEST mode (level 1 all explosive bricks, level 2+ every brick drops a
+ * power-up); NORMAL is the game as it always played.  Scores are recorded in
+ * both, as TEST always did. */
+enum { DIFF_EASY, DIFF_NORMAL, DIFF_COUNT };
+static const char *const DIFF_NAMES[DIFF_COUNT] = { "EASY", "NORMAL" };
+static StartMenu menu;
+static int menu_start_idx, menu_diff_idx, menu_exit_idx;
 static float ball_base_speed = BALL_BASE_SPEED;  /* runtime speed, adjusted for screen orientation */
 static GameOverScreen gos;  /* unified game over screen */
 /* The play clock (update_game).  play_clock_live is false whenever the last
@@ -267,7 +277,7 @@ static LedPulse     fx_pulse;
 
 /* UI buttons */
 static Button btn_menu, btn_exit;
-static Button btn_start, btn_restart;
+static Button btn_restart;
 static Button btn_next_level;
 static ModalDialog pause_dialog;
 
@@ -1534,34 +1544,15 @@ static void draw_game_screen(void) {
 
 /* ── Overlay screens ─────────────────────────────────────────────────── */
 
-static void draw_welcome(void) {
-    fb_clear(&fb, BG_COLOR);
-
-    /* Title */
-    text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 60,
-                       "BRICK BREAKER", RGB(0, 220, 255), 4);
-
-    /* Decorative line */
-    fb_fill_rect_gradient(&fb, AREA_X + 80, SCREEN_SAFE_TOP + 100, AREA_W - 160, 3,
-                          RGB(0, 220, 255), RGB(255, 80, 200));
-
-    /* Instructions */
-    text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 130,
-                       "DRAG TO MOVE PADDLE", RGB(160, 160, 180), 2);
-    text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 155,
-                       "TAP TO LAUNCH BALL", RGB(160, 160, 180), 2);
-    text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 180,
-                       "CATCH POWER-UPS!", RGB(160, 160, 180), 2);
-
-    /* High score */
-    if (hs.count > 0) {
-        char buf[64];
+/* The menu subtitle is the best score so far; blank before the first one.
+ * Called at init, and again by anything that returns to the menu. */
+static void menu_refresh_subtitle(void) {
+    char buf[64];
+    if (hs.count > 0)
         snprintf(buf, sizeof(buf), "HIGH SCORE: %d", hs.entries[0].score);
-        text_draw_centered(&fb, fb.width / 2, SCREEN_SAFE_TOP + 220,
-                           buf, RGB(255, 255, 100), 2);
-    }
-
-    button_draw(&fb, &btn_start);
+    else
+        buf[0] = '\0';
+    start_menu_set_subtitle(&menu, buf);
 }
 
 static void draw_paused(void) {
@@ -1602,6 +1593,22 @@ static void handle_input(void) {
     /* Hot-plug check: rescans only when /dev/input changed or a device went away */
     gamepad_tick(&gamepad_mgr, now);
 
+    /* Start menu — ahead of the BACK rule, so BACK during the SCORES page is
+     * swallowed by the widget and on the menu itself arrives as SM_EXIT. */
+    if (game.screen == SCREEN_MENU) {
+        int r = start_menu_update(&menu, &gp_input, st.x, st.y,
+                                  st.pressed || st.held,
+                                  &gamepad_mgr, &audio, now);
+        if (r == SM_EXIT || r == menu_exit_idx) {
+            running = false;
+        } else if (r == menu_start_idx) {
+            test_mode = (start_menu_value(&menu, menu_diff_idx) == DIFF_EASY);
+            reset_game();
+            audio_beep(&audio);
+        }
+        return;
+    }
+
     /* BTN_BACK always exits to launcher */
     if (gp_input.buttons[BTN_ID_BACK].pressed) {
         running = false;
@@ -1609,21 +1616,8 @@ static void handle_input(void) {
     }
 
     switch (game.screen) {
-    case SCREEN_WELCOME:
-        if (st.pressed) {
-            if (button_check_press(&btn_start, button_is_touched(&btn_start, st.x, st.y), now)) {
-                reset_game();
-                audio_beep(&audio);
-            }
-        }
-        /* Gamepad/keyboard: start game with Jump, Action, or Pause */
-        if (gp_input.buttons[BTN_ID_JUMP].pressed ||
-            gp_input.buttons[BTN_ID_ACTION].pressed ||
-            gp_input.buttons[BTN_ID_PAUSE].pressed) {
-            reset_game();
-            audio_beep(&audio);
-        }
-        break;
+    case SCREEN_MENU:
+        break;   /* handled above */
 
     case SCREEN_PLAYING:
         /* Gamepad/keyboard: pause */
@@ -1737,16 +1731,6 @@ static void handle_input(void) {
             audio_beep(&audio);
         }
         if (action == MODAL_ACTION_BTN1) {
-            /* Toggle test mode */
-            test_mode = !test_mode;
-            modal_dialog_set_button(&pause_dialog, 1,
-                test_mode ? "TEST MODE: ON" : "TEST MODE: OFF",
-                test_mode ? BTN_COLOR_PRIMARY : RGB(100, 100, 100),
-                COLOR_WHITE);
-            modal_dialog_show(&pause_dialog);  /* Re-show (auto-hidden by update) */
-            audio_beep(&audio);
-        }
-        if (action == MODAL_ACTION_BTN2) {
             /* Retire — trigger game over */
             game.screen = SCREEN_GAME_OVER;
             {
@@ -1756,7 +1740,7 @@ static void handle_input(void) {
             }
             audio_gameover(&audio);   /* retiring ends the RUN — see the lost-ball site */
         }
-        if (action == MODAL_ACTION_BTN3) {
+        if (action == MODAL_ACTION_BTN2) {
             /* Exit */
             running = false;
         }
@@ -1909,10 +1893,6 @@ int main(int argc, char *argv[]) {
     button_init(&btn_exit, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    button_init(&btn_start, fb.width / 2 - BTN_LARGE_WIDTH / 2,
-                SCREEN_SAFE_BOTTOM - BTN_LARGE_HEIGHT - 30,
-                BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "START",
-                BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
     button_init(&btn_restart, fb.width / 2 - BTN_LARGE_WIDTH / 2,
                 SCREEN_SAFE_BOTTOM - BTN_LARGE_HEIGHT - 30,
                 BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "PLAY AGAIN",
@@ -1921,17 +1901,27 @@ int main(int argc, char *argv[]) {
                 fb.height / 2 + 60, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "NEXT LEVEL",
                 BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
 
-    /* Pause dialog — 4-button modal */
-    modal_dialog_init(&pause_dialog, "PAUSED", NULL, 4);
+    /* Pause dialog — 3-button modal */
+    modal_dialog_init(&pause_dialog, "PAUSED", NULL, 3);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
-    modal_dialog_set_button(&pause_dialog, 1,
-        test_mode ? "TEST MODE: ON" : "TEST MODE: OFF",
-        test_mode ? BTN_COLOR_PRIMARY : RGB(100, 100, 100),
-        COLOR_WHITE);
-    modal_dialog_set_button(&pause_dialog, 2, "RETIRE", BTN_COLOR_WARNING, COLOR_WHITE);
-    modal_dialog_set_button(&pause_dialog, 3, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
+    modal_dialog_set_button(&pause_dialog, 1, "RETIRE", BTN_COLOR_WARNING, COLOR_WHITE);
+    modal_dialog_set_button(&pause_dialog, 2, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
 
-    game.screen = SCREEN_WELCOME;
+    /* Start menu: no DEMO yet, so the attract cycle is MENU -> SCORES.
+     * --test preselects EASY. */
+    start_menu_init(&menu, "BRICK BREAKER",
+                    "DRAG TO MOVE PADDLE\n"
+                    "TAP TO LAUNCH BALL\n"
+                    "CATCH POWER-UPS!", get_time_ms());
+    menu_refresh_subtitle();
+    menu_start_idx = start_menu_add_action(&menu, "START");
+    menu_diff_idx  = start_menu_add_choice(&menu, "DIFFICULTY", DIFF_NAMES, DIFF_COUNT,
+                                           test_mode ? DIFF_EASY : DIFF_NORMAL);
+    menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
+    start_menu_select(&menu, menu_start_idx, get_time_ms());
+    start_menu_set_attract(&menu, false);
+
+    game.screen = SCREEN_MENU;
     frame_time_ms = get_time_ms();
 
     printf("Brick Breaker started!\n");
@@ -1967,6 +1957,10 @@ int main(int argc, char *argv[]) {
         if (game.screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
             needs_redraw = true;
 
+        /* The start menu's blink and attract phase change with no input. */
+        if (game.screen == SCREEN_MENU && start_menu_needs_redraw(&menu))
+            needs_redraw = true;
+
         /* ⚠️ The bed is serviced ABOVE the redraw block, and the ORDER is
          * load-bearing rather than tidiness.  SCREEN_GAME_OVER's redraw calls
          * gameover_update(), whose name entry is a BLOCKING sub-loop that owns
@@ -1994,7 +1988,12 @@ int main(int argc, char *argv[]) {
 
         if (needs_redraw) {
             switch (game.screen) {
-            case SCREEN_WELCOME:        draw_welcome();        break;
+            case SCREEN_MENU:
+                if (start_menu_attract(&menu) == SM_ATTRACT_MENU)
+                    start_menu_draw(&menu, &fb);
+                else
+                    start_menu_draw_scores(&menu, &fb, &hs);
+                break;
             case SCREEN_PLAYING:        draw_game_screen();    break;
             case SCREEN_PAUSED:         draw_paused();         break;
             case SCREEN_LEVEL_COMPLETE: draw_level_complete(); break;
