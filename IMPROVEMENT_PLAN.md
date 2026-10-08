@@ -341,24 +341,22 @@ rest committed as bare PPMs with no generator — and collected by the `*//*.ppm
 the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then delete the three old scripts.
 **Done when** the launcher grid on the panel reads as the same family as the Control Panel's. Operator 2026-10-07 also wants a better icon for the Control Panel's System page, done with this rework: its page has `.icon = NULL` (`system_page.c:563`) and `ICONS` in `gen_cp_icons.py:178` has no System entry.
 
-### F118. An arcade-style start menu shared by all the games — open, step 1 of 7 done, operator request 2026-10-04
+### F118. An arcade-style start menu shared by all the games — open, demos and panel checks remain, operator request 2026-10-04
 
-Step 1 is done: the widget is `native_apps/common/start_menu.h`/`.c` (`StartMenu`; `start_menu_step` is the pure, device-free
-core, `start_menu_update`/`start_menu_draw` the rest; `audio_ping` in `audio.h`), host test `native_apps/tests/start_menu_test.c`.
-No game uses it yet and its draw has not been seen on the panel. Operator decisions 2026-10-07: **entries are per game** (no 1P/2P
-entry unless the game has a 2-player mode; pong is the trial, P2 drives the right paddle instead of the AI; no DIFFICULTY entry
-unless the game has difficulty). Platformer: EASY replaces TRAINING, else NORMAL. Brick breaker: EASY replaces TEST mode, else
-NORMAL. Snake: EASY is 1/2 the current speed, NORMAL 3/4, HARD the current speed. **Pings:** 3 on, 3 off, stop after 60 s with no
-input; any navigation input restarts the 60 s. **Attract mode** is part of this entry: after 15 s idle the screen cycles MENU ->
-DEMO -> SCORES -> MENU, 15 s each, forever; a demo ends early when its AI dies (`start_menu_demo_over`); any input returns to MENU
-and is swallowed. **Sound:** silent after 60 s idle; within the first 60 s a game may play its music bed in the demo
-(`start_menu_sound_allowed`). **Demo AI**, best-effort per game: pong both paddles on the existing AI; brick paddle follows the
-ball; snake greedy to food avoiding itself; samegame largest group; tetris simple placement score; frogger hop when the lane is
-clear; platformer run right and jump. The backlight-blanking idle setting wins: no rendering while blanked [inferred design, not
-built]. **Order:** pilot snake (menu + difficulty), pong (1P/2P + demo), tetris + frogger, samegame + platformer, brick_breaker
-(high score as subtitle), per-game demos, then retire `screen_draw_welcome*` (`start_menu.c`'s `sm_draw_block` duplicates
-`common.c`'s line splitter; merge it then). **Done when** every game starts from the menu, 2-player pong reads P1/P2 from the
-slots, and the attract cycle runs on the panel.
+All seven games open on the shared widget (`native_apps/common/start_menu.h`, `.c`; host test `tests/start_menu_test.c`).
+Entries are per game: pong has PLAYERS 1P/2P and a DEMO (both paddles on the AI, silent, ends at 5 points); the other six
+attract MENU -> SCORES only. DIFFICULTY exists where the game had a notion: snake (EASY, NORMAL, HARD = the old speed),
+pong (its AI level), frogger (lane speed x0.75 / x1 / x1.25), platformer (EASY = the former TRAINING toggle), brick_breaker
+(EASY = the former TEST mode; `--test` preselects it); samegame's EASY (4 colours instead of 5) is an invented knob.
+**Remaining:** (1) demos for the other six, best-effort AI per game: brick paddle follows the ball; snake greedy to food;
+samegame largest group; tetris simple placement score; frogger hop when the lane is clear; platformer run right and jump;
+a demo ends early via `start_menu_demo_over`, may play its music bed only while `start_menu_sound_allowed`, and the
+backlight-blanking idle setting wins [inferred design, not built]. (2) Operator panel checks, none done: LED blink, ping 3 on /
+3 off, silence after 60 s, the 15 s MENU/DEMO/SCORES cycle, pad / keyboard / touch navigation, a held A on entry ignored,
+pong 2P (P1 left or bottom, P2 right or top). (3) Operator decisions: samegame's EASY knob, frogger's 0.75 / 1.25, and whether
+EXIT on the game-over and pause screens should return to the menu rather than the launcher. (4) Pong's DEMO still shows the
+"D-PAD/STICK: MOVE ESC: PAUSE" hint line; `platformer.c` (:12, :244, :1321) and `brick_breaker.c` (:266) still say
+"welcome screen" in comments. **Done when** every game has a demo or the operator rules it out, and the panel checks pass.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 

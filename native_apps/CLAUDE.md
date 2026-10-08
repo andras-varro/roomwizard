@@ -62,14 +62,11 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 
 **`fb_draw_text()` does not interpret `'\n'`.** A newline takes the unprintable-character branch and just
 advances 6·scale px, so a multi-line string renders as one long line. Anything with embedded newlines must
-be split per line by the caller — `screen_draw_welcome*()` does this.
+be split per line by the caller — `sm_draw_block()` in `start_menu.c` does this.
 
-`screen_draw_welcome(fb, title, instructions, start_btn)` / `screen_draw_welcome_warn(…, warning, …)`
-**position `start_btn` as well as drawing it** — below the measured instruction (and warning) block, centred
-in and clamped to `SCREEN_SAFE_*`. So the drawn rect and the hit-test rect are one computation, and a
-caller's `button_init()` coordinates for the start button are only a fallback for a hit-test arriving before
-the first draw; use `LAYOUT_CENTER_X` / `LAYOUT_BOTTOM_BTN_Y` there, not a `fb.height / 2 + 40`-style
-literal. `instructions` and `warning` may both contain `'\n'`; the warning block renders amber and exists
+The game draws nothing of its own on the start menu (`common/start_menu.h`): `start_menu_draw()` lays out and draws
+the entries, `start_menu_draw_scores()` the SCORES page, and `start_menu_set_warning()` adds the amber "needs a
+controller and none is connected" block (`'\n'`-split by `sm_draw_block`, the one splitter).
 for "this game needs a controller and none is connected".
 
 `ModalDialog`: `modal_dialog_init()` → `modal_dialog_set_button()` per button → `modal_dialog_draw()` after
@@ -186,7 +183,7 @@ that may have changed settings exits. Config changes never propagate into a runn
 
 600 MHz, no GPU. Unconditional 60 fps redraws burn 40 %+ CPU; tracking `needs_redraw`, drawing only when
 set and sleeping longer when idle takes a static UI from ~40 % to under 5 %. Static UI (launchers, menus,
-settings): draw only on state change. Games: dirty-flag welcome/paused/game-over, render every gameplay frame.
+settings): draw only on state change. Games: dirty-flag start-menu/paused/game-over, render every gameplay frame.
 
 ```c
 bool needs_redraw = true;               /* first frame always draws */
@@ -309,8 +306,8 @@ default feel.
   them for one orientation.
 - **Touch and drawing must share a coordinate space.** Call `touch_set_screen_size()` with the
   virtual dimensions. A mismatch produces the "cursor runs ahead of the finger" symptom.
-- **Guard game logic by state** — ball physics, AI and scoring must not run on the welcome
-  screen.
+- **Guard game logic by state** — ball physics, AI and scoring must not run on the start menu
+  page.
 
 Portrait mode (flag file `/opt/games/portrait.mode`):
 
@@ -575,7 +572,7 @@ as library surface; the latter's boxes never matched the regions they claimed to
 Prefer a **tap relative to the object being controlled** over a virtual pad — frogger hops the frog
 towards wherever you tap in the playfield, which needs no regions, cannot latch, and makes the whole
 playfield one target. Where that does not map (platformer needs simultaneous run + jump), say so on the
-welcome screen with `screen_draw_welcome_warn()` rather than shipping controls that do not work.
+start menu with `start_menu_set_warning()` rather than shipping controls that do not work.
 
 **What you can and cannot test from a script.** `CONFIG_INPUT_UINPUT` is unset in this kernel, so an
 injector reports success and delivers nothing — a `tests/touch_inject.c` did exactly that and is
