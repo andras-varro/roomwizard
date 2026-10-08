@@ -91,8 +91,49 @@ static void kb_drain_touches(TouchInput *touch) {
 
 /* ── Main entry point ────────────────────────────────────────────────────── */
 
-int keyboard_enter(Framebuffer *fb, TouchInput *touch, const char *title,
-                   char *buf, int max_len, KeyboardLayout layout) {
+/* Is (r, c) a real key?  NUMERIC leaves empty slots that are not rendered. */
+static bool kb_cell_ok(const char **keys, KeyboardLayout layout, int r, int c) {
+    return !(layout == KB_LAYOUT_NUMERIC && keys[r][c] == ' ');
+}
+
+static int kb_abs(int v) { return v < 0 ? -v : v; }
+
+/* Move the focus one step.  Row `rows` is the action row.  Left/right wrap
+ * within the row and skip empty slots; up/down stop at the top and bottom and
+ * land on the key nearest in x, since the rows differ in length and pitch.
+ * Shifts only, no divide: the cell centres are x + width/2 by a constant. */
+static void kb_focus_move(const char **keys, KeyboardLayout layout, int rows, int cols,
+                          int n_action, int btn_w, int aw, int *fr, int *fc, int dir) {
+    if (dir == BTN_ID_LEFT || dir == BTN_ID_RIGHT) {
+        int width = (*fr == rows) ? n_action : cols;
+        int step  = (dir == BTN_ID_LEFT) ? -1 : 1;
+        int c = *fc;
+        for (int k = 0; k < width; k++) {
+            c += step;
+            if (c < 0) c = width - 1;
+            if (c >= width) c = 0;
+            if (*fr == rows || kb_cell_ok(keys, layout, *fr, c)) { *fc = c; return; }
+        }
+        return;
+    }
+    int nr = *fr + (dir == BTN_ID_UP ? -1 : 1);
+    if (nr < 0 || nr > rows) return;
+    int cx = (*fr == rows) ? *fc * aw + (aw >> 1) : *fc * btn_w + (btn_w >> 1);
+    int width = (nr == rows) ? n_action : cols;
+    int best = -1, best_d = 0;
+    for (int c = 0; c < width; c++) {
+        if (nr != rows && !kb_cell_ok(keys, layout, nr, c)) continue;
+        int x = (nr == rows) ? c * aw + (aw >> 1) : c * btn_w + (btn_w >> 1);
+        int d = kb_abs(x - cx);
+        if (best < 0 || d < best_d) { best = c; best_d = d; }
+    }
+    if (best >= 0) { *fr = nr; *fc = best; }
+}
+
+enum { KA_DEL, KA_CLEAR, KA_SHIFT, KA_CANCEL, KA_OK };
+
+int keyboard_enter(Framebuffer *fb, TouchInput *touch, GamepadManager *gm,
+                   const char *title, char *buf, int max_len, KeyboardLayout layout) {
 
     /* ── Select key layout ───────────────────────────────────────────── */
     const char **keys      = alpha_keys;
@@ -197,6 +238,24 @@ int keyboard_enter(Framebuffer *fb, TouchInput *touch, const char *title,
                      "OK",
                      RGB(0, 70, 0), COLOR_WHITE, RGB(0, 180, 0), 2);
 
+    /* The action row in order, so a focus column maps to one button and one id. */
+    Button *act_btn[5];
+    int     act_id[5];
+    int     na = 0;
+    act_btn[na] = &btn_del;    act_id[na++] = KA_DEL;
+    act_btn[na] = &btn_clear;  act_id[na++] = KA_CLEAR;
+    if (has_shift) { act_btn[na] = &btn_shift; act_id[na++] = KA_SHIFT; }
+    act_btn[na] = &btn_cancel; act_id[na++] = KA_CANCEL;
+    act_btn[na] = &btn_ok;     act_id[na++] = KA_OK;
+
+    /* Pad / keyboard focus: (frow, fcol), frow == rows being the action row.
+     * Edges are our own, from the level, seeded TRUE so a button still down
+     * from the screen before must be released and pressed again. */
+    int  frow = 0, fcol = 0;
+    bool focus_shown = true;
+    bool prev_held[BTN_ID_COUNT];
+    for (int b = 0; b < BTN_ID_COUNT; b++) prev_held[b] = true;
+
     /* ── Drain stale touches ─────────────────────────────────────────── */
     kb_drain_touches(touch);
 
@@ -274,6 +333,20 @@ int keyboard_enter(Framebuffer *fb, TouchInput *touch, const char *title,
             button_draw(fb, &btn_cancel);
             button_draw(fb, &btn_ok);
 
+            if (gm) {
+                if (focus_shown) {
+                    const Button *fbtn = (frow == rows) ? act_btn[fcol] : &letter_btns[frow][fcol];
+                    for (int k = 0; k < 3; k++)
+                        fb_draw_rect(fb, fbtn->x - k, fbtn->y - k,
+                                     fbtn->width + 2 * k, fbtn->height + 2 * k, COLOR_YELLOW);
+                }
+                int hy = action_y + btn_h + 8;
+                if (hy + 10 <= SCREEN_VISIBLE_BOTTOM)
+                    fb_draw_text(fb, safe_l, hy,
+                                 "ARROWS MOVE  A/SPACE/ENTER KEY  SELECT/BKSP DEL  START/ESC OK",
+                                 RGB(120, 120, 120), 1);
+            }
+
             fb_swap(fb);
             dirty = false;
         }
@@ -291,65 +364,96 @@ int keyboard_enter(Framebuffer *fb, TouchInput *touch, const char *title,
         TouchState state = touch_get_state(touch);
         uint32_t   now   = get_time_ms();
 
+        /* What was pressed this frame, by finger or by key: a letter cell
+         * (pick_r, pick_c) or an action id (pick_a). */
+        int pick_r = -1, pick_c = -1, pick_a = -1;
+
         if (state.pressed && (now - last_press) > 180) {
-            bool handled = false;
+            /* A real touch hides the focus frame; the next key shows it. */
+            if (gm && focus_shown) { focus_shown = false; dirty = true; }
 
-            /* Check letter/symbol keys */
-            for (int r = 0; r < rows && !handled; r++) {
-                for (int c = 0; c < cols && !handled; c++) {
-                    char ch = cur_keys[r][c];
-                    if (layout == KB_LAYOUT_NUMERIC && ch == ' ')
+            for (int r = 0; r < rows && pick_r < 0; r++) {
+                for (int c = 0; c < cols && pick_r < 0; c++) {
+                    if (!kb_cell_ok(cur_keys, layout, r, c))
                         continue;
-
-                    if (button_is_touched(&letter_btns[r][c],
-                                          state.x, state.y)) {
-                        if (cursor < max_len) {
-                            /* ALPHA layout: _ key stores space */
-                            char store = ch;
-                            if (is_alpha && ch == '_')
-                                store = ' ';
-                            work[cursor++] = store;
-                            work[cursor]   = '\0';
-                            dirty = true;
-                        }
-                        last_press = now;
-                        handled = true;
+                    if (button_is_touched(&letter_btns[r][c], state.x, state.y)) {
+                        pick_r = r;
+                        pick_c = c;
                     }
                 }
             }
+            for (int a = 0; a < na && pick_r < 0; a++)
+                if (button_is_touched(act_btn[a], state.x, state.y))
+                    pick_a = act_id[a];
+            if (pick_r >= 0 || pick_a >= 0) last_press = now;
+        }
 
-            /* Action buttons */
-            if (!handled) {
-                if (button_is_touched(&btn_del, state.x, state.y)) {
-                    if (cursor > 0) {
-                        work[--cursor] = '\0';
-                        dirty = true;
-                    }
-                    last_press = now;
-                } else if (button_is_touched(&btn_clear, state.x, state.y)) {
-                    if (cursor > 0) dirty = true;
-                    cursor = 0;
-                    memset(work, 0, max_len + 1);
-                    last_press = now;
-                } else if (has_shift &&
-                           button_is_touched(&btn_shift, state.x, state.y)) {
-                    shifted = !shifted;
-                    dirty = true;
-                    /* Swap key pointer for next frame redraw */
-                    keys = shifted ? full_upper_keys : full_lower_keys;
-                    last_press = now;
-                } else if (button_is_touched(&btn_cancel, state.x, state.y)) {
-                    return KB_RESULT_CANCEL;   /* buf unchanged */
-                } else if (button_is_touched(&btn_ok, state.x, state.y)) {
-                    /* Trim trailing spaces */
-                    int l = (int)strlen(work);
-                    while (l > 0 && work[l - 1] == ' ') work[--l] = '\0';
-
-                    strncpy(buf, work, max_len);
-                    buf[max_len] = '\0';
-                    return KB_RESULT_OK;
-                }
+        if (gm && pick_r < 0 && pick_a < 0) {
+            InputState in;
+            memset(&in, 0, sizeof(in));
+            gamepad_poll(gm, &in, 0, 0, false);
+            bool edge[BTN_ID_COUNT];
+            for (int b = 0; b < BTN_ID_COUNT; b++) {
+                bool held = in.buttons[b].held;
+                edge[b] = (held || in.buttons[b].pressed) && !prev_held[b];
+                prev_held[b] = held;
             }
+            int dir = edge[BTN_ID_UP] ? BTN_ID_UP : edge[BTN_ID_DOWN] ? BTN_ID_DOWN
+                    : edge[BTN_ID_LEFT] ? BTN_ID_LEFT : edge[BTN_ID_RIGHT] ? BTN_ID_RIGHT : -1;
+            bool act = edge[BTN_ID_JUMP] || edge[BTN_ID_ACTION];
+
+            if (edge[BTN_ID_PAUSE]) {
+                pick_a = KA_OK;
+            } else if (edge[BTN_ID_BACK]) {
+                pick_a = KA_DEL;
+            } else if ((dir >= 0 || act) && !focus_shown) {
+                focus_shown = true;           /* the first key only shows it */
+                dirty = true;
+            } else if (dir >= 0) {
+                int fr = frow, fc = fcol;
+                kb_focus_move(keys, layout, rows, cols, na, btn_w, aw, &fr, &fc, dir);
+                if (fr != frow || fc != fcol) { frow = fr; fcol = fc; dirty = true; }
+            } else if (act) {
+                if (frow == rows) pick_a = act_id[fcol];
+                else { pick_r = frow; pick_c = fcol; }
+            }
+        }
+
+        if (pick_r >= 0) {
+            char ch = cur_keys[pick_r][pick_c];
+            if (cursor < max_len) {
+                /* ALPHA layout: _ key stores space */
+                char store = ch;
+                if (is_alpha && ch == '_')
+                    store = ' ';
+                work[cursor++] = store;
+                work[cursor]   = '\0';
+                dirty = true;
+            }
+        } else if (pick_a == KA_DEL) {
+            if (cursor > 0) {
+                work[--cursor] = '\0';
+                dirty = true;
+            }
+        } else if (pick_a == KA_CLEAR) {
+            if (cursor > 0) dirty = true;
+            cursor = 0;
+            memset(work, 0, max_len + 1);
+        } else if (pick_a == KA_SHIFT) {
+            shifted = !shifted;
+            dirty = true;
+            /* Swap key pointer for next frame redraw */
+            keys = shifted ? full_upper_keys : full_lower_keys;
+        } else if (pick_a == KA_CANCEL) {
+            return KB_RESULT_CANCEL;   /* buf unchanged */
+        } else if (pick_a == KA_OK) {
+            /* Trim trailing spaces */
+            int l = (int)strlen(work);
+            while (l > 0 && work[l - 1] == ' ') work[--l] = '\0';
+
+            strncpy(buf, work, max_len);
+            buf[max_len] = '\0';
+            return KB_RESULT_OK;
         }
 
         /* Still a full-rate tick when nothing paints: ui_frame_service() above

@@ -11,6 +11,7 @@
 #include "framebuffer.h"
 #include "touch_input.h"
 #include "highscore.h"
+#include "gamepad.h"
 #include "ui_focus.h"
 #include <stdint.h>
 #include <stdbool.h>
@@ -465,70 +466,90 @@ void cycler_draw(Framebuffer *fb, const Cycler *c, const char *text);
 // UNIFIED GAME OVER SCREEN
 // ============================================================================
 
+// The arcade flow: SHOW (title, score, over the playfield) -> NAME (only for a
+// score that makes the table) -> SCORES (full-screen table) -> MENU.  Every
+// step is driven by pad, keyboard or touch; the caller goes back to its start
+// menu on GAMEOVER_ACTION_MENU.
 typedef enum {
-    GAMEOVER_STATE_CHECK,       // Initial: check if score qualifies for highscore
-    GAMEOVER_STATE_NAME_ENTRY,  // Blocking name entry in progress
-    GAMEOVER_STATE_DISPLAY,     // Show game over screen with scores/buttons
-} GameOverState;
+    GAMEOVER_PHASE_SHOW,
+    GAMEOVER_PHASE_NAME,
+    GAMEOVER_PHASE_SCORES,
+    GAMEOVER_PHASE_DONE,
+} GameOverPhase;
 
 typedef enum {
     GAMEOVER_ACTION_NONE,
-    GAMEOVER_ACTION_RESTART,
-    GAMEOVER_ACTION_EXIT,
-    GAMEOVER_ACTION_RESET_SCORES,
+    GAMEOVER_ACTION_MENU,       // flow finished: back to the start menu
 } GameOverAction;
 
+#define GAMEOVER_SHOW_MS    3000u    // SHOW holds this long unless skipped
+#define GAMEOVER_ARM_MS     1000u    // input counts only after this much of SHOW
+#define GAMEOVER_SCORES_MS  15000u   // = SM_ATTRACT_MS (checked in common.c)
+
+// The phase decision, pure (no framebuffer, audio or touch) so a host test can
+// drive it.  phase_ms = time in `cur`; input = a fresh button edge or touch
+// press this frame; name_done = the name was entered and saved.  Returns the
+// phase to be in: SHOW -> NAME (qualifies) or SCORES (table) or DONE (no table)
+// once SHOW_MS has passed, or on input after ARM_MS; NAME -> SCORES when done;
+// SCORES -> DONE after SCORES_MS or on input.
+GameOverPhase gameover_phase_next(GameOverPhase cur, uint32_t phase_ms, bool input,
+                                  bool qualifies, bool has_table, bool name_done);
+
 typedef struct {
-    GameOverState state;
+    GameOverPhase phase;
     int score;
-    char title[64];           // Custom title or auto-set based on highscore
+    char title[64];           // Custom title or the default
     char info_line[64];       // Optional info (e.g., "LEVEL 5")
+    char game_title[64];      // Heading of the SCORES page ("HIGH SCORES" if none)
     HighScoreTable *hs_table; // NULL if no highscore support
     TouchInput *touch;        // Required for blocking hs_enter_name()
-    bool hs_qualifies;        // Set during CHECK state
-    Button restart_btn;
-    Button exit_btn;
-    Button reset_scores_btn;
-    bool has_reset_scores;    // Show reset scores button?
+    GamepadManager *gm;       // Pad / keyboard for name entry; NULL = touch only
+    bool started;             // First update ran: qualification checked, clock set
+    bool hs_qualifies;
+    bool name_done;
+    uint32_t phase_t0;        // get_time_ms() when the phase began
+    bool prev_held[BTN_ID_COUNT];  // own edges, seeded TRUE: the press that ended the game does not skip
+    bool was_touching;        // seeded TRUE likewise
     bool pending_draw;        // "I owe the screen a frame" — see gameover_needs_redraw()
-    bool armed;               // Overlay has been on screen a frame; input allowed
 } GameOverScreen;
 
 // Initialize the game over screen. Call once when entering game-over state.
-// hs_table can be NULL for games without highscore (like Pong simple mode).
-// touch is required when hs_table is non-NULL (used for blocking name entry).
+// game_title is the game's menu title for the SCORES page (NULL = "HIGH SCORES").
+// hs_table can be NULL for games without highscore (2-player pong): no name
+// entry and no SCORES page, SHOW then MENU.  gm may be NULL (touch only).
 void gameover_init(GameOverScreen *gos, Framebuffer *fb,
                    int score, const char *title, const char *info_line,
-                   HighScoreTable *hs_table, TouchInput *touch);
+                   const char *game_title, HighScoreTable *hs_table,
+                   TouchInput *touch, GamepadManager *gm);
 
-// Process the game over screen (handles name entry flow, renders, checks buttons).
-// Returns the action taken (NONE if no button pressed yet).
+// Process the flow: reads input, runs the blocking name entry, draws the page.
+// `in` is the game's InputState from this frame's gamepad_poll (may be NULL).
+// Returns GAMEOVER_ACTION_MENU once, when the flow is over (and on every call
+// after), NONE before.
 GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
-                               int touch_x, int touch_y, bool touch_active);
+                               int touch_x, int touch_y, bool touching,
+                               const InputState *in);
 
-// True while the component still owes the screen a frame, OR while there is
-// touch input it has not been given a chance to act on.
+// True while the component owes the screen a frame: a phase just changed, a
+// phase's time is up, or there is input it has not been given a chance to act
+// on.  An idle SCORES page reports false until its 15 s are up.
 //
-// gameover_update() is a multi-frame state machine — it checks the highscore
-// table, may run the blocking name-entry keyboard, and only draws once it
-// reaches DISPLAY — but every game calls it from inside its *draw* function,
-// which a dirty-flagged main loop runs only when needs_redraw is set. A loop
-// that computes that flag without asking the component starves it: the overlay
-// never appears until the player taps something. So OR this into the flag:
+// gameover_update() is called from inside the game's *draw* function, which a
+// dirty-flagged main loop runs only when needs_redraw is set. A loop that
+// computes that flag without asking the component starves it. So OR this into
+// the flag, handing it the same InputState the update gets:
 //
-//   if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+//   if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos, &input))
 //       needs_redraw = true;
 //
-// The input half matters just as much as the draw half: because our buttons are
-// read inside the draw path, a frame the loop declines to run is also an input
-// event we never see, and a fired button needs a not-touched frame before it can
-// fire again. So this reports draw-pending OR input-pending OR re-arm-pending. Do
-// not assume the caller has its own "redraw on input activity" branch — samegame
-// did not, and its game-over buttons were dead.
-bool gameover_needs_redraw(const GameOverScreen *gos);
+// The input half matters as much as the draw half: a button edge is read
+// inside the draw path, so a frame the loop declines to run is an input event
+// never seen.  Do not assume the caller has its own "redraw on input activity"
+// branch — samegame did not.
+bool gameover_needs_redraw(const GameOverScreen *gos, const InputState *in);
 
-// Draw the game over screen overlay (called each frame from gameover_update,
-// but may also be called directly if needed).
+// Draw the current page (SHOW overlay or SCORES), called from gameover_update
+// but may also be called directly.
 void gameover_draw(GameOverScreen *gos, Framebuffer *fb);
 
 // ============================================================================

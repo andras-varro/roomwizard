@@ -12,6 +12,7 @@
 
 #include "framebuffer.h"
 #include "touch_input.h"
+#include "gamepad.h"
 
 #define HS_MAX_ENTRIES  5
 #define HS_NAME_LEN     11     /* 10 visible chars + '\0' */
@@ -54,8 +55,9 @@ int  hs_draw(Framebuffer *fb, const HighScoreTable *t, int x, int y, int w);
 
 /* Blocking UI: show an on-screen keyboard and let the player enter a name.
    Writes a NUL-terminated string of at most HS_NAME_LEN-1 chars into
-   name_buf.  'score' is shown as context ("NEW HIGH SCORE: %d").   */
-void hs_enter_name(Framebuffer *fb, TouchInput *touch,
+   name_buf.  'score' is shown as context ("NEW HIGH SCORE: %d").
+   gm (may be NULL = touch only) adds pad / keyboard control, see keyboard.h. */
+void hs_enter_name(Framebuffer *fb, TouchInput *touch, GamepadManager *gm,
                    char *name_buf, int score);
 
 /* Drain pending touch events after hs_enter_name to prevent ghost taps. */

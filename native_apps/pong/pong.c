@@ -230,14 +230,16 @@ static void enter_game_over(void) {
         /* No high score for a head-to-head match: a NULL table skips the check. */
         snprintf(info, sizeof(info), "%d - %d", game.player.score, game.ai.score);
         gameover_init(&gos, &fb, game.player.score,
-                      player_won ? "P1 WINS!" : "P2 WINS!", info, NULL, &touch);
+                      player_won ? "P1 WINS!" : "P2 WINS!", info, "PONG",
+                      NULL, &touch, &gamepad);
     } else {
         if (player_won)
             snprintf(info, sizeof(info), "YOU WIN! %d - %d", game.player.score, game.ai.score);
         else
             snprintf(info, sizeof(info), "AI WINS %d - %d", game.ai.score, game.player.score);
         gameover_init(&gos, &fb, game.player.score,
-                      player_won ? "YOU WIN!" : "AI WINS!", info, &hs_table, &touch);
+                      player_won ? "YOU WIN!" : "AI WINS!", info, "PONG",
+                      &hs_table, &touch, &gamepad);
     }
 
     hw_led_pulse_start(&led_pulse, player_won ? LED_GREEN : LED_RED,
@@ -556,6 +558,19 @@ static void demo_sync(void) {
     demo_running = want;
 }
 
+/* Back to the start menu from play, pause or game over: undo what START set up
+ * so the menu and its attract cycle behave as on first launch. */
+static void return_to_menu(void) {
+    two_player = false;
+    demo_running = false;
+    game.paused = false;
+    hw_led_pulse_stop(&led_pulse);
+    hw_leds_off();
+    start_menu_reopen(&menu, get_time_ms());
+    current_screen = SCREEN_MENU;
+    play_clock_restart();
+}
+
 void handle_input() {
     touch_poll(&touch);
     TouchState state = touch_get_state(&touch);
@@ -604,24 +619,16 @@ void handle_input() {
         return;
     }
 
-    // BTN_BACK always exits to launcher
-    if (input.buttons[BTN_ID_BACK].pressed) {
-        fb_fade_out(&fb);
-        running = false;
+    // BTN_BACK returns to the start menu — not on GAME OVER, whose flow
+    // owns its input, so BACK there cannot skip a high-score name
+    if (input.buttons[BTN_ID_BACK].pressed && current_screen != SCREEN_GAME_OVER) {
+        return_to_menu();
         return;
     }
 
-    // Handle game over screen — gameover_update() manages buttons in draw phase
-    if (current_screen == SCREEN_GAME_OVER) {
-        // Allow gamepad restart
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed) {
-            reset_game();
-            current_screen = SCREEN_PLAYING;
-            play_clock_restart();
-        }
+    // Game over screen — gameover_update() runs the flow in the draw phase
+    if (current_screen == SCREEN_GAME_OVER)
         return;
-    }
     
     // Handle pause screen
     if (current_screen == SCREEN_PAUSED) {
@@ -649,14 +656,7 @@ void handle_input() {
             return;
         }
         if (action == MODAL_ACTION_BTN1) {
-            // Fade out effect
-            for (int i = 0; i < 3; i++) {
-                hw_set_led(LED_RED, 100);
-                usleep(100000);  // 100ms
-                hw_leds_off();
-                usleep(100000);  // 100ms
-            }
-            running = false;
+            return_to_menu();
             return;
         }
         return;
@@ -675,14 +675,7 @@ void handle_input() {
         // Check exit button (top-right)
         bool exit_touched = button_is_touched(&exit_button, state.x, state.y);
         if (button_check_press(&exit_button, exit_touched, current_time)) {
-            // Fade out effect
-            for (int i = 0; i < 3; i++) {
-                hw_set_led(LED_RED, 100);
-                usleep(100000);  // 100ms
-                hw_leds_off();
-                usleep(100000);  // 100ms
-            }
-            running = false;
+            return_to_menu();
             return;
         }
         
@@ -771,7 +764,8 @@ static void draw_playing_field(void) {
                      PADDLE_HEIGHT, PADDLE_WIDTH, COLOR_GREEN);
         
         // Draw controls hint (centered)
-        if (!input.gamepad_connected && !input.keyboard_connected)
+        if (demo_on()) {
+        } else if (!input.gamepad_connected && !input.keyboard_connected)
             text_draw_centered(&fb, fb.width / 2, fb.height - 18,
                               "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
         else
@@ -792,14 +786,15 @@ static void draw_playing_field(void) {
                      offset_y + (int)game.ai.y, PADDLE_WIDTH, PADDLE_HEIGHT, COLOR_RED);
         
         // Draw controls hint (centered)
-        if (!input.gamepad_connected && !input.keyboard_connected)
+        if (demo_on()) {
+        } else if (!input.gamepad_connected && !input.keyboard_connected)
             text_draw_centered(&fb, fb.width / 2, fb.height - 18,
                               "TOUCH TO MOVE PADDLE", RGB(100, 100, 100), 1);
         else
             text_draw_centered(&fb, fb.width / 2, fb.height - 18,
                               "D-PAD/STICK: MOVE  ESC: PAUSE", RGB(100, 100, 100), 1);
     }
-    
+
     // Draw ball (same for both orientations)
     fb_fill_circle(&fb, offset_x + (int)game.ball.x + BALL_SIZE / 2,
                    offset_y + (int)game.ball.y + BALL_SIZE / 2,
@@ -840,24 +835,12 @@ void draw_game() {
     // Handle game over screen overlay (unified GameOverScreen component)
     if (current_screen == SCREEN_GAME_OVER) {
         TouchState go_st = touch_get_state(&touch);
+        /* `input` is the file-scope InputState handle_input() filled this frame. */
         GameOverAction action = gameover_update(&gos, &fb,
-                                                go_st.x, go_st.y, go_st.pressed);
-        switch (action) {
-        case GAMEOVER_ACTION_RESTART:
-            reset_game();
-            current_screen = SCREEN_PLAYING;
-            play_clock_restart();
-            break;
-        case GAMEOVER_ACTION_EXIT:
-            running = false;
-            break;
-        case GAMEOVER_ACTION_RESET_SCORES:
-            /* Handled internally by the component */
-            break;
-        case GAMEOVER_ACTION_NONE:
-        default:
-            break;
-        }
+                                                go_st.x, go_st.y, go_st.pressed,
+                                                &input);
+        if (action == GAMEOVER_ACTION_MENU)
+            return_to_menu();
         return;
     }
 }
@@ -947,7 +930,7 @@ int main(int argc, char *argv[]) {
          * check, blocking name entry) and only draws once it reaches DISPLAY —
          * give it frames until it says it is settled, or the overlay never
          * appears without a tap. */
-        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos, &input))
             needs_redraw = true;
 
         /* The start menu's bracket blink and attract page changes arrive with no

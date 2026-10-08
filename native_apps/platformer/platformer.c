@@ -9,7 +9,7 @@
  *   - Enemy AI with stomp-kill mechanic
  *   - Gamepad, keyboard, and touch input via unified gamepad module
  *   - High scores, LED effects, audio feedback
- *   - Welcome, pause (modal dialog), level complete, game-over screens
+ *   - Start menu, pause (modal dialog), level complete, game-over screens
  *
  * Follows project conventions established in frogger.c.
  */
@@ -241,7 +241,7 @@ static uint32_t level_complete_timer;
 
 /* The play clock (update_game).  play_clock_live is false whenever the last
  * update_game() call was outside SCREEN_PLAYING, so the first playing frame
- * after the welcome screen, a pause, a level change or a restart re-baselines
+ * after the start menu, a pause, a level change or a restart re-baselines
  * instead of integrating the time spent away. */
 static bool     play_clock_live;
 static uint32_t play_last_ms;
@@ -1136,8 +1136,8 @@ static void update_player(void) {
             if (game_lives <= 0) {
                 current_screen = SCREEN_GAME_OVER;
                 play_game_over_sound();
-                gameover_init(&gos, &fb, score, NULL, NULL,
-                              &hs_table, &touch);
+                gameover_init(&gos, &fb, score, NULL, NULL, "OFFICE RUNNER",
+                              &hs_table, &touch, &gamepad);
             } else {
                 reset_player_to_spawn();
             }
@@ -1318,7 +1318,7 @@ static void update_game(void) {
     if (!play_clock_live) {
         /* Entering play: start the clock here, run no tick this frame, and drop
          * this frame's edges — they belong to whatever started or resumed play
-         * (the welcome screen's JUMP, the pause toggle). */
+         * (the start menu's JUMP, the pause toggle). */
         play_clock_live      = true;
         play_last_ms         = now;
         tick_acc             = 0.0f;
@@ -1728,6 +1728,18 @@ static void draw_hud(void) {
  * Main Draw Function
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Back to the start menu from anywhere in play: drop the play-time state the
+ * START path set up (LED effect, dialog, level, score, lives) so the menu looks
+ * as on first launch.  Changing current_screen releases the music bed on the
+ * next bed_service(); the play clock re-baselines on its own. */
+static void return_to_menu(void) {
+    hw_leds_off();
+    modal_dialog_hide(&pause_dialog);
+    reset_game();
+    start_menu_reopen(&menu, get_time_ms());
+    current_screen = SCREEN_MENU;
+}
+
 static void draw_all(void) {
     /* Start menu, or the attract cycle's SCORES page (widget clears too) */
     if (current_screen == SCREEN_MENU) {
@@ -1789,22 +1801,11 @@ static void draw_all(void) {
          * touch_poll() clears TouchState.pressed at entry — a second poll ate the
          * press edge, so RESTART and EXIT could never fire. */
         TouchState ts = touch_get_state(&touch);
+        /* `input` is the file-scope InputState handle_input() filled this frame. */
         GameOverAction act = gameover_update(&gos, &fb,
-                                             ts.x, ts.y, ts.pressed);
-        switch (act) {
-        case GAMEOVER_ACTION_RESTART:
-            reset_game();
-            current_screen = SCREEN_PLAYING;
-            break;
-        case GAMEOVER_ACTION_EXIT:
-            running = false;
-            break;
-        case GAMEOVER_ACTION_RESET_SCORES:
-            break;
-        case GAMEOVER_ACTION_NONE:
-        default:
-            break;
-        }
+                                             ts.x, ts.y, ts.pressed, &input);
+        if (act == GAMEOVER_ACTION_MENU)
+            return_to_menu();
         return;
     }
 }
@@ -1851,11 +1852,10 @@ static void handle_input(void) {
         return;
     }
 
-    /* BTN_BACK always exits to the launcher. Platformer was the only game without
-     * this, which left its game-over screen with no way out. */
-    if (input.buttons[BTN_ID_BACK].pressed) {
-        fb_fade_out(&fb);
-        running = false;
+    /* BTN_BACK returns to the start menu, whose own EXIT leaves the process —
+     * not on GAME OVER, whose flow owns its input (BACK must not lose a name). */
+    if (input.buttons[BTN_ID_BACK].pressed && current_screen != SCREEN_GAME_OVER) {
+        return_to_menu();
         return;
     }
 
@@ -1876,8 +1876,7 @@ static void handle_input(void) {
          * needing to fire once.  Reported from the panel 2026-08-10, mechanism
          * in tests/button_latch_test.c. */
         if (button_check_tap(&exit_button, &ts, now)) {
-            fb_fade_out(&fb);
-            running = false;
+            return_to_menu();
             return;
         }
         if (button_check_tap(&menu_button, &ts, now)) {
@@ -1901,8 +1900,7 @@ static void handle_input(void) {
                 break;
             }
             if (act == MODAL_ACTION_BTN1) {
-                fb_fade_out(&fb);
-                running = false;
+                return_to_menu();
                 break;
             }
         }
@@ -1918,8 +1916,8 @@ static void handle_input(void) {
                 current_screen = SCREEN_PLAYING;
             } else {
                 current_screen = SCREEN_GAME_OVER;
-                gameover_init(&gos, &fb, score, "YOU WIN!", NULL,
-                              &hs_table, &touch);
+                gameover_init(&gos, &fb, score, "YOU WIN!", NULL, "OFFICE RUNNER",
+                              &hs_table, &touch, &gamepad);
             }
         }
     }
@@ -2021,7 +2019,7 @@ int main(int argc, char *argv[]) {
          * check, blocking name entry) and only draws once it reaches DISPLAY —
          * give it frames until it says it is settled, or the overlay never
          * appears without a tap. */
-        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos, &input))
             needs_redraw = true;
 
         /* The start menu's bracket blink and attract phase changes arrive

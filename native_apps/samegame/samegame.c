@@ -410,6 +410,17 @@ static void reset_game(void) {
     }
 }
 
+/* Back to the start menu from play, pause or game over: drop everything the
+ * START path set up (animations, shake, LED effect, highlight) so the menu
+ * looks as on first launch.  The music bed follows current_screen on its own. */
+static void return_to_menu(void) {
+    reset_game();
+    led_effect.active = false;
+    hw_leds_off();
+    current_screen = SCREEN_MENU;
+    start_menu_reopen(&menu, get_time_ms());
+}
+
 /* ========================================================================== */
 /* FLOOD FILL                                                                 */
 /* ========================================================================== */
@@ -812,7 +823,8 @@ static void update_animations(void) {
                 start_led_effect(4);  /* Game over LED */
             }
             current_screen = SCREEN_GAME_OVER;
-            gameover_init(&gos, &fb, game.score, NULL, NULL, &hs_table, &touch);
+            gameover_init(&gos, &fb, game.score, NULL, NULL, "SAMEGAME",
+                          &hs_table, &touch, &gamepad);
         }
         break;
 
@@ -1323,21 +1335,15 @@ static void draw_game(void) {
         fb_clear_draw_offset(&fb);
         TouchState go_st = touch_get_state(&touch);
         GameOverAction action = gameover_update(&gos, &fb,
-                                                go_st.x, go_st.y, go_st.pressed);
-        switch (action) {
-        case GAMEOVER_ACTION_RESTART:
-            reset_game();
-            current_screen = SCREEN_PLAYING;
-            break;
-        case GAMEOVER_ACTION_EXIT:
-            running = false;
-            break;
-        case GAMEOVER_ACTION_RESET_SCORES:
-            /* Handled internally by the component */
-            break;
-        case GAMEOVER_ACTION_NONE:
-        default:
-            break;
+                                                go_st.x, go_st.y, go_st.pressed,
+                                                &input);
+        if (action == GAMEOVER_ACTION_MENU) {
+            /* Switched inside the draw path, so the loop's screen-change
+             * test never sees it: paint the menu into this frame. */
+            return_to_menu();
+            fb_clear(&fb, COLOR_BLACK);
+            start_menu_draw(&menu, &fb);
+            return;
         }
         /* Draw mouse cursor over game-over screen */
         if (input.mouse_connected)
@@ -1438,22 +1444,16 @@ static void handle_input(void) {
         return;
     }
 
-    /* BTN_BACK always exits to launcher */
-    if (input.buttons[BTN_ID_BACK].pressed) {
-        fb_fade_out(&fb);
-        running = false;
+    /* BTN_BACK returns to the start menu — not on GAME OVER, whose flow owns
+     * its input (BACK must not lose a high-score name) */
+    if (input.buttons[BTN_ID_BACK].pressed && current_screen != SCREEN_GAME_OVER) {
+        return_to_menu();
         return;
     }
 
-    /* Game over — handled in draw phase; allow gamepad restart */
-    if (current_screen == SCREEN_GAME_OVER) {
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed) {
-            reset_game();
-            current_screen = SCREEN_PLAYING;
-        }
+    /* Game over — the whole flow runs in the draw phase */
+    if (current_screen == SCREEN_GAME_OVER)
         return;
-    }
 
     /* Pause screen */
     if (current_screen == SCREEN_PAUSED) {
@@ -1476,8 +1476,7 @@ static void handle_input(void) {
             return;
         }
         if (action == MODAL_ACTION_BTN1) {
-            fb_fade_out(&fb);
-            running = false;
+            return_to_menu();
             return;
         }
         /* Mouse: click pause dialog buttons */
@@ -1489,8 +1488,7 @@ static void handle_input(void) {
                 return;
             }
             if (action == MODAL_ACTION_BTN1) {
-                fb_fade_out(&fb);
-                running = false;
+                return_to_menu();
                 return;
             }
         }
@@ -1509,8 +1507,7 @@ static void handle_input(void) {
         /* Check exit button */
         bool exit_touched = button_is_touched(&exit_button, state.x, state.y);
         if (button_check_press(&exit_button, exit_touched, now)) {
-            fb_fade_out(&fb);
-            running = false;
+            return_to_menu();
             return;
         }
 
@@ -1531,8 +1528,7 @@ static void handle_input(void) {
         /* Check exit button */
         bool exit_touched = button_is_touched(&exit_button, input.mouse_x, input.mouse_y);
         if (button_check_press(&exit_button, exit_touched, now)) {
-            fb_fade_out(&fb);
-            running = false;
+            return_to_menu();
             return;
         }
 
@@ -1686,7 +1682,7 @@ int main(int argc, char *argv[]) {
          * appears without a tap. This used to be an unconditional redraw while
          * SCREEN_GAME_OVER, which worked but pinned a static overlay to 30 fps;
          * asking the component is the same fix the other six games now use. */
-        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos, &input))
             needs_redraw = true;
 
         /* The start menu's bracket blink and attract phase changes arrive

@@ -263,7 +263,7 @@ static float ball_base_speed = BALL_BASE_SPEED;  /* runtime speed, adjusted for 
 static GameOverScreen gos;  /* unified game over screen */
 /* The play clock (update_game).  play_clock_live is false whenever the last
  * update_game() call was outside SCREEN_PLAYING, so the first playing frame
- * after the welcome screen, a pause, a level change or a restart re-baselines
+ * after the start menu, a pause, a level change or a restart re-baselines
  * instead of integrating the time spent away. */
 static bool     play_clock_live;
 static uint32_t play_last_ms;
@@ -1239,7 +1239,8 @@ static void game_tick(void) {
             {
                 char info[64];
                 snprintf(info, sizeof(info), "LEVEL %d", game.level);
-                gameover_init(&gos, &fb, game.score, NULL, info, &hs, &touch);
+                gameover_init(&gos, &fb, game.score, NULL, info,
+                              "BRICK BREAKER", &hs, &touch, &gamepad_mgr);
             }
         } else {
             audio_fail(&audio);
@@ -1577,6 +1578,22 @@ static void draw_level_complete(void) {
 
 /* draw_game_over() — removed: replaced by unified GameOverScreen component */
 
+/* Leave a run (or the finished game-over flow) for the start menu, undoing what
+ * START and play set up so the menu looks as on first launch.  test_mode needs
+ * no reset: START re-reads it from the DIFFICULTY choice, which reopen keeps. */
+static void return_to_menu(void) {
+    modal_dialog_hide(&pause_dialog);
+    hw_led_pulse_stop(&fx_pulse);
+    hw_leds_off();
+    reset_effects();
+    apply_paddle_width();
+    game.clear_cooldown = 0;
+    game.pending_exp_count = 0;
+    menu_refresh_subtitle();
+    start_menu_reopen(&menu, get_time_ms());
+    game.screen = SCREEN_MENU;
+}
+
 /* ══════════════════════════════════════════════════════════════════════════
  *  Input handling
  * ══════════════════════════════════════════════════════════════════════════ */
@@ -1609,9 +1626,10 @@ static void handle_input(void) {
         return;
     }
 
-    /* BTN_BACK always exits to launcher */
-    if (gp_input.buttons[BTN_ID_BACK].pressed) {
-        running = false;
+    /* BTN_BACK leaves the run for the start menu (only the menu's EXIT quits);
+     * not on GAME OVER, whose flow owns its input — BACK must not lose a name. */
+    if (gp_input.buttons[BTN_ID_BACK].pressed && game.screen != SCREEN_GAME_OVER) {
+        return_to_menu();
         return;
     }
 
@@ -1630,7 +1648,7 @@ static void handle_input(void) {
         /* Exit (touch) */
         if (st.pressed) {
             if (button_check_press(&btn_exit, button_is_touched(&btn_exit, st.x, st.y), now)) {
-                running = false;
+                return_to_menu();
                 return;
             }
             /* Menu → pause */
@@ -1736,13 +1754,14 @@ static void handle_input(void) {
             {
                 char info[64];
                 snprintf(info, sizeof(info), "LEVEL %d", game.level);
-                gameover_init(&gos, &fb, game.score, NULL, info, &hs, &touch);
+                gameover_init(&gos, &fb, game.score, NULL, info,
+                              "BRICK BREAKER", &hs, &touch, &gamepad_mgr);
             }
             audio_gameover(&audio);   /* retiring ends the RUN — see the lost-ball site */
         }
         if (action == MODAL_ACTION_BTN2) {
-            /* Exit */
-            running = false;
+            /* Exit: back to the start menu */
+            return_to_menu();
         }
         break;
     }
@@ -1760,7 +1779,8 @@ static void handle_input(void) {
                     {
                         char info[64];
                         snprintf(info, sizeof(info), "ALL %d LEVELS COMPLETE!", MAX_LEVELS);
-                        gameover_init(&gos, &fb, game.score, "YOU WIN!", info, &hs, &touch);
+                        gameover_init(&gos, &fb, game.score, "YOU WIN!", info,
+                                      "BRICK BREAKER", &hs, &touch, &gamepad_mgr);
                     }
                 }
                 audio_beep(&audio);
@@ -1778,7 +1798,8 @@ static void handle_input(void) {
                 {
                     char info[64];
                     snprintf(info, sizeof(info), "ALL %d LEVELS COMPLETE!", MAX_LEVELS);
-                    gameover_init(&gos, &fb, game.score, "YOU WIN!", info, &hs, &touch);
+                    gameover_init(&gos, &fb, game.score, "YOU WIN!", info,
+                              "BRICK BREAKER", &hs, &touch, &gamepad_mgr);
                 }
             }
             audio_beep(&audio);
@@ -1786,13 +1807,7 @@ static void handle_input(void) {
         break;
 
     case SCREEN_GAME_OVER:
-        /* Allow gamepad restart */
-        if (gp_input.buttons[BTN_ID_JUMP].pressed ||
-            gp_input.buttons[BTN_ID_ACTION].pressed) {
-            reset_game();
-            audio_beep(&audio);
-        }
-        break;
+        break;   /* the game-over component reads its own input in the draw path */
     }
 }
 
@@ -1954,7 +1969,7 @@ int main(int argc, char *argv[]) {
          * check, blocking name entry) and only draws once it reaches DISPLAY —
          * give it frames until it says it is settled, or the overlay never
          * appears without a tap. */
-        if (game.screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+        if (game.screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos, &gp_input))
             needs_redraw = true;
 
         /* The start menu's blink and attract phase change with no input. */
@@ -2003,22 +2018,10 @@ int main(int argc, char *argv[]) {
                 /* Update and draw the unified game over screen */
                 TouchState go_st = touch_get_state(&touch);
                 GameOverAction action = gameover_update(&gos, &fb,
-                                                         go_st.x, go_st.y, go_st.pressed);
-                switch (action) {
-                case GAMEOVER_ACTION_RESTART:
-                    reset_game();
-                    audio_beep(&audio);
-                    break;
-                case GAMEOVER_ACTION_EXIT:
-                    running = false;
-                    break;
-                case GAMEOVER_ACTION_RESET_SCORES:
-                    /* Handled internally by the component */
-                    break;
-                case GAMEOVER_ACTION_NONE:
-                default:
-                    break;
-                }
+                                                         go_st.x, go_st.y, go_st.pressed,
+                                                         &gp_input);
+                if (action == GAMEOVER_ACTION_MENU)
+                    return_to_menu();
                 break;
             }
             }

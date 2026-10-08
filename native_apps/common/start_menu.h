@@ -124,6 +124,11 @@ int  start_menu_add_choice(StartMenu *m, const char *label,
 int  start_menu_players(StartMenu *m);
 void start_menu_set_disabled(StartMenu *m, int idx, bool disabled);
 void start_menu_select(StartMenu *m, int idx, uint32_t now);      /* e.g. START by default */
+/* A game returning to its menu: MENU page, attract / idle / blink clocks
+ * restarted at now, brackets shown, edges re-seeded as at init (a button
+ * still down from the screen before does not activate anything).  Selection
+ * and choice values are kept. */
+void start_menu_reopen(StartMenu *m, uint32_t now);
 
 /* Pure decisions (host-testable). */
 void start_menu_phase(uint32_t elapsed_ms, bool *marker_on, uint32_t *blink_idx);
@@ -143,6 +148,8 @@ int  start_menu_update(StartMenu *m, const InputState *in, int tx, int ty, bool 
 bool start_menu_needs_redraw(StartMenu *m);   /* off MENU: true once per page edge */
 void start_menu_draw(StartMenu *m, Framebuffer *fb);   /* whole screen; caller swaps */
 void start_menu_draw_scores(StartMenu *m, Framebuffer *fb, const HighScoreTable *t);  /* the SCORES page */
+/* The same page for any title: the game-over flow's scores screen. */
+void start_menu_draw_scores_page(Framebuffer *fb, const char *title, const HighScoreTable *t);
 int  start_menu_value(const StartMenu *m, int idx);    /* CHOICE value index, -1 otherwise */
 int  start_menu_player_count(const StartMenu *m);      /* 1 or 2; 1 with no players entry */
 void start_menu_set_attract(StartMenu *m, bool has_demo);  /* default: no DEMO phase */

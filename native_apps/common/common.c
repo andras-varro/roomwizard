@@ -6,6 +6,7 @@
 /* For the high-score chime in gameover_update().  ⚠️ common.h itself must stay
  * free of this include — see its PER-FRAME SERVICE block. */
 #include "audio.h"
+#include "start_menu.h"
 #include <string.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -874,19 +875,65 @@ void cycler_draw(Framebuffer *fb, const Cycler *c, const char *text) {
 // UNIFIED GAME OVER SCREEN
 // ============================================================================
 
+_Static_assert(GAMEOVER_SCORES_MS == SM_ATTRACT_MS,
+               "the scores page holds as long as the start menu's SCORES page");
+
+GameOverPhase gameover_phase_next(GameOverPhase cur, uint32_t phase_ms, bool input,
+                                  bool qualifies, bool has_table, bool name_done) {
+    switch (cur) {
+    case GAMEOVER_PHASE_SHOW:
+        // The press that ended the game must not skip: input counts only once
+        // the page has been up for GAMEOVER_ARM_MS.
+        if (phase_ms >= GAMEOVER_SHOW_MS ||
+            (input && phase_ms >= GAMEOVER_ARM_MS)) {
+            if (!has_table) return GAMEOVER_PHASE_DONE;
+            return (qualifies && !name_done) ? GAMEOVER_PHASE_NAME
+                                             : GAMEOVER_PHASE_SCORES;
+        }
+        return GAMEOVER_PHASE_SHOW;
+    case GAMEOVER_PHASE_NAME:
+        return name_done ? GAMEOVER_PHASE_SCORES : GAMEOVER_PHASE_NAME;
+    case GAMEOVER_PHASE_SCORES:
+        return (input || phase_ms >= GAMEOVER_SCORES_MS) ? GAMEOVER_PHASE_DONE
+                                                         : GAMEOVER_PHASE_SCORES;
+    default:
+        return GAMEOVER_PHASE_DONE;
+    }
+}
+
+// Own edges from the level, so the prev_held[] seeded TRUE can refuse a button
+// that was already down.  `pressed` counts as held for this frame: a press and
+// release inside one poll still makes an edge.
+static bool gameover_input_edge(GameOverScreen *gos, const InputState *in, bool touching) {
+    bool edge = touching && !gos->was_touching;
+    gos->was_touching = touching;
+    for (int b = 0; b < BTN_ID_COUNT; b++) {
+        bool held = in && in->buttons[b].held;
+        bool down = held || (in && in->buttons[b].pressed);
+        if (down && !gos->prev_held[b]) edge = true;
+        gos->prev_held[b] = held;
+    }
+    return edge;
+}
+
+static void gameover_reseed(GameOverScreen *gos) {
+    for (int b = 0; b < BTN_ID_COUNT; b++) gos->prev_held[b] = true;
+    gos->was_touching = true;
+}
+
 void gameover_init(GameOverScreen *gos, Framebuffer *fb,
                    int score, const char *title, const char *info_line,
-                   HighScoreTable *hs_table, TouchInput *touch) {
+                   const char *game_title, HighScoreTable *hs_table,
+                   TouchInput *touch, GamepadManager *gm) {
     (void)fb;  // Reserved for future use (e.g., pre-render calculations)
     memset(gos, 0, sizeof(*gos));
-    gos->state = GAMEOVER_STATE_CHECK;
+    gos->phase = GAMEOVER_PHASE_SHOW;
     gos->score = score;
     gos->hs_table = hs_table;
     gos->touch = touch;
-    gos->hs_qualifies = false;
-    gos->has_reset_scores = (hs_table != NULL);
+    gos->gm = gm;
     gos->pending_draw = true;   /* nothing of ours is on screen yet */
-    gos->armed = false;         /* ignore the press that got us here */
+    gameover_reseed(gos);       /* ignore the press that got us here */
 
     // Store title (default to "GAME OVER" if NULL/empty)
     if (title && title[0]) {
@@ -898,64 +945,38 @@ void gameover_init(GameOverScreen *gos, Framebuffer *fb,
     // Store optional info line
     if (info_line && info_line[0]) {
         text_to_uppercase(gos->info_line, info_line, sizeof(gos->info_line));
-    } else {
-        gos->info_line[0] = '\0';
     }
 
-    // Calculate button layout — vertical stack in the lower portion of screen
-    int btn_x = LAYOUT_CENTER_X(BTN_LARGE_WIDTH);
-    int btn_gap = 15;  // Gap between buttons
-
-    if (gos->has_reset_scores) {
-        // 3 buttons: RESTART, RESET SCORES, EXIT
-        int total_height = 3 * BTN_LARGE_HEIGHT + 2 * btn_gap;
-        int start_y = SCREEN_SAFE_BOTTOM - total_height - 15;
-
-        button_init(&gos->restart_btn, btn_x, start_y,
-                    BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
-                    "RESTART", BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT);
-
-        button_init(&gos->reset_scores_btn, btn_x, start_y + BTN_LARGE_HEIGHT + btn_gap,
-                    BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
-                    "RESET SCORES", BTN_COLOR_WARNING, COLOR_WHITE, BTN_COLOR_HIGHLIGHT);
-
-        button_init(&gos->exit_btn, btn_x, start_y + 2 * (BTN_LARGE_HEIGHT + btn_gap),
-                    BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
-                    "EXIT", BTN_COLOR_DANGER, COLOR_WHITE, BTN_COLOR_HIGHLIGHT);
+    if (game_title && game_title[0]) {
+        text_to_uppercase(gos->game_title, game_title, sizeof(gos->game_title));
     } else {
-        // 2 buttons: RESTART, EXIT
-        int total_height = 2 * BTN_LARGE_HEIGHT + btn_gap;
-        int start_y = SCREEN_SAFE_BOTTOM - total_height - 15;
-
-        button_init(&gos->restart_btn, btn_x, start_y,
-                    BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
-                    "RESTART", BTN_COLOR_PRIMARY, COLOR_WHITE, BTN_COLOR_HIGHLIGHT);
-
-        button_init(&gos->exit_btn, btn_x, start_y + BTN_LARGE_HEIGHT + btn_gap,
-                    BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT,
-                    "EXIT", BTN_COLOR_DANGER, COLOR_WHITE, BTN_COLOR_HIGHLIGHT);
+        snprintf(gos->game_title, sizeof(gos->game_title), "HIGH SCORES");
     }
 }
 
 GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
-                               int touch_x, int touch_y, bool touch_active) {
-    // ── CHECK state: determine if score qualifies for highscore ──
-    // Falls through to the next state in the SAME call. It must: the caller only
-    // runs its draw path when its dirty flag is set, so a state that returns
-    // without drawing costs a frame the loop will not grant until the player
-    // taps — which is precisely the "tap to see the game over screen" bug.
-    if (gos->state == GAMEOVER_STATE_CHECK) {
+                               int touch_x, int touch_y, bool touching,
+                               const InputState *in) {
+    (void)touch_x;
+    (void)touch_y;
+    uint32_t now = get_time_ms();
+
+    // First call: the clock starts here, and the table is asked once.  It must
+    // draw in this SAME call: the caller only runs its draw path when its dirty
+    // flag is set, so a call that returns without drawing costs a frame the loop
+    // will not grant until the player taps.
+    if (!gos->started) {
+        gos->started = true;
+        gos->phase_t0 = now;
         if (gos->hs_table != NULL) {
             gos->hs_qualifies = (hs_qualifies(gos->hs_table, gos->score) >= 0);
             if (gos->hs_qualifies) {
-                snprintf(gos->title, sizeof(gos->title), "NEW HIGH SCORE!");
-
                 /* Sound the chime.  Until 2026-08-31 nothing here played
-                 * anything: the title was set, name entry opened, and a player
-                 * who had just beaten the table heard only the game-over descent
-                 * the game had fired a moment earlier — reported by ear on .188,
-                 * and invisible to every host test because no gate can hear a
-                 * call that was never written.
+                 * anything: name entry opened, and a player who had just beaten
+                 * the table heard only the game-over descent the game had fired
+                 * a moment earlier — reported by ear on .188, and invisible to
+                 * every host test because no gate can hear a call that was never
+                 * written.
                  *
                  * ⚠️ **`audio_sparkle()`, not `audio_success()`.** Success is the
                  * level-up fanfare and is heard DURING play; reusing it here
@@ -973,137 +994,96 @@ GameOverAction gameover_update(GameOverScreen *gos, Framebuffer *fb,
                  *
                  * ⚠️ Nothing drains it here, deliberately.  keyboard_enter()
                  * calls ui_frame_service() beside its fb_swap(), so the chime is
-                 * rendered WHILE the player types.  Before that existed this
-                 * would have been deferred, not heard — the defect that comment
-                 * records. */
+                 * rendered WHILE the player types, and the SHOW page's frames
+                 * render it before that. */
                 Audio *audio = (Audio *)ui_frame_service_ctx();
                 if (audio != NULL) audio_sparkle(audio);
-
-                gos->state = GAMEOVER_STATE_NAME_ENTRY;
-            } else {
-                gos->state = GAMEOVER_STATE_DISPLAY;
             }
-        } else {
-            gos->state = GAMEOVER_STATE_DISPLAY;
         }
     }
 
-    // ── NAME_ENTRY state: blocking keyboard for player name ──
-    // This one deliberately does NOT fall through. hs_enter_name() repaints and
-    // swaps the framebuffer itself, so drawing our overlay now would composite it
-    // over the keyboard's last frame. pending_draw stays true, so the caller
-    // gives us one clean frame with the playfield redrawn underneath.
-    if (gos->state == GAMEOVER_STATE_NAME_ENTRY) {
+    bool input = gameover_input_edge(gos, in, touching);
+    bool has_table = (gos->hs_table != NULL);
+
+    GameOverPhase next = gameover_phase_next(gos->phase, now - gos->phase_t0, input,
+                                             gos->hs_qualifies, has_table, gos->name_done);
+    if (next != gos->phase) {
+        gos->phase = next;
+        gos->phase_t0 = now;
+        gos->pending_draw = true;
+    }
+
+    // NAME: blocking keyboard.  It repaints and swaps the framebuffer itself,
+    // so it runs before we draw: the SCORES page below is a full clear and
+    // composites over nothing of the keyboard.
+    if (gos->phase == GAMEOVER_PHASE_NAME) {
         char hs_name[HS_NAME_LEN];
-        hs_enter_name(fb, gos->touch, hs_name, gos->score);
+        hs_enter_name(fb, gos->touch, gos->gm, hs_name, gos->score);
         hs_insert(gos->hs_table, hs_name, gos->score);
         hs_save(gos->hs_table);
         hs_drain_touches(gos->touch);
-
-        // Clear button press state so no spurious fire on first frame
-        gos->restart_btn.was_pressed = false;
-        gos->restart_btn.last_press_time_ms = 0;
-        gos->exit_btn.was_pressed = false;
-        gos->exit_btn.last_press_time_ms = 0;
-        gos->reset_scores_btn.was_pressed = false;
-        gos->reset_scores_btn.last_press_time_ms = 0;
-
-        gos->state = GAMEOVER_STATE_DISPLAY;
-        return GAMEOVER_ACTION_NONE;
+        gos->name_done = true;
+        // The button that closed the keyboard may still be down: it must be
+        // released and pressed again before it skips the scores page.
+        gameover_reseed(gos);
+        gos->phase = gameover_phase_next(gos->phase, 0, false, gos->hs_qualifies,
+                                         has_table, gos->name_done);
+        gos->phase_t0 = get_time_ms();
+        gos->pending_draw = true;
     }
 
-    // ── DISPLAY state: draw screen and handle button presses ──
+    if (gos->phase == GAMEOVER_PHASE_DONE)
+        return GAMEOVER_ACTION_MENU;
+
     gameover_draw(gos, fb);
     gos->pending_draw = false;
-
-    // The press that ended the game is still in the caller's TouchState on this
-    // frame (touch_active is a rising edge, cleared by the next touch_poll()), so
-    // reading input now would let it press a button on a screen nobody has seen —
-    // brick_breaker's pause-dialog RETIRE overlaps this screen's RESET SCORES by
-    // 21 px, which would silently wipe the table. One frame of arming closes that.
-    if (!gos->armed) {
-        gos->armed = true;
-        return GAMEOVER_ACTION_NONE;
-    }
-
-    uint32_t now = get_time_ms();
-
-    // Every button is fed each frame, including frames with no touch: that is what
-    // clears Button.was_pressed on release. Early-returning on !touch_active left
-    // it latched, so RESET SCORES only ever fired once per game over.
-
-    // Check RESTART button
-    bool restart_touched = touch_active && button_is_touched(&gos->restart_btn, touch_x, touch_y);
-    bool restart_fired = button_check_press(&gos->restart_btn, restart_touched, now);
-
-    // Check EXIT button
-    bool exit_touched = touch_active && button_is_touched(&gos->exit_btn, touch_x, touch_y);
-    bool exit_fired = button_check_press(&gos->exit_btn, exit_touched, now);
-
-    // Check RESET SCORES button (only if highscore enabled)
-    bool reset_fired = false;
-    if (gos->has_reset_scores) {
-        bool reset_touched = touch_active &&
-                             button_is_touched(&gos->reset_scores_btn, touch_x, touch_y);
-        reset_fired = button_check_press(&gos->reset_scores_btn, reset_touched, now);
-    }
-
-    if (restart_fired)
-        return GAMEOVER_ACTION_RESTART;
-    if (exit_fired)
-        return GAMEOVER_ACTION_EXIT;
-    if (reset_fired) {
-        hs_reset(gos->hs_table);
-        hs_save(gos->hs_table);
-        // The table we just drew is stale — ask for one more frame so the emptied
-        // table is actually shown instead of waiting for the next tap.
-        gos->pending_draw = true;
-        return GAMEOVER_ACTION_RESET_SCORES;
-    }
-
     return GAMEOVER_ACTION_NONE;
 }
 
-bool gameover_needs_redraw(const GameOverScreen *gos) {
-    if (gos->pending_draw)
+bool gameover_needs_redraw(const GameOverScreen *gos, const InputState *in) {
+    if (gos->pending_draw || gos->phase == GAMEOVER_PHASE_DONE)
         return true;
 
-    // Our buttons are read inside gameover_update(), which the caller only runs
-    // from its draw path — so a frame we do not ask for is also an input event we
-    // never see. Reporting "I owe a frame" alone was not enough: once the overlay
-    // had settled, a loop whose dirty flag is a pure visible-state diff produced
-    // no more frames and RESTART / RESET SCORES / EXIT were all dead, with no
-    // other handler on that screen to exit with (samegame, 2026-08-02 — the only
-    // game with no "redraw on input activity" branch of its own, which is why it
-    // was the only one to show it).
+    // A phase whose time is up must be given a frame to end on.
+    uint32_t elapsed = get_time_ms() - gos->phase_t0;
+    if (gos->phase == GAMEOVER_PHASE_SHOW && elapsed >= GAMEOVER_SHOW_MS)
+        return true;
+    if (gos->phase == GAMEOVER_PHASE_SCORES && elapsed >= GAMEOVER_SCORES_MS)
+        return true;
+
+    // Input is read inside gameover_update(), which the caller only runs from
+    // its draw path — so a frame we do not ask for is also an input event we
+    // never see.  And a release must be SEEN too: prev_held[] / was_touching
+    // stay TRUE until an update runs with the button up, and a press that
+    // follows would then be no edge.  So any level we have not yet seen drop
+    // asks for a frame.
+    for (int b = 0; b < BTN_ID_COUNT; b++) {
+        if (gos->prev_held[b]) return true;
+        if (in && (in->buttons[b].held || in->buttons[b].pressed)) return true;
+    }
+    if (gos->was_touching) return true;
     if (gos->touch != NULL) {
         TouchState ts = touch_get_state(gos->touch);
         if (ts.pressed || ts.held)
             return true;
     }
 
-    // A fired button needs one frame on which it is NOT touched before it can
-    // fire again — that is where button_check_press() clears was_pressed. On a
-    // screen paced at FRAME_DELAY_IDLE_US a press and its release can both land
-    // in a single touch_poll(), so waiting for ts.held/ts.released to produce
-    // that frame is not enough: there would be none, and the next press would be
-    // silently eaten. Ask the buttons instead.
-    if (gos->restart_btn.was_pressed || gos->exit_btn.was_pressed ||
-        (gos->has_reset_scores && gos->reset_scores_btn.was_pressed))
-        return true;
-
     return false;
 }
 
 void gameover_draw(GameOverScreen *gos, Framebuffer *fb) {
+    if (gos->phase == GAMEOVER_PHASE_SCORES) {
+        start_menu_draw_scores_page(fb, gos->game_title, gos->hs_table);
+        return;
+    }
+
     // Semi-transparent black overlay
     fb_fill_rect_alpha(fb, 0, 0, fb->width, fb->height, COLOR_BLACK, 160);
 
     int center_x = fb->width / 2;
 
-    // Title — upper portion of screen. Text and the score table below it are
-    // read, not pressed, so they use the full visible screen; the buttons at
-    // the bottom of this overlay stay inside SCREEN_SAFE_*.
+    // Title — upper portion of screen.  All of this is read, not pressed, so
+    // it uses the full visible screen.
     int title_y = SCREEN_VISIBLE_TOP + SCREEN_VISIBLE_HEIGHT / 5;
     text_draw_centered(fb, center_x, title_y, gos->title, COLOR_YELLOW, 4);
 
@@ -1120,17 +1100,6 @@ void gameover_draw(GameOverScreen *gos, Framebuffer *fb) {
         info_y += text_measure_height(2) + 12;
     }
 
-    // Highscore leaderboard (if table exists and has entries)
-    if (gos->hs_table != NULL && gos->hs_table->count > 0) {
-        int hs_width = SCREEN_VISIBLE_WIDTH - 40;
-        int hs_x = LAYOUT_CENTER_X(hs_width);
-        hs_draw(fb, gos->hs_table, hs_x, info_y, hs_width);
-    }
-
-    // Buttons
-    button_draw(fb, &gos->restart_btn);
-    button_draw(fb, &gos->exit_btn);
-    if (gos->has_reset_scores) {
-        button_draw(fb, &gos->reset_scores_btn);
-    }
+    if (gos->hs_qualifies)
+        text_draw_centered(fb, center_x, info_y + 20, "NEW HIGH SCORE!", COLOR_GREEN, 3);
 }

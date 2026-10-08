@@ -3,6 +3,7 @@
 
 #include "framebuffer.h"
 #include "touch_input.h"
+#include "gamepad.h"
 #include <stdbool.h>
 
 /* Predefined keyboard layouts */
@@ -27,9 +28,15 @@ typedef enum {
  * @param buf      Buffer with initial value; result written on OK
  * @param max_len  Maximum string length (not counting NUL)
  * @param layout   Which keyboard layout to show
+ * @param gm       Pad / keyboard input, or NULL for touch only.  With it:
+ *                 UP/DOWN/LEFT/RIGHT move a focus frame over the keys (the
+ *                 action row included), JUMP / ACTION press the focused key,
+ *                 BACK deletes a character, PAUSE is OK.  The frame starts on
+ *                 the first key; a touch hides it and the next key shows it
+ *                 again.  Buttons already down on entry need a fresh press.
  * @return         KB_RESULT_OK or KB_RESULT_CANCEL
  */
-int keyboard_enter(Framebuffer *fb, TouchInput *touch, const char *title,
-                   char *buf, int max_len, KeyboardLayout layout);
+int keyboard_enter(Framebuffer *fb, TouchInput *touch, GamepadManager *gm,
+                   const char *title, char *buf, int max_len, KeyboardLayout layout);
 
 #endif /* KEYBOARD_H */

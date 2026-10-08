@@ -353,7 +353,8 @@ void lock_piece() {
         // Initialize unified game over screen with level info
         char info_line[64];
         snprintf(info_line, sizeof(info_line), "LEVEL %d", game.level);
-        gameover_init(&gos, &fb, game.score, NULL, info_line, &hs_table, &touch);
+        gameover_init(&gos, &fb, game.score, NULL, info_line,
+                      "TETRIS", &hs_table, &touch, &gamepad);
         /* Red pulse + fail sound.  Non-blocking: this runs inside update_game(),
          * so the 3 x 200 ms on/off loop that used to be here froze the panel for
          * 1.2 s with no touch poll and no redraw — and it ran *before* the
@@ -486,6 +487,18 @@ static bool das_update(DASState *das, bool held, bool pressed, uint32_t now) {
     return false;
 }
 
+/* Back to the start menu from play, pause or game over: drop the play-time
+ * state (LED flourish, pause flag, gravity clock) so the menu looks as on
+ * first launch.  The bed follows current_screen in the main loop. */
+static void return_to_menu(void) {
+    hw_led_pulse_stop(&led_pulse);
+    hw_leds_off();
+    game.paused = false;
+    drop_clock_stale = true;
+    start_menu_reopen(&menu, get_time_ms());
+    current_screen = SCREEN_MENU;
+}
+
 void handle_input() {
     touch_poll(&touch);
     TouchState state = touch_get_state(&touch);
@@ -518,24 +531,16 @@ void handle_input() {
         return;
     }
 
-    // BTN_BACK always exits to launcher
-    if (input.buttons[BTN_ID_BACK].pressed) {
-        fb_fade_out(&fb);
-        running = false;
+    // BTN_BACK during play / pause returns to the start menu; GAME OVER's
+    // flow owns its input, so BACK there cannot skip a high-score name
+    if (input.buttons[BTN_ID_BACK].pressed && current_screen != SCREEN_GAME_OVER) {
+        return_to_menu();
         return;
     }
-    
-    // Handle game over screen — gameover_update() manages buttons in draw phase
-    if (current_screen == SCREEN_GAME_OVER) {
-        // Allow gamepad restart
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed) {
-            reset_game();
-            game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
-            current_screen = SCREEN_PLAYING;
-        }
+
+    // Game over screen — gameover_update() runs in the draw phase
+    if (current_screen == SCREEN_GAME_OVER)
         return;
-    }
     
     // Handle pause screen
     if (current_screen == SCREEN_PAUSED) {
@@ -560,14 +565,7 @@ void handle_input() {
             return;
         }
         if (action == MODAL_ACTION_BTN1) {
-            // Fade out effect
-            for (int i = 0; i < 3; i++) {
-                hw_set_led(LED_RED, 100);
-                usleep(100000);  // 100ms
-                hw_leds_off();
-                usleep(100000);  // 100ms
-            }
-            running = false;
+            return_to_menu();
             return;
         }
         return;
@@ -586,17 +584,10 @@ void handle_input() {
         // Check exit button (top-right)
         bool exit_touched = button_is_touched(&exit_button, state.x, state.y);
         if (button_check_press(&exit_button, exit_touched, current_time)) {
-            // Fade out effect
-            for (int i = 0; i < 3; i++) {
-                hw_set_led(LED_RED, 100);
-                usleep(100000);  // 100ms
-                hw_leds_off();
-                usleep(100000);  // 100ms
-            }
-            running = false;
+            return_to_menu();
             return;
         }
-        
+
         // Check menu button (top-left)
         bool menu_touched = button_is_touched(&menu_button, state.x, state.y);
         if (button_check_press(&menu_button, menu_touched, current_time)) {
@@ -868,24 +859,10 @@ void draw_game() {
     if (current_screen == SCREEN_GAME_OVER) {
         TouchState go_st = touch_get_state(&touch);
         GameOverAction action = gameover_update(&gos, &fb,
-                                                go_st.x, go_st.y, go_st.pressed);
-        switch (action) {
-        case GAMEOVER_ACTION_RESTART:
-            reset_game();
-            game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
-            current_screen = SCREEN_PLAYING;
-            break;
-        case GAMEOVER_ACTION_EXIT:
-            running = false;
-            break;
-        case GAMEOVER_ACTION_RESET_SCORES:
-            /* Handled internally by the component */
-            game.high_score = 0;
-            break;
-        case GAMEOVER_ACTION_NONE:
-        default:
-            break;
-        }
+                                                go_st.x, go_st.y, go_st.pressed,
+                                                &input);
+        if (action == GAMEOVER_ACTION_MENU)
+            return_to_menu();
         return;
     }
 }
@@ -990,7 +967,7 @@ int main(int argc, char *argv[]) {
          * check, blocking name entry) and only draws once it reaches DISPLAY —
          * give it frames until it says it is settled, or the overlay never
          * appears without a tap. */
-        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos, &input))
             needs_redraw = true;
 
         /* Bracket blink and attract phase changes arrive with no input. */

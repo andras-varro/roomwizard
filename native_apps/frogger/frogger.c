@@ -760,8 +760,8 @@ static void update_death_animation(float dt) {
         if (game_over_pending) {
             game_over_pending = false;
             current_screen = SCREEN_GAME_OVER;
-            gameover_init(&gos, &fb, state.score, NULL, NULL,
-                          &hs_table, &touch);
+            gameover_init(&gos, &fb, state.score, NULL, NULL, "FROGGER",
+                          &hs_table, &touch, &gamepad);
         } else {
             reset_frog_position();
         }
@@ -784,6 +784,16 @@ static void update_timer(float dt) {
 /* ═══════════════════════════════════════════════════════════════════════════
  * Input Handling
  * ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Back to the start menu from play, pause or game over, undoing what START set up. */
+static void return_to_menu(void) {
+    led_effect.active = false;
+    hw_leds_off();
+    death_anim_active = false;
+    game_over_pending = false;
+    start_menu_reopen(&menu, get_time_ms());
+    current_screen = SCREEN_MENU;
+}
 
 static void handle_input(void) {
     touch_poll(&touch);
@@ -821,24 +831,16 @@ static void handle_input(void) {
         return;
     }
 
-    // BTN_BACK always exits to launcher
-    if (input.buttons[BTN_ID_BACK].pressed) {
-        fb_fade_out(&fb);
-        running = false;
+    // BTN_BACK during play / pause returns to the start menu; GAME OVER's
+    // flow owns its input, so BACK there cannot skip a high-score name
+    if (input.buttons[BTN_ID_BACK].pressed && current_screen != SCREEN_GAME_OVER) {
+        return_to_menu();
         return;
     }
 
     /* ── Game over screen (handled by gameover_update in draw) ────── */
-    if (current_screen == SCREEN_GAME_OVER) {
-        // Allow gamepad restart
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed) {
-            reset_game();
-            current_screen = SCREEN_PLAYING;
-            last_frame_ms  = get_time_ms();
-        }
+    if (current_screen == SCREEN_GAME_OVER)
         return;
-    }
 
     /* ── Pause screen ────────────────────────────────────────────────── */
     if (current_screen == SCREEN_PAUSED) {
@@ -863,8 +865,7 @@ static void handle_input(void) {
             return;
         }
         if (action == MODAL_ACTION_BTN1) {
-            fb_fade_out(&fb);
-            running = false;
+            return_to_menu();
             return;
         }
         return;
@@ -887,8 +888,7 @@ static void handle_input(void) {
     // did not — reported from the panel 2026-08-10, mechanism in
     // tests/button_latch_test.c.
     if (button_check_tap(&exit_button, &ts, now)) {
-        fb_fade_out(&fb);
-        running = false;
+        return_to_menu();
         return;
     }
     if (button_check_tap(&menu_button, &ts, now)) {
@@ -1422,22 +1422,10 @@ static void draw_all(void) {
     if (current_screen == SCREEN_GAME_OVER) {
         TouchState go_ts = touch_get_state(&touch);
         GameOverAction action = gameover_update(&gos, &fb,
-                                                go_ts.x, go_ts.y, go_ts.pressed);
-        switch (action) {
-        case GAMEOVER_ACTION_RESTART:
-            reset_game();
-            current_screen = SCREEN_PLAYING;
-            last_frame_ms  = get_time_ms();
-            break;
-        case GAMEOVER_ACTION_EXIT:
-            running = false;
-            break;
-        case GAMEOVER_ACTION_RESET_SCORES:
-            break;
-        case GAMEOVER_ACTION_NONE:
-        default:
-            break;
-        }
+                                                go_ts.x, go_ts.y, go_ts.pressed,
+                                                &input);
+        if (action == GAMEOVER_ACTION_MENU)
+            return_to_menu();
         return;
     }
 
@@ -1551,7 +1539,7 @@ int main(int argc, char *argv[]) {
          * check, blocking name entry) and only draws once it reaches DISPLAY —
          * give it frames until it says it is settled, or the overlay never
          * appears without a tap. */
-        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
+        if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos, &input))
             needs_redraw = true;
 
         /* The start menu's bracket blink and attract phase changes arrive

@@ -203,6 +203,9 @@ step "17/30" "gamepad";      $CC "${WARN[@]}" -O2 -c common/gamepad.c         -o
 # game cannot miss it.  It needs only COMMON_OBJ besides, which every linker of
 # GAMEPAD_OBJ also names; it uses ui_focus.h's UiRect type but no ui_focus.o
 # function, so control_panel's own build/ui_focus.o stays the only copy linked.
+# ⚠️ COMMON_OBJ needs this list too: common.o's game-over draws the shared
+# scores page (start_menu.o) and keyboard.o's name entry polls the pad
+# (gamepad.o), so every binary naming COMMON_OBJ also names GAMEPAD_OBJ.
 GAMEPAD_OBJ=(build/gamepad.o build/input_scan.o build/input_slots.o build/start_menu.o)
 
 COMMON_OBJ=(build/framebuffer.o build/touch_input.o build/hardware.o
@@ -263,7 +266,7 @@ $CC "${WARN[@]}" -O2 -I. app_launcher/app_launcher.c "${COMMON_OBJ[@]}" "${GAMEP
 step "26/30" "theremin"
 $CC "${WARN[@]}" -O2 -I. \
   theremin/theremin.c \
-  "${COMMON_OBJ[@]}" build/logger.o build/ppm.o \
+  "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" build/logger.o build/ppm.o \
   -o build/theremin -lm "${AUDIO_LIBS[@]}"
 
 # Owns the calibration wizard (Touch tab), which is why it links CALIB_OBJ.
@@ -279,13 +282,13 @@ $CC "${WARN[@]}" -O2 -I. control_panel/control_panel.c control_panel/cp_page_nam
 # path, so it announced success and delivered nothing to any reader. Injection
 # needs /dev/uinput and this kernel has none — ../CLAUDE.md carries the rule.
 step "28/30" "touch_raw"
-$CC "${WARN[@]}" -O2 -I. tests/touch_raw.c "${COMMON_OBJ[@]}" $CALIB_OBJ -o build/touch_raw -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. tests/touch_raw.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" $CALIB_OBJ -o build/touch_raw -lm "${AUDIO_LIBS[@]}"
 
 # The mix bus, driven by hand.  Groups I/J/K of tests/audio_gen_test.c cover the
 # arithmetic; whether two sounds are AUDIBLE as two, and whether the ~60 ms
 # minimum-tone rule survives a stream that is never reset, need an ear at the panel.
 step "29/30" "audio_mix_test"
-$CC "${WARN[@]}" -O2 -I. tests/audio_mix_test.c "${COMMON_OBJ[@]}" -o build/audio_mix_test -lm "${AUDIO_LIBS[@]}"
+$CC "${WARN[@]}" -O2 -I. tests/audio_mix_test.c "${COMMON_OBJ[@]}" "${GAMEPAD_OBJ[@]}" -o build/audio_mix_test -lm "${AUDIO_LIBS[@]}"
 
 # The Monitor page's history daemon, started at boot by /etc/init.d/rwmond.
 # From common/ it links only hardware.c (+ config.c), for the over-temperature

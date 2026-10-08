@@ -14,6 +14,7 @@
 #include <string.h>
 
 #define SM_TITLE_SCALE  4
+#define SM_TITLE_TOP    50      /* title's top edge below SCREEN_VISIBLE_TOP */
 #define SM_ENTRY_SCALE  3
 #define SM_PITCH_MAX    52      /* row pitch = touch target height */
 #define SM_PITCH_MIN    36      /* never shrink a target below this */
@@ -210,7 +211,7 @@ static int sm_block_height(const char *text, int scale)
 static void sm_layout(StartMenu *m)
 {
     int th2 = text_measure_height(2);
-    m->title_y = SCREEN_VISIBLE_TOP + 50;       /* below the bezel band */
+    m->title_y = SCREEN_VISIBLE_TOP + SM_TITLE_TOP;   /* below the bezel band */
     int y = m->title_y + text_measure_height(SM_TITLE_SCALE) + WELCOME_BLOCK_GAP;
 
     m->sub_y = y;
@@ -283,6 +284,22 @@ void start_menu_init(StartMenu *m, const char *title, const char *instructions, 
     m->was_touching = true;
     m->last_input_ms = now;
     m->cycle_origin_ms = now;
+    m->attract = SM_ATTRACT_MENU;
+    sm_restart_blink(m, now);
+}
+
+/* Back on the MENU page from a game: everything start_menu_init() seeds that
+ * is about time and input, but the entries, the selection and every choice
+ * value stay as the player left them. */
+void start_menu_reopen(StartMenu *m, uint32_t now)
+{
+    for (int b = 0; b < BTN_ID_COUNT; b++) m->prev_held[b] = true;
+    m->was_touching = true;
+    m->pressed = -1;
+    m->shown = true;
+    m->last_input_ms = now;
+    m->cycle_origin_ms = now;
+    m->demo_over = false;
     m->attract = SM_ATTRACT_MENU;
     sm_restart_blink(m, now);
 }
@@ -462,10 +479,12 @@ int start_menu_step(StartMenu *m, const InputState *in, int tx, int ty, bool tou
     } else if (!touching) {
         /* Keys: one per frame, a finger down beats them.  With the brackets
          * hidden, the first key reveals them and does nothing else. */
-        bool act = edge[BTN_ID_JUMP] || edge[BTN_ID_ACTION] || edge[BTN_ID_PAUSE];
+        bool act = edge[BTN_ID_JUMP] || edge[BTN_ID_ACTION];
         int  dir = edge[BTN_ID_UP] ? BTN_ID_UP : edge[BTN_ID_DOWN] ? BTN_ID_DOWN
                  : edge[BTN_ID_LEFT] ? BTN_ID_LEFT : edge[BTN_ID_RIGHT] ? BTN_ID_RIGHT : -1;
-        if (edge[BTN_ID_BACK]) {
+        /* PAUSE is Escape on a keyboard: back, as in the launcher and the
+         * control panel — it once activated the selection, so Esc started. */
+        if (edge[BTN_ID_BACK] || edge[BTN_ID_PAUSE]) {
             result = SM_EXIT;
         } else if ((act || dir >= 0) && !m->shown) {
             m->shown = true;
@@ -585,15 +604,20 @@ void start_menu_draw(StartMenu *m, Framebuffer *fb)
 /* The attract cycle's SCORES page: the menu's own title where it sits on the
  * MENU page, then the table (hs_draw() brings its own heading), narrower than
  * the screen so the rank and the score stay near the eye. */
-void start_menu_draw_scores(StartMenu *m, Framebuffer *fb, const HighScoreTable *t)
+void start_menu_draw_scores_page(Framebuffer *fb, const char *title, const HighScoreTable *t)
 {
-    if (!m->laid_out) sm_layout(m);
     fb_clear(fb, COLOR_BLACK);
     int cx = SCREEN_VISIBLE_LEFT + SCREEN_VISIBLE_WIDTH / 2;
-    text_draw_centered(fb, cx, m->title_y + text_measure_height(SM_TITLE_SCALE) / 2,
-                       m->title, COLOR_CYAN, SM_TITLE_SCALE);
+    int title_y = SCREEN_VISIBLE_TOP + SM_TITLE_TOP;
+    text_draw_centered(fb, cx, title_y + text_measure_height(SM_TITLE_SCALE) / 2,
+                       title, COLOR_CYAN, SM_TITLE_SCALE);
     int w = SCREEN_VISIBLE_WIDTH - 40;
     if (w > 480) w = 480;
-    int y = m->title_y + text_measure_height(SM_TITLE_SCALE) + 30;
+    int y = title_y + text_measure_height(SM_TITLE_SCALE) + 30;
     hs_draw(fb, t, LAYOUT_CENTER_X(w), y, w);
+}
+
+void start_menu_draw_scores(StartMenu *m, Framebuffer *fb, const HighScoreTable *t)
+{
+    start_menu_draw_scores_page(fb, m->title, t);
 }

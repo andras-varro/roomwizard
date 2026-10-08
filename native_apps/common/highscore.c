@@ -188,7 +188,7 @@ void hs_drain_touches(TouchInput *touch) {
 
 /* ── Name entry (now delegates to generic keyboard module) ───────────────── */
 
-void hs_enter_name(Framebuffer *fb, TouchInput *touch,
+void hs_enter_name(Framebuffer *fb, TouchInput *touch, GamepadManager *gm,
                    char *name_buf, int score) {
     char title[64];
     snprintf(title, sizeof(title), "NEW HIGH SCORE: %d", score);
@@ -196,7 +196,7 @@ void hs_enter_name(Framebuffer *fb, TouchInput *touch,
     char buf[HS_NAME_LEN];
     memset(buf, 0, sizeof(buf));
 
-    int result = keyboard_enter(fb, touch, title, buf, HS_NAME_LEN - 1,
+    int result = keyboard_enter(fb, touch, gm, title, buf, HS_NAME_LEN - 1,
                                 KB_LAYOUT_ALPHA);
 
     if (result == KB_RESULT_OK && buf[0] != '\0') {

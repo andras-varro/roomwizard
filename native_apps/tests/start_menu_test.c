@@ -221,6 +221,8 @@ static void group_choice(void)
     press(&m, BTN_ID_DOWN, 1, T0 + 50);
     check(press(&m, BTN_ID_JUMP, 1, T0 + 60) == s, "JUMP on START returns its index");
     check(press(&m, BTN_ID_BACK, 1, T0 + 70) == SM_EXIT, "BACK returns SM_EXIT");
+    /* Escape is PAUSE: the launcher's rule, back — never "activate START" */
+    check(press(&m, BTN_ID_PAUSE, 1, T0 + 75) == SM_EXIT, "PAUSE (Escape / Start) returns SM_EXIT");
     check(touch(&m, cx(&m, c), cy(&m, c), cx(&m, c), cy(&m, c), T0 + 80) == SM_NONE
           && start_menu_value(&m, c) == 1, "a tap on a CHOICE cycles it");
 }
@@ -446,6 +448,55 @@ static void group_demo_over_and_sound(void)
           "after an input, sound is allowed again");
 }
 
+static void group_reopen(void)
+{
+    printf("12. reopen (a game returning to its menu)\n");
+    StartMenu m;
+    bool ping;
+    menu3(&m);
+    start_menu_select(&m, 1, T0);
+    quiet(&m, 1, T0 + 16000, &ping);
+    check(start_menu_attract(&m) == SM_ATTRACT_SCORES, "setup: idle 16 s shows SCORES");
+
+    uint32_t t1 = T0 + 16000;
+    start_menu_reopen(&m, t1);
+    check(start_menu_attract(&m) == SM_ATTRACT_MENU, "reopen: attract is MENU");
+    check(m.sel == 1, "reopen keeps the selection");
+    check(m.shown && m.dirty, "reopen shows the brackets and asks for a frame");
+
+    quiet(&m, 1, t1 + 14999, &ping);
+    check(start_menu_attract(&m) == SM_ATTRACT_MENU, "14999 ms later still MENU (clock restarted)");
+    quiet(&m, 1, t1 + 15000, &ping);
+    check(start_menu_attract(&m) == SM_ATTRACT_SCORES, "15000 ms later SCORES (a full slot away)");
+
+    /* The button that left the scores page is still down at the reopen. */
+    menu3(&m);
+    start_menu_select(&m, 2, T0);
+    quiet(&m, 1, T0 + 16000, &ping);
+    start_menu_reopen(&m, t1);
+    InputState in;
+    memset(&in, 0, sizeof(in));
+    in.buttons[BTN_ID_JUMP].held = true;
+    in.buttons[BTN_ID_JUMP].pressed = true;
+    int r = start_menu_step(&m, &in, 0, 0, false, 1, t1, &ping);
+    check(r == SM_NONE, "held JUMP at reopen activates nothing");
+    in.buttons[BTN_ID_JUMP].pressed = false;
+    r = start_menu_step(&m, &in, 0, 0, false, 1, t1 + 50, &ping);
+    check(r == SM_NONE, "still held next frame: nothing");
+    quiet(&m, 1, t1 + 80, &ping);
+    r = press(&m, BTN_ID_JUMP, 1, t1 + 100);
+    check(r == 2, "released and pressed again activates the kept selection");
+
+    /* A finger down across the reopen must lift before it counts. */
+    menu3(&m);
+    quiet(&m, 1, T0 + 16000, &ping);
+    start_menu_reopen(&m, t1);
+    int x = cx(&m, 0), y = cy(&m, 0);
+    start_menu_step(&m, NULL, x, y, true, 1, t1, &ping);
+    r = start_menu_step(&m, NULL, x, y, false, 1, t1 + 50, &ping);
+    check(r == SM_NONE && m.pressed == -1, "finger already down at reopen does not press START");
+}
+
 int main(void)
 {
     group_phase();
@@ -459,6 +510,7 @@ int main(void)
     group_idle_cutoff();
     group_attract();
     group_demo_over_and_sound();
+    group_reopen();
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }
