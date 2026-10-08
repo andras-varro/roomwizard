@@ -199,6 +199,19 @@ static StartMenu menu;
 static int menu_start_idx, menu_diff_idx, menu_exit_idx;
 static int difficulty = DIFF_NORMAL;
 
+/* Attract-cycle DEMO: SCREEN_MENU while the widget is on its DEMO page.  The AI
+ * plays the real game state at NORMAL speed, silent and LED-dark, keeps no
+ * score and never reaches SCREEN_GAME_OVER; it ends when all lives are lost. */
+static bool demo_running = false;
+static bool demo_on(void) { return demo_running; }
+
+/* Every sound the gameplay makes goes through these, so the demo is silent. */
+static Audio *sfx_audio(void) { return &audio; }
+static void sfx_beep(void)     { if (!demo_on()) audio_beep(sfx_audio()); }
+static void sfx_success(void)  { if (!demo_on()) audio_success(sfx_audio()); }
+static void sfx_fail(void)     { if (!demo_on()) audio_fail(sfx_audio()); }
+static void sfx_gameover(void) { if (!demo_on()) audio_gameover(sfx_audio()); }
+
 static Lane lanes[NUM_LANE_CONFIGS];
 static Frog frog;
 static GameStateData state;
@@ -315,6 +328,7 @@ static void signal_handler(int sig) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void start_led_effect(int type) {
+    if (demo_on()) return;   /* the demo is LED-dark */
     led_effect.active = true;
     led_effect.type = type;
     led_effect.start_time = get_time_ms();
@@ -508,7 +522,7 @@ static void init_game(void) {
      * itself is fixed — poll_touch() writes only the per-frame `derived` array —
      * so what still argues against regions here is the redundancy, not the latch. */
 
-    /* No DEMO yet: the attract cycle is MENU -> SCORES, drawn by draw_all(). */
+    /* Attract cycle MENU -> DEMO -> SCORES, drawn by draw_all(). */
     start_menu_init(&menu, "FROGGER",
                     "TAP AHEAD OF THE FROG TO HOP\n"
                     "OR USE A D-PAD / ARROW KEYS\n"
@@ -518,7 +532,7 @@ static void init_game(void) {
     menu_diff_idx  = start_menu_add_choice(&menu, "DIFFICULTY", DIFF_NAMES, DIFF_COUNT, DIFF_NORMAL);
     menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
     start_menu_select(&menu, menu_start_idx, get_time_ms());
-    start_menu_set_attract(&menu, false);
+    start_menu_set_attract(&menu, true);
 
     reset_game();
 }
@@ -539,7 +553,7 @@ static void advance_level(void) {
     reset_frog_position();
 
     start_led_effect(3);
-    audio_success(&audio);
+    sfx_success();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -569,7 +583,7 @@ static void hop_frog(int drow, int dcol) {
         state.highest_row = new_row;
     }
 
-    audio_beep(&audio);
+    sfx_beep();
     last_hop_ms = get_time_ms();
 }
 
@@ -701,7 +715,7 @@ static void check_goal_reached(void) {
             state.score += 50;
             state.score += (int)state.timer * 10;
 
-            audio_success(&audio);
+            sfx_success();
             start_led_effect(1);
 
             if (state.goals_filled >= NUM_GOALS)
@@ -738,9 +752,9 @@ static void kill_frog(DeathType cause) {
      * Either sound lands over near-silence, because death_anim_active is the
      * bed's want_HOLD (see the main loop) for the whole animation. */
     if (state.lives <= 0)
-        audio_gameover(&audio);
+        sfx_gameover();
     else
-        audio_fail(&audio);
+        sfx_fail();
 
     death_anim_ms     = 0;
     death_anim_active = true;
@@ -757,7 +771,12 @@ static void update_death_animation(float dt) {
         death_anim_active = false;
         hw_leds_off();
 
-        if (game_over_pending) {
+        if (game_over_pending && demo_on()) {
+            /* The demo is not a game: no GAME OVER, no score.  The frog stays
+             * dead until the widget leaves the DEMO page. */
+            game_over_pending = false;
+            start_menu_demo_over(&menu);
+        } else if (game_over_pending) {
             game_over_pending = false;
             current_screen = SCREEN_GAME_OVER;
             gameover_init(&gos, &fb, state.score, NULL, NULL, "FROGGER",
@@ -795,6 +814,129 @@ static void return_to_menu(void) {
     current_screen = SCREEN_MENU;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+ * Attract-cycle DEMO: the AI
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+#define DEMO_LAND_S   (HOP_DURATION_MS / 1000.0f)   /* a hop lands this far ahead */
+#define DEMO_STEP_S   0.08f    /* sample step: < 0.55 cell at the fastest lane, under any gap */
+
+/* Where lane object `o` will be dt seconds from now (with the lane's wrap). */
+static float demo_obj_x(const Lane *lane, const LaneObject *o, float dt) {
+    float x = o->x + lane_speed_px_s(lane) * dt;
+    float w = (float)(o->width_cells * cell_size);
+    if (lane->direction > 0 && x > grid_width)    x -= grid_width + w;
+    else if (lane->direction < 0 && x + w < 0)    x += grid_width + w;
+    return x;
+}
+
+/* A road cell is clear for the whole window [t0,t1] (seconds from now). */
+static bool demo_road_clear(const Lane *lane, int col, float t0, float t1) {
+    int p = cell_size / 8;
+    if (p < 1) p = 1;
+    int m = cell_size / 5;
+    float fx = (float)(col * cell_size + p);
+    float fw = (float)(cell_size - p * 2);
+    for (float t = t0; ; t += DEMO_STEP_S) {
+        if (t > t1) t = t1;
+        for (int i = 0; i < lane->object_count; i++) {
+            float ox = demo_obj_x(lane, &lane->objects[i], t);
+            float ow = (float)(lane->objects[i].width_cells * cell_size);
+            if (fx < ox + ow + m && fx + fw + m > ox) return false;
+        }
+        if (t >= t1) break;
+    }
+    return true;
+}
+
+/* A river cell has a log/turtle well under the frog's centre at time t. */
+static bool demo_river_held(const Lane *lane, int col, float t) {
+    float cx = (float)(col * cell_size + cell_size / 2);
+    float m  = (float)(cell_size / 4);
+    for (int i = 0; i < lane->object_count; i++) {
+        float ox = demo_obj_x(lane, &lane->objects[i], t);
+        float ow = (float)(lane->objects[i].width_cells * cell_size);
+        if (cx >= ox + m && cx <= ox + ow - m) return true;
+    }
+    return false;
+}
+
+/* Would a frog that starts hopping to (row,col) now be alive on landing and
+ * for the short wait before its next hop? */
+static bool demo_land_ok(int row, int col) {
+    if (col < 0 || col >= num_cols || row < 0 || row > 12) return false;
+    if (row == 0) {
+        for (int i = 0; i < NUM_GOALS; i++)
+            if (goal_cols[i] == col && !state.goals_reached[i]) return true;
+        return false;
+    }
+    if (row == 6 || row == 12) return true;
+    int idx = lane_index_for_row(row);
+    if (idx < 0) return false;
+    if (row >= 7) return demo_road_clear(&lanes[idx], col, DEMO_LAND_S, DEMO_LAND_S + 0.3f);
+    return demo_river_held(&lanes[idx], col, DEMO_LAND_S);
+}
+
+/* The nearest goal slot not yet filled, as a column; -1 when none. */
+static int demo_goal_col(int from) {
+    int best = -1, bd = 1 << 20;
+    for (int i = 0; i < NUM_GOALS; i++) {
+        if (state.goals_reached[i]) continue;
+        int d = abs(goal_cols[i] - from);
+        if (d < bd) { bd = d; best = goal_cols[i]; }
+    }
+    return best;
+}
+
+/* One decision when the frog is idle: hop forward when the landing is safe,
+ * otherwise wait, sidestep out of danger, or on the last river row line up
+ * with a free lily pad.  No / or % on variables. */
+static void demo_ai(uint32_t now) {
+    if (!frog.alive || frog.hopping || death_anim_active) return;
+    if (now - last_hop_ms < HOP_COOLDOWN_MS) return;
+
+    int r = frog.row, c = frog.col;
+    if (demo_land_ok(r - 1, c)) { hop_frog(-1, 0); return; }
+
+    int idx = lane_index_for_row(r);
+    bool danger = false;
+    int prefer = 0;                       /* sidestep direction tried first */
+    if (idx >= 0 && r >= 7 && r <= 11) {
+        danger = !demo_road_clear(&lanes[idx], c, 0.0f, 0.3f);
+    } else if (idx >= 0 && r >= 1 && r <= 5) {
+        int d = lanes[idx].direction;     /* the log carries us this way */
+        if ((d > 0 && c >= num_cols - 2) || (d < 0 && c <= 1)) { danger = true; prefer = -d; }
+        else if (r == 1) {                /* line up under a free lily pad */
+            int g = demo_goal_col(c);
+            if (g > c) prefer = 1; else if (g >= 0 && g < c) prefer = -1;
+            if (prefer && demo_land_ok(r, c + prefer)) { hop_frog(0, prefer); return; }
+        }
+    }
+    if (!danger) return;                  /* safe where we stand: wait */
+
+    if (prefer == 0) prefer = (c * 2 < num_cols) ? 1 : -1;
+    if (demo_land_ok(r, c + prefer))  { hop_frog(0, prefer);  return; }
+    if (demo_land_ok(r, c - prefer))  { hop_frog(0, -prefer); return; }
+    if (r < 12 && demo_land_ok(r + 1, c)) { hop_frog(1, 0); return; }
+}
+
+/* SCREEN_MENU while the attract cycle is on its DEMO page.  Entering it resets
+ * a fresh level at NORMAL speed; START resets the game again, so nothing of the
+ * demo leaks into real play. */
+static void demo_sync(void) {
+    bool want = (current_screen == SCREEN_MENU &&
+                 start_menu_attract(&menu) == SM_ATTRACT_DEMO);
+    if (want && !demo_running) {
+        difficulty = DIFF_NORMAL;
+        demo_running = true;      /* before reset_game(): the demo is silent from its first frame */
+        reset_game();
+        last_frame_ms = get_time_ms();
+        last_hop_ms   = last_frame_ms;
+    }
+    demo_running = want;
+    if (!want && led_effect.active) led_effect.active = false;
+}
+
 static void handle_input(void) {
     touch_poll(&touch);
     TouchState ts = touch_get_state(&touch);
@@ -821,12 +963,15 @@ static void handle_input(void) {
         } else if (r == menu_start_idx) {
             difficulty = start_menu_value(&menu, menu_diff_idx);
             if (difficulty < 0 || difficulty >= DIFF_COUNT) difficulty = DIFF_NORMAL;
+            demo_running = false;
             reset_game();
             current_screen = SCREEN_PLAYING;
             last_frame_ms  = get_time_ms();
             /* Non-blocking: effect 1 is this file's own green flash,
              * serviced by update_led_effects() once per frame. */
             start_led_effect(1);
+        } else {
+            demo_sync();
         }
         return;
     }
@@ -933,7 +1078,7 @@ static void handle_input(void) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void update_game(void) {
-    if (current_screen != SCREEN_PLAYING) return;
+    if (current_screen != SCREEN_PLAYING && !demo_on()) return;
 
     current_frame++;
     uint32_t now = get_time_ms();
@@ -944,6 +1089,10 @@ static void update_game(void) {
     if (death_anim_active) {
         update_death_animation(dt);
         return;
+    }
+    if (demo_on()) {
+        if (state.lives <= 0) return;   /* run over; waiting for the widget to leave DEMO */
+        demo_ai(now);
     }
 
     update_lanes(dt);
@@ -1282,8 +1431,10 @@ static void draw_hud(void) {
      * (uncalibrated panel, inset 0) puts them level with the buttons without
      * colliding with either. */
     fb_fill_rect(&fb, 0, 0, (int)fb.width, hud_height, RGB(20, 20, 30));
-    draw_menu_button(&fb, &menu_button);
-    draw_exit_button(&fb, &exit_button);
+    if (!demo_on()) {          /* the demo shows no buttons */
+        draw_menu_button(&fb, &menu_button);
+        draw_exit_button(&fb, &exit_button);
+    }
 
     const int hud_scale = 2;
     int hud_h  = text_measure_height(hud_scale);
@@ -1391,18 +1542,30 @@ static void draw_playing_field(void) {
 static void draw_all(void) {
     /* ── Start menu, or the attract cycle's SCORES page (widget clears too) ── */
     if (current_screen == SCREEN_MENU) {
-        if (start_menu_attract(&menu) == SM_ATTRACT_MENU)
+        SmAttract ph = start_menu_attract(&menu);
+        if (ph == SM_ATTRACT_MENU) {
             start_menu_draw(&menu, &fb);
-        else
+            return;
+        }
+        if (ph == SM_ATTRACT_SCORES) {
             start_menu_draw_scores(&menu, &fb, &hs_table);
-        return;
+            return;
+        }
+        /* DEMO: the playing field below, drawn with the real draw code */
     }
 
     fb_clear(&fb, COLOR_BLACK);
 
-    /* Draw the playing field as background for PLAYING, PAUSED, GAME_OVER */
+    /* Draw the playing field as background for PLAYING, PAUSED, GAME_OVER, DEMO */
     draw_hud();
     draw_playing_field();
+
+    if (demo_on()) {
+        const char *label = "DEMO";
+        int lw = text_measure_width(label, 2);
+        fb_draw_text(&fb, ((int)fb.width - lw) / 2, (int)fb.height - 28, label, COLOR_CYAN, 2);
+        return;
+    }
 
     /* ── Pause overlay ───────────────────────────────────────────────── */
     if (current_screen == SCREEN_PAUSED) {
@@ -1514,8 +1677,8 @@ int main(int argc, char *argv[]) {
         update_game();
 
         /* Dirty-flag: active gameplay always redraws; static screens only on changes */
-        if (current_screen == SCREEN_PLAYING) {
-            needs_redraw = true;  /* lanes scroll, water animates continuously */
+        if (current_screen == SCREEN_PLAYING || demo_on()) {
+            needs_redraw = true;  /* lanes scroll, water animates continuously; the demo is gameplay */
         } else if (current_screen != prev_screen) {
             needs_redraw = true;  /* screen transition */
         } else {
@@ -1545,7 +1708,7 @@ int main(int argc, char *argv[]) {
          * block stays PLAYING for the whole keyboard session.  Before the pump
          * so a voice started on this iteration is fed on the same one, and so
          * the release fade is rendered.  Full reason: brick_breaker.c's copy. */
-        audio_bed_service(&bed, current_screen == SCREEN_PLAYING, current_screen == SCREEN_PAUSED || death_anim_active);
+        audio_bed_service(&bed, current_screen == SCREEN_PLAYING, current_screen == SCREEN_PAUSED || (death_anim_active && !demo_on()));
 
         if (needs_redraw) {
             draw_all();

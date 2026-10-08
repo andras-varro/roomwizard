@@ -259,6 +259,18 @@ enum { DIFF_EASY, DIFF_NORMAL, DIFF_COUNT };
 static const char *const DIFF_NAMES[DIFF_COUNT] = { "EASY", "NORMAL" };
 static StartMenu menu;
 static int menu_start_idx, menu_diff_idx, menu_exit_idx;
+/* Attract-cycle DEMO: runs while game.screen is SCREEN_MENU and the menu is on
+ * its DEMO page.  Paddle AI, silent and LED-dark, no score kept, never a game
+ * over: the demo ends (start_menu_demo_over) when the first ball is lost.  The
+ * screen stays SCREEN_MENU throughout, so the music bed (SCREEN_PLAYING only)
+ * stays off and update_game()'s play clock is not involved. */
+static bool demo_running = false;
+static int  demo_launch_wait;          /* ticks left before the AI launches the ball */
+static uint32_t demo_last_ms;          /* the demo's own frame clock, as play_last_ms */
+static float    demo_acc;              /* the demo's tick accumulator, as tick_acc */
+#define DEMO_LAUNCH_TICKS 45           /* 1.5 s at 30 ticks/s */
+#define DEMO_PADDLE_SPEED 5.0f         /* px per tick: slower than the 8 of a key, so it can miss */
+static bool demo_on(void) { return demo_running; }
 static float ball_base_speed = BALL_BASE_SPEED;  /* runtime speed, adjusted for screen orientation */
 static GameOverScreen gos;  /* unified game over screen */
 /* The play clock (update_game).  play_clock_live is false whenever the last
@@ -719,7 +731,8 @@ static void apply_powerup(PowerUpType type) {
     /* Non-blocking 50 ms green flash.  This used to be hw_set_led() here and
      * `usleep(50000); hw_leds_off();` at the end of the function — a sleep in an
      * update path, which freezes touch and rendering along with it. */
-    hw_led_pulse_start(&fx_pulse, LED_GREEN, 1, 50, get_time_ms());
+    if (!demo_on())   /* the demo is LED-dark and silent */
+        hw_led_pulse_start(&fx_pulse, LED_GREEN, 1, 50, get_time_ms());
 
     switch (type) {
     case PU_WIDEN:
@@ -750,7 +763,7 @@ static void apply_powerup(PowerUpType type) {
         break;
     case PU_EXTRA_LIFE:
         game.lives++;
-        audio_blip(&audio);
+        if (!demo_on()) audio_blip(&audio);
         break;
     case PU_LOSE_LIFE:
         if (game.lives > 1) game.lives--;
@@ -778,7 +791,7 @@ static void apply_powerup(PowerUpType type) {
                      sinf(angle2) * src->speed,
                      src->base_speed);
         }
-        audio_blip(&audio);
+        if (!demo_on()) audio_blip(&audio);
         break;
     }
     default:
@@ -786,7 +799,7 @@ static void apply_powerup(PowerUpType type) {
     }
 
     /* Brief LED + beep */
-    if (type != PU_MULTIBALL && type != PU_EXTRA_LIFE)
+    if (type != PU_MULTIBALL && type != PU_EXTRA_LIFE && !demo_on())
         audio_beep(&audio);
 }
 
@@ -947,7 +960,7 @@ static void ball_substep(Ball *b, float frac, int paddle_left, int paddle_right)
          * with balls remaining.  The idiom was free when the kernel ring
          * held exactly one sound; mixing is the whole point of the bus.
          * The four sites below dropped theirs for the same reason. */
-        audio_knock(&audio);
+        if (!demo_on()) audio_knock(&audio);
     }
 
     /* Bottom — ball lost */
@@ -981,7 +994,7 @@ static void ball_substep(Ball *b, float frac, int paddle_left, int paddle_right)
             br->health = 0;
             brick_destroyed = true;
             game.score += 20 * game.level;  /* 2x normal points */
-            audio_sparkle(&audio);         /* bonus brick — fx_sparkle */
+            if (!demo_on()) audio_sparkle(&audio);   /* bonus brick — fx_sparkle */
         } else if (br->type == BRICK_EXPLOSIVE) {
             /* Explosive brick — immediate detonation + deferred chain */
             br->health = 0;
@@ -1021,7 +1034,7 @@ static void ball_substep(Ball *b, float frac, int paddle_left, int paddle_right)
                 }
             }
             
-            audio_burst(&audio);
+            if (!demo_on()) audio_burst(&audio);
         } else {
             /* Normal brick */
             if (b->fireball) {
@@ -1066,9 +1079,9 @@ static void ball_substep(Ball *b, float frac, int paddle_left, int paddle_right)
             }
             spawn_powerup((float)(br->x + br->w / 2),
                           (float)(br->y + br->h / 2));
-            audio_tick(&audio);
+            if (!demo_on()) audio_tick(&audio);
         } else if (br->type != BRICK_INDESTRUCTIBLE) {
-            audio_thud(&audio);
+            if (!demo_on()) audio_thud(&audio);
         }
 
         /* Bounce (skip if fireball or hit indestructible without fireball) */
@@ -1177,6 +1190,30 @@ static void game_tick(void) {
     /* Continuously apply paddle width from effect level */
     apply_paddle_width();
 
+    if (demo_on()) {
+        /* AI: launch after a short wait, then chase the lowest falling ball's x
+         * at a limited speed (DEMO_PADDLE_SPEED < a key's 8 px/tick) so it is
+         * not perfect and eventually misses, which ends the demo. */
+        if (!game.ball_launched) {
+            if (demo_launch_wait > 0) demo_launch_wait--;
+            else launch_ball();
+        }
+        const Ball *tgt = NULL;
+        for (int i = 0; i < game.ball_count; i++) {
+            const Ball *b = &game.balls[i];
+            if (!b->active) continue;
+            if (!tgt || b->y > tgt->y) tgt = b;
+        }
+        if (tgt) {
+            float diff = tgt->x - game.paddle_x;
+            float step = clampf(diff, -DEMO_PADDLE_SPEED, DEMO_PADDLE_SPEED);
+            game.paddle_x = clampf(game.paddle_x + step,
+                                   AREA_X + game.paddle_w / 2.0f,
+                                   AREA_X + AREA_W - game.paddle_w / 2.0f);
+        }
+        paddle_vel = 0.0f;   /* nothing but the AI moves the paddle */
+    }
+
     if (paddle_vel != 0.0f)
         game.paddle_x = clampf(game.paddle_x + paddle_vel,
                                AREA_X + game.paddle_w / 2.0f,
@@ -1218,6 +1255,12 @@ static void game_tick(void) {
 
     /* All balls lost? (skip during level clear cooldown) */
     if (game.ball_count == 0 && game.ball_launched && game.clear_cooldown == 0) {
+        if (demo_on()) {
+            /* The demo ends with its first lost ball: no life, flash, sound,
+             * score or game over.  The field is reset when the next demo starts. */
+            start_menu_demo_over(&menu);
+            return;
+        }
         game.lives--;
         /* Non-blocking 300 ms red flash — the usleep() that was here froze the
          * panel for 300 ms on every lost ball. */
@@ -1276,6 +1319,27 @@ static void game_tick(void) {
  * is an edge handled in handle_input() (launch_ball() only sets a velocity), so
  * no input edge needs holding for a tick here. */
 static void update_game(void) {
+    if (demo_on()) {
+        /* The demo runs on SCREEN_MENU with its own clock; the play clock is
+         * left not-live so real play re-baselines on entry. */
+        play_clock_live = false;
+        uint32_t dnow = get_time_ms();
+        float ddt = (float)(dnow - demo_last_ms) * 0.001f;
+        if (ddt > MAX_FRAME_DT) ddt = MAX_FRAME_DT;
+        demo_last_ms = dnow;
+        demo_acc += ddt;
+        int dsteps = 0;
+        while (demo_acc >= TICK_S && dsteps < MAX_TICKS_FRAME) {
+            game_tick();
+            demo_acc -= TICK_S;
+            dsteps++;
+            /* game_tick() reported the lost ball to the menu: stop ticking. */
+            if (game.ball_launched && game.ball_count == 0) break;
+        }
+        if (dsteps >= MAX_TICKS_FRAME) demo_acc = 0.0f;
+        return;
+    }
+
     if (game.screen != SCREEN_PLAYING) {
         play_clock_live = false;
         return;
@@ -1537,6 +1601,13 @@ static void draw_game_screen(void) {
     fb_clear_draw_offset(&fb);
     draw_hud();  /* HUD does NOT shake */
 
+    if (demo_on()) {
+        /* DEMO label between the buttons' band, under the score; no buttons */
+        const char *lbl = "DEMO";
+        fb_draw_text(&fb, AREA_X + AREA_W / 2 - text_measure_width(lbl, 1) / 2,
+                     SCREEN_SAFE_TOP + 40, lbl, RGB(0, 220, 255), 1);
+        return;
+    }
     button_draw_menu(&fb, &btn_menu);
     button_draw_exit(&fb, &btn_exit);
     /* No in-game launch hint: the title screen already says how to launch
@@ -1590,8 +1661,28 @@ static void return_to_menu(void) {
     game.clear_cooldown = 0;
     game.pending_exp_count = 0;
     menu_refresh_subtitle();
+    demo_running = false;
     start_menu_reopen(&menu, get_time_ms());
     game.screen = SCREEN_MENU;
+}
+
+/* The demo: SCREEN_MENU while the attract cycle is on its DEMO page.  Entering
+ * it resets the field to a fresh level 1 at NORMAL (test_mode off); START
+ * resets the game again, so nothing of the demo leaks into real play. */
+static void demo_sync(void) {
+    bool want = (game.screen == SCREEN_MENU &&
+                 start_menu_attract(&menu) == SM_ATTRACT_DEMO);
+    if (want && !demo_running) {
+        test_mode = false;
+        demo_running = true;          /* before reset_game(): nothing in it may sound */
+        reset_game();
+        game.screen = SCREEN_MENU;    /* reset_game() sets PLAYING; the demo stays on the menu screen */
+        demo_launch_wait = DEMO_LAUNCH_TICKS;
+        demo_last_ms = get_time_ms();
+        demo_acc = 0.0f;
+        paddle_vel = 0.0f;
+    }
+    demo_running = want;
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
@@ -1620,8 +1711,11 @@ static void handle_input(void) {
             running = false;
         } else if (r == menu_start_idx) {
             test_mode = (start_menu_value(&menu, menu_diff_idx) == DIFF_EASY);
+            demo_running = false;
             reset_game();
             audio_beep(&audio);
+        } else {
+            demo_sync();
         }
         return;
     }
@@ -1926,7 +2020,7 @@ int main(int argc, char *argv[]) {
                                            test_mode ? DIFF_EASY : DIFF_NORMAL);
     menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
     start_menu_select(&menu, menu_start_idx, get_time_ms());
-    start_menu_set_attract(&menu, false);
+    start_menu_set_attract(&menu, true);
 
     game.screen = SCREEN_MENU;
     frame_time_ms = get_time_ms();
@@ -1944,8 +2038,8 @@ int main(int argc, char *argv[]) {
         hw_led_pulse_update(&fx_pulse, get_time_ms());
 
         /* Dirty-flag: active gameplay always redraws; static screens on change */
-        if (game.screen == SCREEN_PLAYING) {
-            needs_redraw = true;  /* continuous rendering during play */
+        if (game.screen == SCREEN_PLAYING || demo_on()) {
+            needs_redraw = true;  /* continuous rendering during play; the demo is gameplay */
         } else if (game.screen != prev_screen) {
             needs_redraw = true;  /* screen transition */
         } else {
@@ -1998,6 +2092,8 @@ int main(int argc, char *argv[]) {
             case SCREEN_MENU:
                 if (start_menu_attract(&menu) == SM_ATTRACT_MENU)
                     start_menu_draw(&menu, &fb);
+                else if (demo_on())
+                    draw_game_screen();   /* the DEMO page: the real field, drawn by the real code */
                 else
                     start_menu_draw_scores(&menu, &fb, &hs);
                 break;

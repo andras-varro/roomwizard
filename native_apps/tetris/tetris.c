@@ -178,6 +178,16 @@ static bool soft_drop_active = false;
 static bool drop_clock_stale = true;
 /* LED flourishes (game start, game over), advanced once per frame by the main loop. */
 static LedPulse led_pulse;
+/* Attract-cycle DEMO: an AI plays on the real board while the start menu is
+ * on its DEMO page (current_screen stays SCREEN_MENU, so the music bed -
+ * serviced from SCREEN_PLAYING only - stays off).  Silent, LED-dark, no high
+ * score, never SCREEN_GAME_OVER; demo_sync() resets the board on entry and
+ * START resets it again, so nothing of the demo reaches a real game. */
+static bool demo_running = false;
+#define DEMO_STEP_MS 70          /* one AI action (turn, shift or one row down) per step */
+static uint32_t demo_next_ms = 0;
+static bool demo_planned = false;   /* target below is valid for the current piece */
+static int demo_target_rot = 0, demo_target_x = 0;
 
 // Function prototypes
 void init_game();
@@ -239,7 +249,7 @@ void init_game() {
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT,
                 "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    /* No DEMO yet: the attract cycle is MENU -> SCORES, drawn by draw_game(). */
+    /* Attract cycle MENU -> DEMO -> SCORES, drawn by draw_game(). */
     start_menu_init(&menu, "TETRIS",
                     "L/R: MOVE   UP/A: ROTATE\n"
                     "DOWN: SOFT DROP   X: HARD DROP\n"
@@ -247,7 +257,7 @@ void init_game() {
     menu_start_idx = start_menu_add_action(&menu, "START");
     menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
     start_menu_select(&menu, menu_start_idx, get_time_ms());
-    start_menu_set_attract(&menu, false);
+    start_menu_set_attract(&menu, true);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
     modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
@@ -348,6 +358,13 @@ void lock_piece() {
     spawn_piece(&game.next);
     
     if (check_collision(&game.current, 0, 0, game.current.rotation)) {
+        if (demo_running) {
+            /* The demo topped out: no game over, no score, no sound.  The
+             * widget returns to its menu; the next demo/START resets the board. */
+            game.game_over = true;
+            start_menu_demo_over(&menu);
+            return;
+        }
         game.game_over = true;
         current_screen = SCREEN_GAME_OVER;
         // Initialize unified game over screen with level info
@@ -404,8 +421,10 @@ void clear_lines() {
         game.drop_interval_ms = DROP_BASE_MS - (game.level - 1) * DROP_LEVEL_STEP_MS;
         if (game.drop_interval_ms < DROP_MIN_MS) game.drop_interval_ms = DROP_MIN_MS;
         
-        // LED + audio effects for line clears
-        if (lines == 4) {
+        // LED + audio effects for line clears (the demo is silent and dark)
+        if (demo_running) {
+            /* no effects */
+        } else if (lines == 4) {
             // Tetris! Fanfare + yellow flash
             hw_set_leds(HW_LED_COLOR_YELLOW);
             audio_success(&audio);  // Ascending arpeggio (~440ms)
@@ -424,7 +443,112 @@ void clear_lines() {
     }
 }
 
+/* Placement score for `p` already dropped to its resting row: lines cleared
+ * minus aggregate height, holes and bumpiness (integer weights, no divide). */
+static int demo_eval(const Piece *p) {
+    int tmp[BOARD_HEIGHT][BOARD_WIDTH];
+    memcpy(tmp, game.board, sizeof(tmp));
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 4; x++)
+            if (tetrominos[p->type][p->rotation][y][x]) {
+                int by = p->y + y;
+                if (by < 0) return -1000000;   /* sticks out of the top */
+                tmp[by][p->x + x] = 1;
+            }
+
+    /* Remove full rows (compact downward) and count them. */
+    int out[BOARD_HEIGHT][BOARD_WIDTH];
+    memset(out, 0, sizeof(out));
+    int lines = 0, dst = BOARD_HEIGHT - 1;
+    for (int y = BOARD_HEIGHT - 1; y >= 0; y--) {
+        bool full = true;
+        for (int x = 0; x < BOARD_WIDTH; x++)
+            if (!tmp[y][x]) { full = false; break; }
+        if (full) { lines++; continue; }
+        memcpy(out[dst--], tmp[y], sizeof(out[0]));
+    }
+
+    int agg = 0, holes = 0, bump = 0, prev_h = 0;
+    for (int x = 0; x < BOARD_WIDTH; x++) {
+        int h = 0;
+        for (int y = 0; y < BOARD_HEIGHT; y++) {
+            if (out[y][x]) {
+                if (!h) h = BOARD_HEIGHT - y;
+            } else if (h) {
+                holes++;
+            }
+        }
+        agg += h;
+        if (x > 0) bump += (h > prev_h) ? h - prev_h : prev_h - h;
+        prev_h = h;
+    }
+    return lines * 760 - agg * 510 - holes * 356 - bump * 184;
+}
+
+/* Choose the best rotation x column for the current piece. */
+static void demo_plan(void) {
+    int best = -2000000;
+    demo_target_rot = game.current.rotation;
+    demo_target_x = game.current.x;
+    for (int rot = 0; rot < 4; rot++) {
+        for (int x = -2; x < BOARD_WIDTH; x++) {
+            Piece p = game.current;
+            p.x = x; p.y = 0; p.rotation = rot;
+            if (check_collision(&p, 0, 0, rot)) continue;
+            while (!check_collision(&p, 0, 1, rot)) p.y++;
+            int s = demo_eval(&p);
+            if (s > best) { best = s; demo_target_rot = rot; demo_target_x = x; }
+        }
+    }
+    demo_planned = true;
+}
+
+/* One AI action per DEMO_STEP_MS: turn, then shift, then fall a row at a time. */
+static void demo_step(void) {
+    if (game.game_over) return;          /* topped out; waiting for the widget */
+    uint32_t now = get_time_ms();
+    if ((uint32_t)(now - demo_next_ms) < DEMO_STEP_MS) return;
+    demo_next_ms = now;
+
+    if (!demo_planned) demo_plan();
+
+    if (game.current.rotation != demo_target_rot) {
+        if (!try_rotate((game.current.rotation + 1) & 3))
+            demo_target_rot = game.current.rotation;   /* blocked: settle for this one */
+    } else if (game.current.x != demo_target_x) {
+        int dx = (demo_target_x > game.current.x) ? 1 : -1;
+        if (check_collision(&game.current, dx, 0, game.current.rotation))
+            demo_target_x = game.current.x;
+        else
+            game.current.x += dx;
+    } else if (!check_collision(&game.current, 0, 1, game.current.rotation)) {
+        game.current.y++;
+    } else {
+        demo_planned = false;
+        lock_piece();
+    }
+}
+
+/* The demo runs while SCREEN_MENU is on the attract cycle's DEMO page.
+ * Entering it gives a fresh board. */
+static void demo_sync(void) {
+    bool want = (current_screen == SCREEN_MENU &&
+                 start_menu_attract(&menu) == SM_ATTRACT_DEMO);
+    if (want && !demo_running) {
+        demo_running = true;       /* before reset_game(): spawn/LED paths see the demo */
+        reset_game();
+        demo_planned = false;
+        demo_next_ms = get_time_ms();
+    }
+    demo_running = want;
+}
+
 void update_game() {
+    if (demo_running) {
+        drop_clock_stale = true;   /* a real game rebaselines its gravity clock */
+        demo_step();
+        return;
+    }
     // Only process game logic when actually playing (Issue #9)
     if (current_screen != SCREEN_PLAYING || game.game_over || game.paused) {
         /* Not playing: the gravity clock stops, and is rebaselined on the way
@@ -491,6 +615,7 @@ static bool das_update(DASState *das, bool held, bool pressed, uint32_t now) {
  * state (LED flourish, pause flag, gravity clock) so the menu looks as on
  * first launch.  The bed follows current_screen in the main loop. */
 static void return_to_menu(void) {
+    demo_running = false;
     hw_led_pulse_stop(&led_pulse);
     hw_leds_off();
     game.paused = false;
@@ -521,12 +646,15 @@ void handle_input() {
             fb_fade_out(&fb);
             running = false;
         } else if (r == menu_start_idx) {
+            demo_running = false;
             reset_game();
             game.high_score = hs_table.count > 0 ? hs_table.entries[0].score : 0;
             current_screen = SCREEN_PLAYING;
             /* Non-blocking: a usleep() here delayed the first frame of play
              * by 100 ms from inside handle_input(). */
             hw_led_pulse_start(&led_pulse, LED_GREEN, 1, 100, current_time);
+        } else {
+            demo_sync();
         }
         return;
     }
@@ -743,8 +871,8 @@ void draw_playing_field() {
     fb_draw_text(&fb, hud_x + score_w + hud_gap, hud_y, level_text, COLOR_CYAN, hud_scale);
 
     // Draw menu and exit buttons
-    draw_menu_button(&fb, &menu_button);
-    draw_exit_button(&fb, &exit_button);
+    if (!demo_running) draw_menu_button(&fb, &menu_button);
+    if (!demo_running) draw_exit_button(&fb, &exit_button);
 
     // Draw board border
     fb_draw_rect(&fb, board_offset_x - BOARD_BORDER, board_offset_y - BOARD_BORDER,
@@ -799,9 +927,14 @@ void draw_playing_field() {
         
         // Draw controls hint below the board (centered on play area)
         int hint_y = board_offset_y + BOARD_HEIGHT * cell_size + 10;
-        text_draw_centered(&fb, board_offset_x + (BOARD_WIDTH * cell_size) / 2, hint_y,
-                          "L/R: MOVE  CENTER: ROTATE  BOTTOM: DROP",
-                          RGB(100, 100, 100), 1);
+        if (demo_running)   /* hidden MENU button's place: scale 2 is clipped under the board */
+            text_draw_centered(&fb, menu_button.x + menu_button.width / 2,
+                               menu_button.y + menu_button.height / 2,
+                               "DEMO", COLOR_CYAN, 2);
+        else
+            text_draw_centered(&fb, board_offset_x + (BOARD_WIDTH * cell_size) / 2, hint_y,
+                              "L/R: MOVE  CENTER: ROTATE  BOTTOM: DROP",
+                              RGB(100, 100, 100), 1);
     } else {
         // Landscape: side panel to the right of the board
         int next_x = board_offset_x + BOARD_WIDTH * cell_size + 20;
@@ -820,20 +953,29 @@ void draw_playing_field() {
         }
         
         // Draw controls hint
-        fb_draw_text(&fb, 10, fb.height - 60, "L/R: MOVE", RGB(100, 100, 100), 1);
-        fb_draw_text(&fb, 10, fb.height - 45, "CENTER: ROTATE", RGB(100, 100, 100), 1);
-        fb_draw_text(&fb, 10, fb.height - 30, "BOTTOM: DROP", RGB(100, 100, 100), 1);
+        if (demo_running) {
+            fb_draw_text(&fb, 10, fb.height - 50, "DEMO", COLOR_CYAN, 2);
+        } else {
+            fb_draw_text(&fb, 10, fb.height - 60, "L/R: MOVE", RGB(100, 100, 100), 1);
+            fb_draw_text(&fb, 10, fb.height - 45, "CENTER: ROTATE", RGB(100, 100, 100), 1);
+            fb_draw_text(&fb, 10, fb.height - 30, "BOTTOM: DROP", RGB(100, 100, 100), 1);
+        }
     }
 }
 
 void draw_game() {
     // Start menu, or the attract cycle's SCORES page (the widget clears too)
     if (current_screen == SCREEN_MENU) {
-        if (start_menu_attract(&menu) == SM_ATTRACT_MENU)
+        SmAttract ph = start_menu_attract(&menu);
+        if (ph == SM_ATTRACT_MENU) {
             start_menu_draw(&menu, &fb);
-        else
+            return;
+        }
+        if (ph == SM_ATTRACT_SCORES) {
             start_menu_draw_scores(&menu, &fb, &hs_table);
-        return;
+            return;
+        }
+        /* DEMO: the playing field below, drawn with the real draw code */
     }
 
     fb_clear(&fb, COLOR_BLACK);
@@ -965,6 +1107,8 @@ int main(int argc, char *argv[]) {
         /* Bracket blink and attract phase changes arrive with no input. */
         if (current_screen == SCREEN_MENU && start_menu_needs_redraw(&menu))
             needs_redraw = true;
+        /* The demo is gameplay: redraw every frame. */
+        if (demo_running) needs_redraw = true;
 
         /* One bed transition, ABOVE the redraw block and before the pump.
          * ⚠️ The position is load-bearing: SCREEN_GAME_OVER's redraw runs

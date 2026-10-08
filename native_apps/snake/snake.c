@@ -106,6 +106,14 @@ StartMenu menu;
 int menu_start_idx, menu_diff_idx, menu_exit_idx;
 int difficulty = DIFF_NORMAL;
 
+/* Attract-cycle DEMO: the snake steers itself on the menu screen, silent and
+ * LED-dark, at NORMAL speed, keeps no score and never reaches game over. */
+static bool demo_running = false;
+static bool demo_done = false;          /* demo_over already reported; stop stepping */
+static uint32_t demo_next_ms = 0;
+#define DEMO_MAX_LENGTH 20              /* the demo ends early at this length */
+static bool demo_on(void) { return demo_running; }
+
 // UI Buttons
 Button menu_button;
 Button exit_button;
@@ -205,7 +213,7 @@ void init_game() {
     button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    /* No DEMO yet: the attract cycle is MENU -> SCORES, drawn by draw_game(). */
+    /* Attract cycle: MENU -> DEMO -> SCORES, the DEMO drawn by draw_game(). */
     start_menu_init(&menu, "SNAKE",
                     "D-PAD/ARROWS: MOVE\n"
                     "EAT FOOD TO GROW", get_time_ms());
@@ -213,7 +221,7 @@ void init_game() {
     menu_diff_idx  = start_menu_add_choice(&menu, "DIFFICULTY", DIFF_NAMES, DIFF_COUNT, DIFF_NORMAL);
     menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
     start_menu_select(&menu, menu_start_idx, get_time_ms());
-    start_menu_set_attract(&menu, false);
+    start_menu_set_attract(&menu, true);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
     modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
@@ -240,6 +248,7 @@ void init_game() {
  * running LED effect and park the LEDs, reset the round, and reopen the menu
  * (selection and difficulty kept).  The music bed follows current_screen. */
 static void return_to_menu(void) {
+    demo_running = false;
     led_effect.active = false;
     hw_leds_off();
     reset_game();
@@ -308,6 +317,11 @@ void update_snake() {
     // Check wall collision
     if (new_head.x < 0 || new_head.x >= GRID_SIZE ||
         new_head.y < 0 || new_head.y >= GRID_SIZE) {
+        if (demo_on()) {   /* the demo is never a game: no game over, no sound */
+            demo_done = true;
+            start_menu_demo_over(&menu);
+            return;
+        }
         game.game_over = true;
         current_screen = SCREEN_GAME_OVER;
         gameover_init(&gos, &fb, game.score, NULL, NULL, "SNAKE", &hs_table, &touch, &gamepad);
@@ -323,6 +337,11 @@ void update_snake() {
     // Check self collision
     for (int i = 0; i < snake.length; i++) {
         if (snake.body[i].x == new_head.x && snake.body[i].y == new_head.y) {
+            if (demo_on()) {
+                demo_done = true;
+                start_menu_demo_over(&menu);
+                return;
+            }
             game.game_over = true;
             current_screen = SCREEN_GAME_OVER;
             gameover_init(&gos, &fb, game.score, NULL, NULL, "SNAKE", &hs_table, &touch, &gamepad);
@@ -352,9 +371,11 @@ void update_snake() {
          * Mixing.  No counter sees this — a voice stopped early is not `lost`,
          * `drop` or `clip`.  The two tones still chain into one motif: that is
          * AUDIO_TONE_CHAIN_MS, not the interrupt. */
-        audio_tone(&audio, 1800, 60);  // ti-
-        audio_tone(&audio, 2400, 60);  // -ti
-        start_led_effect(1);  // Start food effect (non-blocking)
+        if (!demo_on()) {
+            audio_tone(&audio, 1800, 60);  // ti-
+            audio_tone(&audio, 2400, 60);  // -ti
+            start_led_effect(1);  // Start food effect (non-blocking)
+        }
         
         if (snake.length < MAX_SNAKE_LENGTH) {
             /* The shift above only wrote body[1..length-1], so body[length] is
@@ -369,14 +390,68 @@ void update_snake() {
              * like a one-frame rendering glitch rather than a fatal one. */
             snake.body[snake.length] = vacated_tail;
             snake.length++;
-            start_led_effect(2);  // Start grow effect (non-blocking)
+            if (!demo_on()) start_led_effect(2);  // Start grow effect (non-blocking)
         }
         // Increase speed slightly
         if (game.speed > 50000) {
             game.speed -= 5000;
         }
         spawn_food();
+        if (demo_on() && snake.length >= DEMO_MAX_LENGTH) {
+            demo_done = true;
+            start_menu_demo_over(&menu);
+        }
     }
+}
+
+/* Demo AI: greedy toward the food, never reversing, one-step lookahead that
+ * refuses a wall or any body cell (the tail included, as update_snake does)
+ * when another move is safe.  Ties keep the current heading. */
+static void demo_steer(void) {
+    static const int DX[4] = { 0, 0, -1, 1 };   /* UP, DOWN, LEFT, RIGHT */
+    static const int DY[4] = { -1, 1, 0, 0 };
+    int best = -1, best_dist = 0;
+    for (int k = 0; k < 4; k++) {
+        /* heading first, so a tie keeps it */
+        int d = (k == 0) ? (int)snake.direction : (k - 1 >= (int)snake.direction ? k : k - 1);
+        if (d == ((int)snake.direction ^ 1)) continue;   /* never reverse */
+        int nx = snake.body[0].x + DX[d];
+        int ny = snake.body[0].y + DY[d];
+        if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
+        bool hit = false;
+        for (int i = 0; i < snake.length; i++)
+            if (snake.body[i].x == nx && snake.body[i].y == ny) { hit = true; break; }
+        if (hit) continue;
+        int dist = abs(nx - food.position.x) + abs(ny - food.position.y);
+        if (best < 0 || dist < best_dist) { best = d; best_dist = dist; }
+    }
+    if (best >= 0) snake.next_direction = (Direction)best;
+}
+
+/* One demo step per NORMAL-speed interval; the main loop paces at the active
+ * frame rate meanwhile.  game.speed * 341 >> 8 is the NORMAL interval in us. */
+static void demo_step(void) {
+    if (!demo_on() || demo_done) return;
+    uint32_t now = get_time_ms();
+    if ((int32_t)(now - demo_next_ms) < 0) return;
+    demo_next_ms = now + (uint32_t)((((long)game.speed * SPEED_Q8[DIFF_NORMAL]) >> 8) / 1000);
+    demo_steer();
+    update_snake();
+}
+
+/* The demo is SCREEN_MENU while the attract cycle is on its DEMO page.  Entering
+ * it resets the field; START resets again, so nothing of the demo leaks. */
+static void demo_sync(void) {
+    bool want = (current_screen == SCREEN_MENU &&
+                 start_menu_attract(&menu) == SM_ATTRACT_DEMO);
+    if (want && !demo_running) {
+        demo_done = false;
+        reset_game();
+        demo_next_ms = get_time_ms();
+        led_effect.active = false;
+        hw_leds_off();
+    }
+    demo_running = want;
 }
 
 void handle_input() {
@@ -405,6 +480,7 @@ void handle_input() {
         } else if (r == menu_start_idx) {
             difficulty = start_menu_value(&menu, menu_diff_idx);
             if (difficulty < 0 || difficulty >= DIFF_COUNT) difficulty = DIFF_NORMAL;
+            demo_running = false;
             reset_game();
             current_screen = SCREEN_PLAYING;
             /* Non-blocking: the hw_set_led() + usleep(100000) + hw_leds_off()
@@ -415,6 +491,8 @@ void handle_input() {
              * update_led_effects() once per frame, so it is the same flash
              * without the freeze. */
             start_led_effect(1);
+        } else {
+            demo_sync();
         }
         return;
     }
@@ -515,6 +593,9 @@ void handle_input() {
 }
 
 void draw_playing_field() {
+    if (demo_on()) {
+        text_draw_centered(&fb, fb.width / 2, SCREEN_VISIBLE_TOP + 20, "DEMO", COLOR_CYAN, 2);
+    } else {
     // Draw HUD
     char score_text[32];
     snprintf(score_text, sizeof(score_text), "SCORE: %d", game.score);
@@ -527,7 +608,8 @@ void draw_playing_field() {
     // Draw menu and exit buttons
     draw_menu_button(&fb, &menu_button);
     draw_exit_button(&fb, &exit_button);
-    
+    }
+
     // Draw grid border
     fb_draw_rect(&fb, grid_offset_x - 2, grid_offset_y - 2,
                  GRID_SIZE * cell_size + 4, GRID_SIZE * cell_size + 4, COLOR_WHITE);
@@ -549,6 +631,7 @@ void draw_playing_field() {
     }
     
     // Draw controls hint
+    if (demo_on()) return;
     if (!input.gamepad_connected && !input.keyboard_connected)
         fb_draw_text(&fb, 10, fb.height - 25, "TAP DIRECTION TO MOVE", RGB(100, 100, 100), 1);
     else
@@ -558,12 +641,16 @@ void draw_playing_field() {
 void draw_game() {
     // Start menu, or the attract cycle's SCORES page (the widget clears too)
     if (current_screen == SCREEN_MENU) {
-        if (start_menu_attract(&menu) == SM_ATTRACT_MENU) {
+        SmAttract ph = start_menu_attract(&menu);
+        if (ph == SM_ATTRACT_MENU) {
             start_menu_draw(&menu, &fb);
             return;
         }
-        start_menu_draw_scores(&menu, &fb, &hs_table);
-        return;
+        if (ph == SM_ATTRACT_SCORES) {
+            start_menu_draw_scores(&menu, &fb, &hs_table);
+            return;
+        }
+        /* DEMO: the playing field below, drawn with the real draw code */
     }
 
     // Clear screen
@@ -571,7 +658,8 @@ void draw_game() {
     
     // Draw the playing field as background (used by PLAYING, PAUSED, GAME_OVER)
     draw_playing_field();
-    
+    if (demo_on()) return;
+
     // Handle pause screen overlay
     if (current_screen == SCREEN_PAUSED) {
         modal_dialog_draw(&pause_dialog, &fb);
@@ -667,10 +755,11 @@ int main(int argc, char *argv[]) {
         handle_input();
         if (current_screen == SCREEN_PLAYING)
             update_snake();
+        demo_step();
         update_led_effects();
 
         /* Dirty-flag: active gameplay always redraws; static screens only on changes */
-        if (current_screen == SCREEN_PLAYING) {
+        if (current_screen == SCREEN_PLAYING || demo_on()) {
             needs_redraw = true;  /* snake moves every tick */
         } else if (current_screen != prev_screen) {
             needs_redraw = true;  /* screen transition */

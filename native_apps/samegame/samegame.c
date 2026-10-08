@@ -175,6 +175,15 @@ static int menu_start_idx, menu_diff_idx, menu_exit_idx;
 static int difficulty = DIFF_NORMAL;
 static GameOverScreen gos;
 
+/* Attract-cycle DEMO state (see demo_step / demo_sync).  Silent and LED-dark:
+ * every sound reachable from play goes through these wrappers. */
+static bool demo_running  = false;
+static bool demo_finished = false;      /* no move left; demo_over already sent */
+static uint32_t demo_hl_start = 0;      /* when the AI's highlight was shown */
+static bool demo_on(void) { return demo_running; }
+static void sfx_tone(int hz, int ms) { if (!demo_on()) audio_tone(&audio, hz, ms); }
+static void sfx_beep(void)           { if (!demo_on()) audio_beep(&audio); }
+
 /* UI Buttons */
 static Button menu_button;
 static Button exit_button;
@@ -355,7 +364,7 @@ static void init_game(void) {
     hs_init(&hs_table, "samegame");
     hs_load(&hs_table);
 
-    /* No DEMO yet: the attract cycle is MENU -> SCORES, drawn by draw_game(). */
+    /* Attract cycle: MENU -> DEMO -> SCORES, drawn by draw_game(). */
     start_menu_init(&menu, "SAMEGAME",
                     "TAP GROUPS OF 2+ SAME-COLORED BLOCKS\n"
                     "TAP AGAIN TO REMOVE THEM", get_time_ms());
@@ -363,7 +372,7 @@ static void init_game(void) {
     menu_diff_idx  = start_menu_add_choice(&menu, "DIFFICULTY", DIFF_NAMES, DIFF_COUNT, DIFF_NORMAL);
     menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
     start_menu_select(&menu, menu_start_idx, get_time_ms());
-    start_menu_set_attract(&menu, false);
+    start_menu_set_attract(&menu, true);
 
     reset_game();
 }
@@ -410,10 +419,65 @@ static void reset_game(void) {
     }
 }
 
+/* The attract-cycle DEMO: SCREEN_MENU while the widget is on its DEMO page (so
+ * the music bed, which follows SCREEN_PLAYING, stays off).  An AI highlights
+ * the largest group, holds it, removes it, and repeats; it keeps no score and
+ * never reaches SCREEN_GAME_OVER. */
+#define DEMO_PICK_MS 800
+static void demo_step(void) {
+    static bool seen[MAX_COLS][MAX_ROWS];
+    int c, r, best = 0, bc = -1, br = -1;
+
+    if (demo_finished || game.anim_state != ANIM_NONE)
+        return;
+
+    if (game.highlight_active) {
+        if (get_time_ms() - demo_hl_start >= DEMO_PICK_MS)
+            remove_highlighted();
+        return;
+    }
+
+    memset(seen, 0, sizeof(seen));
+    for (c = 0; c < game.cols; c++) {
+        for (r = 0; r < game.rows; r++) {
+            int n = 0;
+            if (game.grid[c][r] == BLOCK_EMPTY || seen[c][r]) continue;
+            flood_fill(c, r, game.grid[c][r], seen, &n);
+            if (n > best) { best = n; bc = c; br = r; }
+        }
+    }
+    if (best < 2) {                 /* no move left: end the demo early */
+        demo_finished = true;
+        start_menu_demo_over(&menu);
+        return;
+    }
+    compute_highlight(bc, br);
+    demo_hl_start = get_time_ms();
+}
+
+/* SCREEN_MENU on the DEMO page turns the demo on with a fresh board; leaving
+ * it (any input, or demo over) wipes the board again, so a real START is a
+ * clean game at the menu's difficulty. */
+static void demo_sync(void) {
+    bool want = (current_screen == SCREEN_MENU &&
+                 start_menu_attract(&menu) == SM_ATTRACT_DEMO);
+    if (want && !demo_running) {
+        difficulty = DIFF_NORMAL;       /* START re-reads the menu's value */
+        reset_game();
+        led_effect.active = false;
+        demo_finished = false;
+    } else if (!want && demo_running) {
+        reset_game();
+        fb_clear_draw_offset(&fb);
+    }
+    demo_running = want;
+}
+
 /* Back to the start menu from play, pause or game over: drop everything the
  * START path set up (animations, shake, LED effect, highlight) so the menu
  * looks as on first launch.  The music bed follows current_screen on its own. */
 static void return_to_menu(void) {
+    demo_running = false;
     reset_game();
     led_effect.active = false;
     hw_leds_off();
@@ -474,7 +538,7 @@ static void compute_highlight(int col, int row) {
         game.highlight_active = true;
         game.highlight_color = color;
         /* Audio: selection click */
-        audio_beep(&audio);
+        sfx_beep();
     } else {
         /* Single block — can't remove. Flash it briefly. */
         memset(game.highlight_map, 0, sizeof(game.highlight_map));
@@ -518,7 +582,7 @@ static void remove_highlighted(void) {
      * this — a voice stopped early is not `lost`, `drop` or `clip`. */
     int freq = 600 + n * 80;
     if (freq > 2400) freq = 2400;
-    audio_tone(&audio, freq, 60);
+    sfx_tone(freq, 60);
 
     /* Screen shake for 3+ blocks */
     if (n >= 3) {
@@ -748,6 +812,16 @@ static void start_slide_anim(void) {
 
 /* Called after all animations complete */
 static void post_move_check(void) {
+    /* The demo is not a game: no bonus, no fanfare, no game-over state and no
+     * score.  The board simply stays and the widget moves on to SCORES. */
+    if (demo_on()) {
+        if (game.blocks_remaining == 0 || check_game_over()) {
+            demo_finished = true;
+            start_menu_demo_over(&menu);
+        }
+        return;
+    }
+
     /* Check for perfect clear */
     if (game.blocks_remaining == 0) {
         game.score += PERFECT_CLEAR_BONUS;
@@ -879,6 +953,7 @@ static void update_shake(void) {
 /* ========================================================================== */
 
 static void start_led_effect(int type) {
+    if (demo_on()) return;   /* the demo is LED-dark: no effect, so update_led_effects() never drives them */
     led_effect.active = true;
     led_effect.type = type;
     led_effect.start_time = get_time_ms();
@@ -1004,9 +1079,9 @@ static void draw_block(int col, int row, bool highlighted, float alpha) {
 }
 
 static void draw_hud(void) {
-    /* Draw menu and exit buttons */
-    draw_menu_button(&fb, &menu_button);
-    draw_exit_button(&fb, &exit_button);
+    /* Draw menu and exit buttons (none in the demo) */
+    if (!demo_on()) draw_menu_button(&fb, &menu_button);
+    if (!demo_on()) draw_exit_button(&fb, &exit_button);
 
     /* Score — centered at top */
     char score_text[48];
@@ -1248,7 +1323,7 @@ static void draw_playing_field(void) {
     }
 
     /* Mouse hover highlight — subtle indicator of cell under cursor */
-    if (input.mouse_connected && game.anim_state == ANIM_NONE) {
+    if (input.mouse_connected && game.anim_state == ANIM_NONE && !demo_on()) {
         draw_mouse_hover(input.mouse_x, input.mouse_y);
     }
 }
@@ -1307,13 +1382,18 @@ static void draw_mouse_hover(int mx, int my) {
 static void draw_game(void) {
     fb_clear(&fb, COLOR_BLACK);
 
-    /* Start menu, or the attract cycle's SCORES page (the widget clears too) */
+    /* Start menu, or the attract cycle's SCORES page (the widget clears too);
+     * its DEMO page falls through to the real field below */
     if (current_screen == SCREEN_MENU) {
-        if (start_menu_attract(&menu) == SM_ATTRACT_MENU)
+        SmAttract ph = start_menu_attract(&menu);
+        if (ph == SM_ATTRACT_MENU) {
             start_menu_draw(&menu, &fb);
-        else
+            return;
+        }
+        if (ph == SM_ATTRACT_SCORES) {
             start_menu_draw_scores(&menu, &fb, &hs_table);
-        return;
+            return;
+        }
     }
 
     /* Update screen shake before drawing */
@@ -1321,6 +1401,15 @@ static void draw_game(void) {
 
     /* Draw the playing field as background for all playing states */
     draw_playing_field();
+
+    if (demo_on()) {
+        fb_clear_draw_offset(&fb);
+        /* In the hidden MENU button's place: the centre top is the score's */
+        text_draw_centered(&fb, menu_button.x + menu_button.width / 2,
+                           menu_button.y + menu_button.height / 2,
+                           "DEMO", COLOR_CYAN, 2);
+        return;
+    }
 
     if (current_screen == SCREEN_PAUSED) {
         fb_clear_draw_offset(&fb);
@@ -1436,10 +1525,13 @@ static void handle_input(void) {
         } else if (r == menu_start_idx) {
             difficulty = start_menu_value(&menu, menu_diff_idx);
             if (difficulty < 0 || difficulty >= DIFF_COUNT) difficulty = DIFF_NORMAL;
+            demo_running = false;   /* before reset_game()/start_led_effect(): a real game */
             reset_game();
             current_screen = SCREEN_PLAYING;
             /* Non-blocking: effect 1 is this game's own 100 ms green flash. */
             start_led_effect(1);
+        } else {
+            demo_sync();
         }
         return;
     }
@@ -1550,8 +1642,11 @@ static void handle_input(void) {
 /* ========================================================================== */
 
 static void update_game(void) {
-    if (current_screen != SCREEN_PLAYING)
+    if (current_screen != SCREEN_PLAYING && !demo_on())
         return;
+
+    if (demo_on())
+        demo_step();
 
     /* Update animations */
     update_animations();
@@ -1667,6 +1762,7 @@ int main(int argc, char *argv[]) {
 
         /* Active animations/effects need continuous rendering */
         if (game.anim_state != ANIM_NONE ||
+            demo_on()                    ||   /* the demo is gameplay: redraw every frame */
             game.shake_active            ||
             game.flash_active            ||
             game.perfect_clear) {

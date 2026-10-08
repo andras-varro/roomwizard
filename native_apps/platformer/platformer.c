@@ -218,6 +218,16 @@ static StartMenu menu;
 static int menu_start_idx, menu_diff_idx, menu_exit_idx;
 static int difficulty = DIFF_NORMAL;
 
+/* The attract cycle's DEMO: an AI runs the level 1 field on SCREEN_MENU while
+ * the widget shows its DEMO page.  Silent, LED-dark, no score kept, never a
+ * game over; it ends (start_menu_demo_over) on the AI's first death, the goal,
+ * or when it is stuck.  Always a fresh NORMAL run (demo_sync). */
+static bool demo_running = false;
+static bool demo_on(void) { return demo_running; }
+#define DEMO_STUCK_TICKS 40      /* ticks without forward progress before the demo gives up */
+static float demo_last_x;
+static int   demo_stuck;
+
 static uint8_t level_tiles[MAX_LEVEL_HEIGHT][MAX_LEVEL_WIDTH];
 static bool    coins_collected[MAX_LEVEL_HEIGHT][MAX_LEVEL_WIDTH];
 static int     level_width, level_height;
@@ -279,6 +289,7 @@ static void signal_handler(int sig) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 static void start_led_effect(int type) {
+    if (demo_on()) return;   /* the demo is LED-dark */
     led_effect.active = true;
     led_effect.type = type;
     led_effect.start_time = get_time_ms();
@@ -324,17 +335,18 @@ static void update_led_effects(void) {
  * Audio Helpers
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-static void play_jump_sound(void)           { audio_jump(&audio); }
-static void play_coin_sound(void)           { audio_blip(&audio); }
-static void play_stomp_sound(void)          { audio_beep(&audio); }
-static void play_death_sound(void)          { audio_fail(&audio); }
+/* Every effect is silent in the demo (demo_on()). */
+static void play_jump_sound(void)           { if (!demo_on()) audio_jump(&audio); }
+static void play_coin_sound(void)           { if (!demo_on()) audio_blip(&audio); }
+static void play_stomp_sound(void)          { if (!demo_on()) audio_beep(&audio); }
+static void play_death_sound(void)          { if (!demo_on()) audio_fail(&audio); }
 /* ⚠️ A DIFFERENT sound from losing one life (operator, 2026-08-22): the two were
  * both audio_fail(), so nothing told a player whether they had another go coming.
  * It fires at the END of the death animation, where the run is actually decided —
  * not in player_die(), which cannot yet know. */
-static void play_game_over_sound(void)      { audio_gameover(&audio); }
-static void play_extra_life_sound(void)     { audio_success(&audio); }
-static void play_level_complete_sound(void) { audio_success(&audio); }
+static void play_game_over_sound(void)      { if (!demo_on()) audio_gameover(&audio); }
+static void play_extra_life_sound(void)     { if (!demo_on()) audio_success(&audio); }
+static void play_level_complete_sound(void) { if (!demo_on()) audio_success(&audio); }
 
 /* ── The music bed ───────────────────────────────────────────────────────────
  * The first game to run one, and since 2026-08-22 the state machine behind it
@@ -838,7 +850,7 @@ static void init_game(void) {
     hs_load(&hs_table);
     reset_game();
 
-    /* No DEMO yet: the attract cycle is MENU -> SCORES, drawn by draw_all(). */
+    /* Attract cycle: MENU -> DEMO -> SCORES, drawn by draw_all(). */
     start_menu_init(&menu, "OFFICE RUNNER",
                     "D-PAD: MOVE   A: JUMP   B: RUN\n"
                     "STOMP ENEMIES FROM ABOVE\n"
@@ -847,7 +859,7 @@ static void init_game(void) {
     menu_diff_idx  = start_menu_add_choice(&menu, "DIFFICULTY", DIFF_NAMES, DIFF_COUNT, DIFF_NORMAL);
     menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
     start_menu_select(&menu, menu_start_idx, get_time_ms());
-    start_menu_set_attract(&menu, false);
+    start_menu_set_attract(&menu, true);
 
     /* No virtual D-pad TouchRegions and no on-screen controller overlay.
      * gamepad.c used to never clear a region's .held, so every zone latched on
@@ -985,6 +997,10 @@ static void check_tile_interactions(void) {
                 }
             }
             if (t == TILE_GOAL) {
+                if (demo_on()) {   /* the demo reached the flag: done, no overlay */
+                    start_menu_demo_over(&menu);
+                    return;
+                }
                 current_screen = SCREEN_LEVEL_COMPLETE;
                 level_complete_timer = get_time_ms();
                 score += LEVEL_BONUS;
@@ -1006,6 +1022,13 @@ static void check_tile_interactions(void) {
 static void player_die(void) {
     if (player.state == PSTATE_DYING) return;
     if (player.invincible_timer > 0) return;
+
+    /* The demo's first death ends it: no dying state, no life lost, no game
+     * over.  demo_over moves the widget to SCORES at its next update. */
+    if (demo_on()) {
+        start_menu_demo_over(&menu);
+        return;
+    }
 
     player.state = PSTATE_DYING;
     player.death_timer = DEATH_ANIM_FRAMES;
@@ -1153,13 +1176,18 @@ static void update_player(void) {
     float target_speed = 0;
     bool moving = false;
 
-    if (input.buttons[BTN_ID_LEFT].held) {
-        bool run = input.buttons[BTN_ID_RUN].held;
+    /* The demo's AI holds RIGHT and RUN; real input is ignored while it runs. */
+    bool in_left  = !demo_on() && input.buttons[BTN_ID_LEFT].held;
+    bool in_right = demo_on() || input.buttons[BTN_ID_RIGHT].held;
+    bool in_run   = demo_on() || input.buttons[BTN_ID_RUN].held;
+
+    if (in_left) {
+        bool run = in_run;
         target_speed = -(run ? RUN_SPEED : WALK_SPEED);
         player.facing_right = false;
         moving = true;
-    } else if (input.buttons[BTN_ID_RIGHT].held) {
-        bool run = input.buttons[BTN_ID_RUN].held;
+    } else if (in_right) {
+        bool run = in_run;
         target_speed = (run ? RUN_SPEED : WALK_SPEED);
         player.facing_right = true;
         moving = true;
@@ -1296,9 +1324,60 @@ static int world_offset_y(void) {
  * Game Update
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* The demo's brain, once per tick before update_player(): the runner holds
+ * RIGHT + RUN (update_player) and this decides the jump.  A running jump
+ * (JUMP_VELOCITY -8.5, GRAVITY 0.55) stays up ~31 ticks, about 155 px at
+ * RUN_SPEED and 65 px high, so a wall of up to four tiles, a gap of up to nine
+ * and an enemy are all cleared by jumping within ~50 px of them.  Jumps only
+ * from the ground; the button is never released early (full height). */
+static void demo_ai_think(void) {
+    if (player.state == PSTATE_DYING) return;
+
+    /* Stuck against something it cannot clear: give up and let the cycle go on */
+    if (player.x > demo_last_x + 0.25f) {
+        demo_last_x = player.x;
+        demo_stuck = 0;
+    } else if (++demo_stuck >= DEMO_STUCK_TICKS) {
+        start_menu_demo_over(&menu);
+        return;
+    }
+    if (!player.on_ground) return;
+
+    int fx = (int)(player.x + (float)player.width);              /* front edge, px */
+    int fy = (int)(player.y + (float)player.height - 1.0f) / TILE_SIZE;   /* feet row */
+    bool jump = false;
+
+    /* Wall or hazard ahead (at body or foot level), or a hazard on the floor */
+    for (int d = 4; d <= 52 && !jump; d += 16) {
+        int tx = (fx + d) / TILE_SIZE;
+        if (tile_is_solid(tx, fy) || tile_is_solid(tx, fy - 1) ||
+            tile_at(tx, fy) == TILE_HAZARD || tile_at(tx, fy + 1) == TILE_HAZARD)
+            jump = true;
+    }
+
+    /* Gap: no floor just ahead of the front foot */
+    if (!jump) {
+        int tx = (fx + 10) / TILE_SIZE;
+        if (fy + 1 < level_height && !tile_is_solid(tx, fy + 1) && !tile_is_platform(tx, fy + 1))
+            jump = true;
+    }
+
+    /* A live enemy on our level within 60 px ahead */
+    for (int i = 0; i < enemy_count && !jump; i++) {
+        const Enemy *e = &enemies[i];
+        if (!e->alive) continue;
+        if (e->y + (float)e->height <= player.y || e->y >= player.y + (float)player.height) continue;
+        float ahead = e->x - (float)fx;
+        if (ahead > -4.0f && ahead < 60.0f) jump = true;
+    }
+
+    if (jump) jump_press_pending = true;
+}
+
 /* One fixed TICK_S step of everything that advances the game. */
 static void game_tick(void) {
     current_frame++;
+    if (demo_on()) demo_ai_think();
     update_player();
     update_enemies();
     update_camera();
@@ -1309,7 +1388,8 @@ static void game_tick(void) {
  * the cap drops the remainder rather than carrying a debt into later frames.
  * Drawing stays once per frame, showing the state after the last tick. */
 static void update_game(void) {
-    if (current_screen != SCREEN_PLAYING) {
+    /* The demo runs on SCREEN_MENU, on the same clock and tick loop as play */
+    if (current_screen != SCREEN_PLAYING && !demo_on()) {
         play_clock_live = false;
         return;
     }
@@ -1333,8 +1413,10 @@ static void update_game(void) {
     play_last_ms = now;
     tick_acc += dt;
 
-    if (input.buttons[BTN_ID_JUMP].pressed)  jump_press_pending   = true;
-    if (input.buttons[BTN_ID_JUMP].released) jump_release_pending = true;
+    if (!demo_on()) {   /* the demo's AI owns the jump */
+        if (input.buttons[BTN_ID_JUMP].pressed)  jump_press_pending   = true;
+        if (input.buttons[BTN_ID_JUMP].released) jump_release_pending = true;
+    }
 
     int steps = 0;
     while (tick_acc >= TICK_S && steps < MAX_TICKS_FRAME) {
@@ -1345,7 +1427,7 @@ static void update_game(void) {
         jump_press_pending   = false;
         jump_release_pending = false;
         /* Goal reached or game over: the rest of the frame's time is not play. */
-        if (current_screen != SCREEN_PLAYING) break;
+        if (current_screen != SCREEN_PLAYING && !demo_on()) break;
     }
     if (steps >= MAX_TICKS_FRAME) tick_acc = 0.0f;
 
@@ -1728,11 +1810,37 @@ static void draw_hud(void) {
  * Main Draw Function
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* The demo: SCREEN_MENU while the attract cycle is on its DEMO page.  Entering
+ * it starts a fresh NORMAL run (training off, level 1) and re-baselines the play
+ * clock; leaving it drops the clock again.  START resets the game once more at
+ * the selected difficulty, so nothing of the demo reaches real play. */
+static void demo_sync(void) {
+    bool want = (current_screen == SCREEN_MENU &&
+                 start_menu_attract(&menu) == SM_ATTRACT_DEMO);
+    if (want != demo_running) {
+        play_clock_live = false;
+        jump_press_pending = false;
+        jump_release_pending = false;
+        if (want) {
+            demo_running = true;      /* before reset_game(): nothing of it may sound or light */
+            training_mode = false;
+            reset_game();
+            demo_last_x = player.x;
+            demo_stuck = 0;
+        } else {
+            demo_running = false;
+            hw_leds_off();
+            led_effect.active = false;
+        }
+    }
+}
+
 /* Back to the start menu from anywhere in play: drop the play-time state the
  * START path set up (LED effect, dialog, level, score, lives) so the menu looks
  * as on first launch.  Changing current_screen releases the music bed on the
  * next bed_service(); the play clock re-baselines on its own. */
 static void return_to_menu(void) {
+    demo_running = false;
     hw_leds_off();
     modal_dialog_hide(&pause_dialog);
     reset_game();
@@ -1749,11 +1857,16 @@ static void draw_all(void) {
         bool no_controller = !input.gamepad_connected && !input.keyboard_connected;
         start_menu_set_warning(&menu, no_controller
             ? "NO CONTROLLER DETECTED\nCONNECT A KEYBOARD OR GAMEPAD" : NULL);
-        if (start_menu_attract(&menu) == SM_ATTRACT_MENU)
+        SmAttract ph = start_menu_attract(&menu);
+        if (ph == SM_ATTRACT_MENU) {
             start_menu_draw(&menu, &fb);
-        else
+            return;
+        }
+        if (ph == SM_ATTRACT_SCORES) {
             start_menu_draw_scores(&menu, &fb, &hs_table);
-        return;
+            return;
+        }
+        /* DEMO: the level below, drawn with the real draw code */
     }
 
     /* Sky background */
@@ -1764,6 +1877,10 @@ static void draw_all(void) {
     draw_tiles();
     draw_enemies_all();
     draw_player_sprite();
+    if (demo_on()) {   /* no HUD, no buttons: a label instead */
+        text_draw_centered(&fb, (int)fb.width / 2, SCREEN_VISIBLE_TOP + 20, "DEMO", COLOR_CYAN, 2);
+        return;
+    }
     draw_hud();
 
     /* No touch-controls overlay — see init_game(). */
@@ -1846,8 +1963,15 @@ static void handle_input(void) {
             difficulty = start_menu_value(&menu, menu_diff_idx);
             if (difficulty < 0 || difficulty >= DIFF_COUNT) difficulty = DIFF_NORMAL;
             training_mode = (difficulty == DIFF_EASY);
+            demo_running = false;
+            play_clock_live = false;
+            jump_press_pending = false;
+            jump_release_pending = false;
+            led_effect.active = false;
             reset_game();
             current_screen = SCREEN_PLAYING;
+        } else {
+            demo_sync();
         }
         return;
     }
@@ -2002,7 +2126,7 @@ int main(int argc, char *argv[]) {
 
         /* Dirty-flag: active gameplay always redraws; static screens only on changes */
         if (current_screen == SCREEN_PLAYING ||
-            current_screen == SCREEN_LEVEL_COMPLETE) {
+            current_screen == SCREEN_LEVEL_COMPLETE || demo_on()) {
             needs_redraw = true;  /* scrolling, enemies, physics, timed overlay */
         } else if (current_screen != prev_screen) {
             needs_redraw = true;  /* screen transition */
