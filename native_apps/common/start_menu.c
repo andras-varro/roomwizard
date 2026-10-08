@@ -502,9 +502,13 @@ int start_menu_update(StartMenu *m, const InputState *in, int tx, int ty, bool t
     return r;
 }
 
-bool start_menu_needs_redraw(const StartMenu *m)
+/* Off the MENU page the game draws, so start_menu_draw() never runs to clear
+ * the flag: it is consumed here instead, and only the page edge reports. */
+bool start_menu_needs_redraw(StartMenu *m)
 {
-    return m->dirty;
+    bool d = m->dirty;
+    if (m->attract != SM_ATTRACT_MENU) m->dirty = false;
+    return d;
 }
 
 int start_menu_value(const StartMenu *m, int idx)
@@ -576,4 +580,20 @@ void start_menu_draw(StartMenu *m, Framebuffer *fb)
     if (m->warning[0])
         sm_draw_block(fb, cx, m->warn_y, m->warning, BTN_COLOR_WARNING, WELCOME_INST_SCALE);
     m->dirty = false;
+}
+
+/* The attract cycle's SCORES page: the menu's own title where it sits on the
+ * MENU page, then the table (hs_draw() brings its own heading), narrower than
+ * the screen so the rank and the score stay near the eye. */
+void start_menu_draw_scores(StartMenu *m, Framebuffer *fb, const HighScoreTable *t)
+{
+    if (!m->laid_out) sm_layout(m);
+    fb_clear(fb, COLOR_BLACK);
+    int cx = SCREEN_VISIBLE_LEFT + SCREEN_VISIBLE_WIDTH / 2;
+    text_draw_centered(fb, cx, m->title_y + text_measure_height(SM_TITLE_SCALE) / 2,
+                       m->title, COLOR_CYAN, SM_TITLE_SCALE);
+    int w = SCREEN_VISIBLE_WIDTH - 40;
+    if (w > 480) w = 480;
+    int y = m->title_y + text_measure_height(SM_TITLE_SCALE) + 30;
+    hs_draw(fb, t, LAYOUT_CENTER_X(w), y, w);
 }

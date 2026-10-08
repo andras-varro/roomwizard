@@ -31,6 +31,7 @@
 #include "framebuffer.h"
 #include "gamepad.h"
 #include "audio.h"
+#include "highscore.h"
 #include "ui_focus.h"   /* UiRect only — the column needs no spatial search */
 
 #define SM_MAX_ENTRIES   6
@@ -139,8 +140,9 @@ int  start_menu_step(StartMenu *m, const InputState *in, int tx, int ty, bool to
 int  start_menu_update(StartMenu *m, const InputState *in, int tx, int ty, bool touching,
                        const GamepadManager *gm, Audio *audio, uint32_t now);
 
-bool start_menu_needs_redraw(const StartMenu *m);
+bool start_menu_needs_redraw(StartMenu *m);   /* off MENU: true once per page edge */
 void start_menu_draw(StartMenu *m, Framebuffer *fb);   /* whole screen; caller swaps */
+void start_menu_draw_scores(StartMenu *m, Framebuffer *fb, const HighScoreTable *t);  /* the SCORES page */
 int  start_menu_value(const StartMenu *m, int idx);    /* CHOICE value index, -1 otherwise */
 int  start_menu_player_count(const StartMenu *m);      /* 1 or 2; 1 with no players entry */
 void start_menu_set_attract(StartMenu *m, bool has_demo);  /* default: no DEMO phase */

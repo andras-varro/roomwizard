@@ -21,13 +21,23 @@
 #include "../common/audio.h"
 #include "../common/audio_bed.h"
 #include "../common/gamepad.h"
+#include "../common/start_menu.h"
 
 #define GRID_SIZE 20
 #define MAX_SNAKE_LENGTH 400
 #define INITIAL_SPEED 150000  // microseconds per frame
 
+/* Difficulty scales the step interval, never game.speed itself: game.speed
+ * stays the HARD interval (the game as it always played, 150 ms falling to
+ * 50) and the sleep is game.speed * SPEED_Q8[d] >> 8.  EASY is half the
+ * speed (interval x2), NORMAL three quarters (interval x4/3, 341/256 =
+ * 1.332).  Multiply-and-shift because the Cortex-A8 has no divide. */
+enum { DIFF_EASY, DIFF_NORMAL, DIFF_HARD, DIFF_COUNT };
+static const char *const DIFF_NAMES[DIFF_COUNT] = { "EASY", "NORMAL", "HARD" };
+static const int SPEED_Q8[DIFF_COUNT] = { 512, 341, 256 };
+
 typedef enum {
-    SCREEN_WELCOME,
+    SCREEN_MENU,
     SCREEN_PLAYING,
     SCREEN_PAUSED,
     SCREEN_GAME_OVER
@@ -86,15 +96,19 @@ int cell_size;
 int grid_offset_x;
 int grid_offset_y;
 bool running = true;
-GameScreen current_screen = SCREEN_WELCOME;
+GameScreen current_screen = SCREEN_MENU;
 HighScoreTable hs_table;
 static GameOverScreen gos;
 Audio audio;
 
+// Start menu (../common/start_menu.h): START, DIFFICULTY, EXIT
+StartMenu menu;
+int menu_start_idx, menu_diff_idx, menu_exit_idx;
+int difficulty = DIFF_NORMAL;
+
 // UI Buttons
 Button menu_button;
 Button exit_button;
-Button start_button;
 ModalDialog pause_dialog;
 
 // Function prototypes
@@ -191,12 +205,15 @@ void init_game() {
     button_init(&exit_button, LAYOUT_EXIT_BTN_X, LAYOUT_EXIT_BTN_Y,
                 BTN_EXIT_WIDTH, BTN_EXIT_HEIGHT, "",
                 BTN_EXIT_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
-    /* screen_draw_welcome() positions start_button below the measured
-     * instruction block; these coordinates only cover a hit-test that
-     * arrives before the first draw, so they just have to be touchable. */
-    button_init(&start_button, LAYOUT_CENTER_X(BTN_LARGE_WIDTH),
-                LAYOUT_BOTTOM_BTN_Y, BTN_LARGE_WIDTH, BTN_LARGE_HEIGHT, "TAP TO START",
-                BTN_START_COLOR, COLOR_WHITE, BTN_HIGHLIGHT_COLOR);
+    /* No DEMO yet: the attract cycle is MENU -> SCORES, drawn by draw_game(). */
+    start_menu_init(&menu, "SNAKE",
+                    "D-PAD/ARROWS: MOVE\n"
+                    "EAT FOOD TO GROW", get_time_ms());
+    menu_start_idx = start_menu_add_action(&menu, "START");
+    menu_diff_idx  = start_menu_add_choice(&menu, "DIFFICULTY", DIFF_NAMES, DIFF_COUNT, DIFF_NORMAL);
+    menu_exit_idx  = start_menu_add_action(&menu, "EXIT");
+    start_menu_select(&menu, menu_start_idx, get_time_ms());
+    start_menu_set_attract(&menu, false);
     modal_dialog_init(&pause_dialog, "PAUSED", NULL, 2);
     modal_dialog_set_button(&pause_dialog, 0, "RESUME", BTN_COLOR_PRIMARY, COLOR_WHITE);
     modal_dialog_set_button(&pause_dialog, 1, "EXIT", BTN_COLOR_DANGER, COLOR_WHITE);
@@ -361,36 +378,39 @@ void handle_input() {
     /* Hot-plug check: rescans only when /dev/input changed or a device went away */
     gamepad_tick(&gamepad, current_time);
 
+    /* Start menu — ahead of the BACK rule below, so that BACK during the
+     * SCORES page is swallowed like any other input there (the widget's
+     * rule), and on the menu itself arrives as SM_EXIT.  The widget keeps
+     * its own edges, so a button or finger still down from the screen
+     * before acts only after a fresh press. */
+    if (current_screen == SCREEN_MENU) {
+        int r = start_menu_update(&menu, &input, state.x, state.y,
+                                  state.pressed || state.held,
+                                  &gamepad, &audio, current_time);
+        if (r == SM_EXIT || r == menu_exit_idx) {
+            fb_fade_out(&fb);
+            running = false;
+        } else if (r == menu_start_idx) {
+            difficulty = start_menu_value(&menu, menu_diff_idx);
+            if (difficulty < 0 || difficulty >= DIFF_COUNT) difficulty = DIFF_NORMAL;
+            reset_game();
+            current_screen = SCREEN_PLAYING;
+            /* Non-blocking: the hw_set_led() + usleep(100000) + hw_leds_off()
+             * that was here froze the panel for 100 ms from inside
+             * handle_input() — no touch poll, no redraw, and no audio_pump()
+             * either, which is a starved stream as well as a dropped frame.
+             * Effect 1 is this file's own 100 ms green flash, serviced by
+             * update_led_effects() once per frame, so it is the same flash
+             * without the freeze. */
+            start_led_effect(1);
+        }
+        return;
+    }
+
     // BTN_BACK always exits to launcher
     if (input.buttons[BTN_ID_BACK].pressed) {
         fb_fade_out(&fb);
         running = false;
-        return;
-    }
-    
-    // Handle welcome screen
-    if (current_screen == SCREEN_WELCOME) {
-        if (state.pressed) {
-            bool touched = button_is_touched(&start_button, state.x, state.y);
-            if (button_check_press(&start_button, touched, current_time)) {
-                current_screen = SCREEN_PLAYING;
-                /* Non-blocking: the hw_set_led() + usleep(100000) + hw_leds_off()
-                 * that was here froze the panel for 100 ms from inside
-                 * handle_input() — no touch poll, no redraw, and (since F1
-                 * Phase 5) no audio_pump() either, which is a starved stream as
-                 * well as a dropped frame.  Effect 1 is this file's own 100 ms
-                 * green flash, serviced by update_led_effects() once per frame,
-                 * so it is the same flash without the freeze. */
-                start_led_effect(1);
-            }
-        }
-        // Gamepad/keyboard: start game with Jump, Action, or Pause
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed ||
-            input.buttons[BTN_ID_PAUSE].pressed) {
-            current_screen = SCREEN_PLAYING;
-            start_led_effect(1);
-        }
         return;
     }
     
@@ -543,17 +563,18 @@ void draw_playing_field() {
 }
 
 void draw_game() {
-    // Clear screen
-    fb_clear(&fb, COLOR_BLACK);
-    
-    // Handle welcome screen
-    if (current_screen == SCREEN_WELCOME) {
-        draw_welcome_screen(&fb, "SNAKE",
-            "D-PAD/ARROWS: MOVE\n"
-            "EAT FOOD TO GROW\n"
-            "PRESS START OR TAP TO BEGIN", &start_button);
+    // Start menu, or the attract cycle's SCORES page (the widget clears too)
+    if (current_screen == SCREEN_MENU) {
+        if (start_menu_attract(&menu) == SM_ATTRACT_MENU) {
+            start_menu_draw(&menu, &fb);
+            return;
+        }
+        start_menu_draw_scores(&menu, &fb, &hs_table);
         return;
     }
+
+    // Clear screen
+    fb_clear(&fb, COLOR_BLACK);
     
     // Draw the playing field as background (used by PLAYING, PAUSED, GAME_OVER)
     draw_playing_field();
@@ -690,6 +711,11 @@ int main(int argc, char *argv[]) {
         if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos))
             needs_redraw = true;
 
+        /* The start menu's bracket blink and attract phase changes arrive
+         * with no input; without this the blink freezes. */
+        if (current_screen == SCREEN_MENU && start_menu_needs_redraw(&menu))
+            needs_redraw = true;
+
         /* One bed transition, ABOVE the redraw block and before the pump.
          * ⚠️ The position is load-bearing: SCREEN_GAME_OVER's redraw runs
          * gameover_update()'s BLOCKING name entry, so a bed serviced after the
@@ -714,7 +740,8 @@ int main(int argc, char *argv[]) {
          *
          * ⚠️ Snake is the one game whose play sleep IS its step interval — the
          * snake advances once per iteration, so game.speed (INITIAL_SPEED
-         * 150 ms falling to 50) cannot be shortened to service the stream
+         * 150 ms falling to 50, scaled up by the difficulty's SPEED_Q8 to as
+         * much as 300 ms on EASY) cannot be shortened to service the stream
          * without making the snake faster.  It starves BEFORE it speeds up
          * rather than after: 150 ms is ~3x the ~55 ms service ceiling, so a
          * single usleep() here would run the device dry twice per step at
@@ -734,7 +761,7 @@ int main(int argc, char *argv[]) {
          * granularity, not the per-iteration wakeup jitter this halving covers, so
          * the two margins are not obviously redundant. */
         long wait_us = (current_screen == SCREEN_PLAYING)
-                     ? (long)game.speed
+                     ? (((long)game.speed * SPEED_Q8[difficulty]) >> 8)
                      : ((needs_redraw || audio_pump_active(&audio))
                         ? FRAME_DELAY_ACTIVE_US : FRAME_DELAY_IDLE_US);
         long slice_us = audio_cont_service_interval_us(&audio) / 2;

@@ -398,6 +398,11 @@ static void group_attract(void)
     quiet(&n, 1, T0, &ping);
     idle_run(&n, 0, 15100);
     check(start_menu_attract(&n) == SM_ATTRACT_SCORES, "no demo: MENU goes straight to SCORES");
+    /* The game draws SCORES, so start_menu_draw() never clears the flag. */
+    check(start_menu_needs_redraw(&n), "SCORES: one redraw on the page edge");
+    check(!start_menu_needs_redraw(&n), "... and none after it, with no draw between");
+    idle_run(&n, 15100, 15200);
+    check(!start_menu_needs_redraw(&n), "... nor while SCORES idles");
     check(touch(&n, cx(&n, 0), cy(&n, 0), cx(&n, 0), cy(&n, 0), T0 + 15200) == SM_NONE &&
           start_menu_attract(&n) == SM_ATTRACT_MENU, "a tap on START in SCORES only returns to MENU");
     idle_run(&n, 15300, 15200 + 14900);
