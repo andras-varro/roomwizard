@@ -348,15 +348,18 @@ Entries are per game: pong has PLAYERS 1P/2P and a DEMO (both paddles on the AI,
 attract MENU -> SCORES only. DIFFICULTY exists where the game had a notion: snake (EASY, NORMAL, HARD = the old speed),
 pong (its AI level), frogger (lane speed x0.75 / x1 / x1.25), platformer (EASY = the former TRAINING toggle), brick_breaker
 (EASY = the former TEST mode; `--test` preselects it); samegame's EASY (4 colours instead of 5) is an invented knob.
-**Remaining:** (1) demos for the other six, best-effort AI per game: brick paddle follows the ball; snake greedy to food;
+The end of a game is the arcade flow (`gameover_phase_next`, `tests/gameover_flow_test.c`): GAME OVER + score 3 s, name entry
+if the score qualifies, the 15 s scores page, then the menu. Operator panel-checked the menu 2026-10-08 (blink, ping, 60 s
+silence, 15 s cycle, pad / keyboard / touch navigation, held A ignored, pong 2P, silent pong demo); samegame's EASY and
+frogger's x0.75 / x1.25 are kept.
+**Remaining:** (1) panel check of the new ending in all seven games, including pad / keyboard name entry and Esc on the
+menu. (2) Demos for the other six, best-effort AI per game: brick paddle follows the ball; snake greedy to food;
 samegame largest group; tetris simple placement score; frogger hop when the lane is clear; platformer run right and jump;
 a demo ends early via `start_menu_demo_over`, may play its music bed only while `start_menu_sound_allowed`, and the
-backlight-blanking idle setting wins [inferred design, not built]. (2) Operator panel checks, none done: LED blink, ping 3 on /
-3 off, silence after 60 s, the 15 s MENU/DEMO/SCORES cycle, pad / keyboard / touch navigation, a held A on entry ignored,
-pong 2P (P1 left or bottom, P2 right or top). (3) Operator decisions: samegame's EASY knob, frogger's 0.75 / 1.25, and whether
-EXIT on the game-over and pause screens should return to the menu rather than the launcher. (4) Pong's DEMO still shows the
-"D-PAD/STICK: MOVE ESC: PAUSE" hint line; `platformer.c` (:12, :244, :1321) and `brick_breaker.c` (:266) still say
-"welcome screen" in comments. **Done when** every game has a demo or the operator rules it out, and the panel checks pass.
+backlight-blanking idle setting wins [inferred design, not built]. (3) Defaults chosen for operator overrule: pause EXIT
+returns to the menu, not the launcher; the attract SCORES page still shows when the table is empty; physical-keyboard
+letter typing in name entry is unsupported (abstract buttons only). **Done when** every game has a demo or the operator
+rules it out, and the panel checks pass.
 
 ### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
 

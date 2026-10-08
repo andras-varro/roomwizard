@@ -24,7 +24,7 @@ deploy; that is your job. Every build then runs `./check-arm-safe.sh` (root `../
 it also takes one binary: `./check-arm-safe.sh <path>`.
 
 Every app links `$COMMON_OBJ` = `framebuffer.o touch_input.o hardware.o common.o highscore.o
-keyboard.o audio.o audio_gen.o audio_out.o audio_wav.o config.o`; games add `gamepad.o input_scan.o input_slots.o` (`GAMEPAD_OBJ`); some add `ui_layout.o ppm.o
+keyboard.o audio.o audio_gen.o audio_out.o audio_wav.o config.o`; games add `gamepad.o input_scan.o input_slots.o` (`GAMEPAD_OBJ`; **every binary naming `COMMON_OBJ` must also name `GAMEPAD_OBJ`**, because `common.o` / `keyboard.o` call into it); some add `ui_layout.o ppm.o
 logger.o`; `control_panel` also links `GAMEPAD_OBJ` and `ui_focus.o`; the two tools that measure the touch mapping (`control_panel`, `touch_raw`) add
 `$CALIB_OBJ` = `touch_calib.o`. Add new objects to `build-and-deploy.sh`. `audio_gen.o` is not
 optional — `audio.c` calls into it for every frame count, byte count, envelope and write.
@@ -58,16 +58,18 @@ IP and the mode *before* compiling anything, and `cd`s to its own directory, so 
 | `keyboard.c` | on-screen keyboard (ALPHA / ALPHANUM / FULL / NUMERIC) | — |
 | `highscore.c`, `ppm.c`, `logger.c` | scores, icons, logging | — |
 
-`keyboard_enter(fb, touch, "Title", buf, max_len, KB_LAYOUT_ALPHA)` — `buf` must hold `max_len + 1` bytes.
+`keyboard_enter(fb, touch, gm, "Title", buf, max_len, KB_LAYOUT_ALPHA)` — `buf` must hold `max_len + 1` bytes. Pad / keyboard
+drive a focus frame (D-pad or arrows move, JUMP / ACTION press, BACK deletes, PAUSE = OK); touch hides it, the next key shows it.
 
 **`fb_draw_text()` does not interpret `'\n'`.** A newline takes the unprintable-character branch and just
 advances 6·scale px, so a multi-line string renders as one long line. Anything with embedded newlines must
 be split per line by the caller — `sm_draw_block()` in `start_menu.c` does this.
 
 The game draws nothing of its own on the start menu (`common/start_menu.h`): `start_menu_draw()` lays out and draws
-the entries, `start_menu_draw_scores()` the SCORES page, and `start_menu_set_warning()` adds the amber "needs a
-controller and none is connected" block (`'\n'`-split by `sm_draw_block`, the one splitter).
-for "this game needs a controller and none is connected".
+the entries, `start_menu_draw_scores_page(fb, title, table)` the one scores page (attract and game over share it), and
+`start_menu_set_warning()` adds the amber "needs a controller and none is connected" block (`'\n'`-split by `sm_draw_block`,
+the one splitter). PAUSE (Esc / pad Start) exits like BACK; `start_menu_reopen(m, now)` returns to the menu from a game.
+In every game, pause EXIT / BACK / an on-screen exit return to the start menu; only the menu's EXIT leaves for the launcher.
 
 `ModalDialog`: `modal_dialog_init()` → `modal_dialog_set_button()` per button → `modal_dialog_draw()` after
 all other content but before `fb_swap()` → `modal_dialog_update()` returns `MODAL_ACTION_BTN0..BTN3` or
@@ -217,23 +219,20 @@ change is the widget's to report (semantics: the `common.h` comment); without it
 **A static screen repaints only when something changed**: a full 800x480 clear+redraw+swap costs ~15-17 ms CPU, so frame rate alone sets cost (measured: Snake ~10 % at ~7 fps, Frogger 51 % at 30 fps; idle `keyboard_enter`/input testers fell from 45-70 % to <= 2 % once gated, paced at `FRAME_DELAY_ACTIVE_US`).
 
 **A component whose `update()` both draws and reads input has to tell the caller when it still needs
-frames** — the loop's dirty flag sees only what the loop can see. `gameover_update()` is a `CHECK` →
-(`NAME_ENTRY`) → `DISPLAY` machine in which **only `DISPLAY` draws**, so the game-over overlay and the
-high-score keyboard both needed a tap to appear. It exposes `gameover_needs_redraw()`, ORed into the flag
-(`if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos)) needs_redraw = true;`). Three
-corollaries, all from that one bug:
+frames** — the loop's dirty flag sees only what the loop can see. `gameover_update(gos, in)` is the arcade flow
+SHOW (3 s) → NAME (only if `hs_qualifies`) → SCORES (15 s) → `GAMEOVER_ACTION_MENU` (pure step: `gameover_phase_next`), and
+its timed phases need frames without any input. It exposes `gameover_needs_redraw(gos, in)`, ORed into the flag
+(`if (current_screen == SCREEN_GAME_OVER && gameover_needs_redraw(&gos, &in)) needs_redraw = true;`). Corollaries:
 
 - **Do not fix it in the caller.** An unconditional redraw while `SCREEN_GAME_OVER` cures one game, leaves the
   others broken and pins a static overlay to 30 fps.
 - **The transition frame's own press lands in front of the new screen's buttons.** `TouchState.pressed` is a
   rising edge surviving until the next `touch_poll()` and a draw-then-check-input component draws before it
-  reads, so it must ignore input on its first drawn frame (`GameOverScreen.armed`). brick_breaker's pause
-  `RETIRE` overlaps game-over's `RESET SCORES` by 21 px: retiring could wipe the high-score table unseen.
-- **But do not make every state fall through — `NAME_ENTRY` deliberately keeps its `return`.** `CHECK` falls
-  through in the same call, so the no-highscore path costs no extra frame. `NAME_ENTRY` must not:
-  `hs_enter_name()` is a **blocking** keyboard that repaints and swaps the framebuffer itself, so drawing the
-  overlay in the same call composites it over the keyboard's last frame; it leaves `pending_draw` set and takes
-  one clean frame.
+  reads, so it must ignore input on its first drawn frame (`GameOverScreen.armed`); SHOW also ignores input for 1 s.
+- **But do not make every state fall through — NAME deliberately keeps its `return`.**
+  `hs_enter_name(fb, touch, gm, buf, score)` is a **blocking** keyboard that repaints and swaps the framebuffer itself, so
+  drawing the next page in the same call composites it over the keyboard's last frame; it leaves `pending_draw` set and
+  takes one clean frame.
 
 **And the predicate must cover pending *input*, not just a pending draw.** If the component reads its buttons
 inside the draw path, a frame the loop declines to run is also **an input event it never sees** — which
@@ -774,7 +773,7 @@ These rules, each of which is a way to get this wrong:
   `FRAME_DELAY_IDLE_US` (100 ms) mid-sound starves the lead and you hear a gap, which reads as a mixing
   defect rather than a pacing one. Ask the library for the ceiling with
   `audio_cont_service_interval_us()`, and ask the component whether it needs frames, exactly as with
-  `gameover_needs_redraw()`.
+  `gameover_needs_redraw(gos, in)`.
 - **A voice carries a `delay`, and `audio_success()` depends on it**: simultaneous voices are a *chord*, and
   the canned sounds are note tables plus one sequencer. `audio_interrupt()` resets no ring — a tail survives it.
 - ⚠️ **`audio_tone()` chains onto the preceding tone only while that tone is RECENT** —
@@ -824,7 +823,7 @@ These rules, each of which is a way to get this wrong:
   than dropping it, which is worse to diagnose. `ui_frame_service()` (`common/common.h`) is the call it
   owes; `audio_open()` registers `audio_pump()` on it. ⚠️ **A new loop that owns the screen must call it.**
   ⚠️ **The CALLER owes the mirror of that: a per-frame service the sub-loop's own screen change should
-  trigger must run BEFORE the block that opens it.** `gameover_update()`'s name entry sits inside the redraw
+  trigger must run BEFORE the block that opens it.** `gameover_update()`'s NAME phase sits inside the redraw
   block, so a bed serviced after it never sees `SCREEN_GAME_OVER` and plays for the whole keyboard session —
   servicing the pump does not save it. Hence `audio_bed_service()` sits above that block in every game.
 - ⚠️ **A bed is a state machine over `audio_music_active()`, never a flag of the game's own** — and it
