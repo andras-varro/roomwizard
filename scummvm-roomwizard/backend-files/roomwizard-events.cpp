@@ -223,6 +223,17 @@ void RoomWizardEventSource::scanInputDevices() {
 		} else if (nd.kind == INPUT_KIND_MOUSE &&
 		           addToSlot(_mouseFds, _mouseNodes, MAX_MICE, nd.fd, node)) {
 			warning("RoomWizard: Detected mouse '%s' at %s", nd.name, nd.path);
+			// A keyboard+touchpad combo is one node, classified MOUSE, and
+			// pollMouseFd() reads only its buttons.  Open it again as a
+			// keyboard: evdev gives every open file every event, so each
+			// reader takes its own half and keeps its own disconnect.
+			if (nd.keys) {
+				int kfd = open(nd.path, O_RDONLY | O_NONBLOCK);
+				if (kfd >= 0 && addToSlot(_keyboardFds, _keyboardNodes, MAX_KEYBOARDS, kfd, node))
+					warning("RoomWizard: Detected keyboard '%s' at %s (same node)", nd.name, nd.path);
+				else if (kfd >= 0)
+					close(kfd);
+			}
 		} else {
 			close(nd.fd);  // unreachable: the caps match the slot counts
 		}
