@@ -544,21 +544,11 @@ void handle_input() {
     
     // Handle pause screen
     if (current_screen == SCREEN_PAUSED) {
-        // Gamepad: unpause with Pause button
-        if (input.buttons[BTN_ID_PAUSE].pressed) {
-            current_screen = SCREEN_PLAYING;
-            game.paused = false;
-            return;
-        }
-        // Gamepad: resume with Jump/Action
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed) {
-            current_screen = SCREEN_PLAYING;
-            game.paused = false;
-            return;
-        }
-        ModalDialogAction action = modal_dialog_update(&pause_dialog,
-            state.x, state.y, state.pressed, current_time);
+        // Pad / keyboard: focus frame, A presses it, Start / Esc = RESUME
+        ModalDialogAction action = modal_dialog_input(&pause_dialog, &input, 0);
+        if (action == MODAL_ACTION_NONE)
+            action = modal_dialog_update(&pause_dialog,
+                state.x, state.y, state.pressed, current_time);
         if (action == MODAL_ACTION_BTN0) {
             current_screen = SCREEN_PLAYING;
             game.paused = false;
@@ -575,6 +565,7 @@ void handle_input() {
     if (input.buttons[BTN_ID_PAUSE].pressed) {
         current_screen = SCREEN_PAUSED;
         game.paused = true;
+        modal_dialog_set_focus(&pause_dialog, 0);
         modal_dialog_show(&pause_dialog);
         return;
     }
@@ -593,6 +584,7 @@ void handle_input() {
         if (button_check_press(&menu_button, menu_touched, current_time)) {
             current_screen = SCREEN_PAUSED;
             game.paused = true;
+            modal_dialog_set_focus(&pause_dialog, 0);
             modal_dialog_show(&pause_dialog);
             return;
         }

@@ -124,6 +124,7 @@ CTEST_ROWS=(
     "soc_temp_test|-I.|control_panel/soc_temp.c"
     "start_menu_test|-I common|common/start_menu.c common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/gamepad.c common/input_slots.c common/input_scan.c"
     "gameover_flow_test|-I common|common/start_menu.c common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/gamepad.c common/input_slots.c common/input_scan.c"
+    "modal_dialog_input_test|-I common|common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/start_menu.c common/gamepad.c common/input_slots.c common/input_scan.c"
     "mon_ring_test|-I.|sysmon/mon_ring.c"
     "overtemp_test|-I.|sysmon/mon_ring.c"
     "blank_decide_test|-I common|"

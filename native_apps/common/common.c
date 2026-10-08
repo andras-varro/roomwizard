@@ -668,6 +668,28 @@ ModalDialogAction modal_dialog_update(ModalDialog *dlg, int touch_x, int touch_y
     return MODAL_ACTION_NONE;
 }
 
+ModalDialogAction modal_dialog_input(ModalDialog *dlg, const InputState *in,
+                                     int cancel) {
+    if (!dlg->active || in == NULL || dlg->button_count <= 0)
+        return MODAL_ACTION_NONE;
+    if (dlg->focus < 0) dlg->focus = 0;
+
+    const ButtonState *b = in->buttons;
+    int pick = -1;
+    if (b[BTN_ID_PAUSE].pressed || b[BTN_ID_BACK].pressed)
+        pick = cancel;
+    else if (b[BTN_ID_JUMP].pressed || b[BTN_ID_ACTION].pressed)
+        pick = dlg->focus;
+    else if (b[BTN_ID_UP].pressed)    modal_dialog_focus_step(dlg, UI_DIR_UP);
+    else if (b[BTN_ID_DOWN].pressed)  modal_dialog_focus_step(dlg, UI_DIR_DOWN);
+    else if (b[BTN_ID_LEFT].pressed)  modal_dialog_focus_step(dlg, UI_DIR_LEFT);
+    else if (b[BTN_ID_RIGHT].pressed) modal_dialog_focus_step(dlg, UI_DIR_RIGHT);
+
+    if (pick < 0 || pick >= dlg->button_count) return MODAL_ACTION_NONE;
+    dlg->active = false;
+    return (ModalDialogAction)pick;
+}
+
 // ============================================================================
 // TOGGLE SWITCH CONTROL
 // ============================================================================

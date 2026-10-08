@@ -1866,6 +1866,7 @@ static void handle_input(void) {
     case SCREEN_PLAYING:
         if (input.buttons[BTN_ID_PAUSE].pressed) {
             current_screen = SCREEN_PAUSED;
+            modal_dialog_set_focus(&pause_dialog, 0);
             modal_dialog_show(&pause_dialog);
             return;
         }
@@ -1881,20 +1882,19 @@ static void handle_input(void) {
         }
         if (button_check_tap(&menu_button, &ts, now)) {
             current_screen = SCREEN_PAUSED;
+            modal_dialog_set_focus(&pause_dialog, 0);
             modal_dialog_show(&pause_dialog);
             return;
         }
         break;
 
     case SCREEN_PAUSED:
-        if (input.buttons[BTN_ID_PAUSE].pressed) {
-            current_screen = SCREEN_PLAYING;
-            modal_dialog_hide(&pause_dialog);
-            break;
-        }
         {
-            ModalDialogAction act = modal_dialog_update(&pause_dialog,
-                ts.x, ts.y, ts.pressed, now);
+            /* Pad / keyboard: focus frame, A presses it, Start / Esc = RESUME */
+            ModalDialogAction act = modal_dialog_input(&pause_dialog, &input, 0);
+            if (act == MODAL_ACTION_NONE)
+                act = modal_dialog_update(&pause_dialog,
+                    ts.x, ts.y, ts.pressed, now);
             if (act == MODAL_ACTION_BTN0) {
                 current_screen = SCREEN_PLAYING;
                 break;

@@ -621,4 +621,12 @@ void modal_dialog_draw(ModalDialog *dlg, Framebuffer *fb);
 ModalDialogAction modal_dialog_update(ModalDialog *dlg, int touch_x, int touch_y,
                                        bool touch_active, uint32_t now_ms);
 
+// Pad / keyboard on an open dialog, edge-triggered on `.pressed`: D-pad /
+// arrows move the focus, A / Space / Enter press the focused button, and
+// Start / Esc or Select / Backspace answer `cancel` (the caller's safe answer,
+// e.g. RESUME).  A dialog with no focus adopts button 0, so the frame shows.
+// Hides the dialog on an answer, like modal_dialog_update().  Call both.
+ModalDialogAction modal_dialog_input(ModalDialog *dlg, const InputState *in,
+                                     int cancel);
+
 #endif // COMMON_H

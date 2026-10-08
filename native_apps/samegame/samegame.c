@@ -1457,20 +1457,12 @@ static void handle_input(void) {
 
     /* Pause screen */
     if (current_screen == SCREEN_PAUSED) {
-        /* Gamepad: unpause with Pause button */
-        if (input.buttons[BTN_ID_PAUSE].pressed) {
-            current_screen = SCREEN_PLAYING;
-            return;
-        }
-        /* Gamepad: resume with Jump/Action */
-        if (input.buttons[BTN_ID_JUMP].pressed ||
-            input.buttons[BTN_ID_ACTION].pressed) {
-            current_screen = SCREEN_PLAYING;
-            return;
-        }
+        /* Pad / keyboard: focus frame, A presses it, Start / Esc = RESUME */
+        ModalDialogAction action = modal_dialog_input(&pause_dialog, &input, 0);
         /* Touch: pause dialog buttons */
-        ModalDialogAction action = modal_dialog_update(&pause_dialog,
-            state.x, state.y, state.pressed, now);
+        if (action == MODAL_ACTION_NONE)
+            action = modal_dialog_update(&pause_dialog,
+                state.x, state.y, state.pressed, now);
         if (action == MODAL_ACTION_BTN0) {
             current_screen = SCREEN_PLAYING;
             return;
@@ -1498,6 +1490,7 @@ static void handle_input(void) {
     /* Playing screen — gamepad/keyboard: pause */
     if (input.buttons[BTN_ID_PAUSE].pressed) {
         current_screen = SCREEN_PAUSED;
+        modal_dialog_set_focus(&pause_dialog, 0);
         modal_dialog_show(&pause_dialog);
         return;
     }
@@ -1515,6 +1508,7 @@ static void handle_input(void) {
         bool menu_touched = button_is_touched(&menu_button, state.x, state.y);
         if (button_check_press(&menu_button, menu_touched, now)) {
             current_screen = SCREEN_PAUSED;
+            modal_dialog_set_focus(&pause_dialog, 0);
             modal_dialog_show(&pause_dialog);
             return;
         }
@@ -1536,6 +1530,7 @@ static void handle_input(void) {
         bool menu_touched = button_is_touched(&menu_button, input.mouse_x, input.mouse_y);
         if (button_check_press(&menu_button, menu_touched, now)) {
             current_screen = SCREEN_PAUSED;
+            modal_dialog_set_focus(&pause_dialog, 0);
             modal_dialog_show(&pause_dialog);
             return;
         }
@@ -1651,6 +1646,7 @@ int main(int argc, char *argv[]) {
         int        prev_mouse_y    = input.mouse_y;
         bool       prev_mouse_conn = input.mouse_connected;
         AnimState  prev_anim_state = game.anim_state;
+        int        prev_dlg_focus  = pause_dialog.focus;
 
         handle_input();
         update_game();
@@ -1662,6 +1658,7 @@ int main(int argc, char *argv[]) {
             prev_score     != game.score            ||
             prev_remaining != game.blocks_remaining ||
             prev_anim_state != game.anim_state     ||
+            prev_dlg_focus != pause_dialog.focus   ||
             prev_mouse_conn != input.mouse_connected ||
             (input.mouse_connected &&
              (prev_mouse_x != input.mouse_x || prev_mouse_y != input.mouse_y))) {
