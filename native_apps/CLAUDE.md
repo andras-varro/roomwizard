@@ -74,7 +74,8 @@ In every game, pause EXIT / BACK / an on-screen exit return to the start menu; o
 `ModalDialog`: `modal_dialog_init()` → `modal_dialog_set_button()` per button → `modal_dialog_draw()` after
 all other content but before `fb_swap()` → `modal_dialog_update()` returns `MODAL_ACTION_BTN0..BTN3` or
 `-1`. Two buttons render side-by-side; 1, 3 or 4 stack. While a dialog is active, route **all** input to it
-and skip every other handler.
+and skip every other handler. **Pad and keyboard enter through `modal_dialog_input(dlg, &in, cancel)`**
+(before `modal_dialog_update()`, after `modal_dialog_set_focus(dlg, 0)` on open; test `tests/modal_dialog_input_test.c`).
 
 ## App lifecycle
 
