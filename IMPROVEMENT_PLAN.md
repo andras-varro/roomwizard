@@ -327,12 +327,15 @@ tmp + `rename()`, which replaces a symlink rather than writing through it — so
 not relocate that file. **The host keys are NOT per-unit today** — identical on `.188` and `.73`
 ([§5.2](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode)); our rootfs generates them on first boot instead.
 
-**Steps:** (1) the external tree + defconfig, built to a `rootfs.tar`, ARM gate green. (2) Our init
-scripts and rules as the only rc links; first-boot host keys. (3) An installer that edits a **card-image
-file**, never a block device: the operator reads the card to `card.img` and writes it back from Windows
-(the USB reader does not reach WSL); WSL2 attaches it with `losetup -P` (present, measured), rewrites p6
-and carries the per-unit list from the old p6. (4) A spare card on `.188`: boot, `deploy-all.sh`, panel
-check. (5) `LICENSE.md` overhaul — operator ruling 2026-09-29: our GPL kernel and modules ship (source-offer
+**Steps:** (1)–(3) are built and host-checked, none booted: `rootfs/build-rootfs.sh` (Buildroot tree,
+tarball checked by `rootfs/check-rootfs.sh`), the boot system in `rootfs/board/roomwizard/overlay`, and
+the card image — `rootfs/fetch-card-parts.sh` reads a running unit (read-only), `rootfs/make-card-image.sh`
+assembles an image FILE in WSL as root (the operator's USB reader reaches Windows only; they write the
+image from there). (4) **Next:** the 8 GB card (operator may wipe it) on `.188` with the image built
+2026-10-09 (`card-rootfs-188.img.gz` in the session scratch; the original 4 GB card is the fallback): boot,
+SSH in, then `commissioning/provision.sh --no-clean` and `deploy-all.sh` online, panel check. Whether
+provisioning runs cleanly on a non-vendor root is untested; the offline path (`commission-offline.sh
+--base`) would need its clean sweeps, `rw_is_rootfs` markers and stdin prompts dealt with first. (5) `LICENSE.md` overhaul — operator ruling 2026-09-29: our GPL kernel and modules ship (source-offer
 duty), the glibc row names only `gnueabihf`, the obligation column is unreviewed; Buildroot's `legal-info`
 gives the package manifest. Operator rulings 2026-10-08: Buildroot; BlueZ/bluealsa stay our own builds;
 card-image install only, no over-SSH install; **p5 becomes data** (game data, saves). **Done when** a unit
