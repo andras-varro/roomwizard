@@ -308,7 +308,7 @@ tool-level traps rather than device facts, and each has cost real time.
   `ctrlblock.bin` on p1; stage experimental kernels under a *new* filename. **Only our own kernel image
   is supported**, and nothing scripted writes `uImage-system`: installing it is a manual operator step
   (`kernel/README.md`), and the p1 rules are in `lib/CLAUDE.md`. The vendor-kernel byte-patch path is
-  deleted; tag `last-vendor-kernel` is the last tree that ran on the vendor kernel. Recovery:
+  deleted; tag `last-vendor-kernel` is the last tree that ran on the vendor kernel, and `last-vendor-rootfs` the last that can commission the vendor root filesystem. Recovery:
   `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`.
 
 ## Cross-component build rules

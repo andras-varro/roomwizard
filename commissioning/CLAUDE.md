@@ -48,14 +48,19 @@ chance to exit. ⚠️ **The two paths then diverge on a non-TTY, deliberately, 
 
 | path | implementation | on a non-TTY |
 |---|---|---|
-| `provision.sh` | `ask_consent()` at `provision.sh:350`, called at `:818` | **proceeds**, printing an unmissable banner saying what nobody answered |
-| `commission-offline.sh` | its own inline gate at `:255-267` | **refuses** — the bare `read` sees EOF, the answer is not `yes`, `exit 1` |
+| `provision.sh` | `ask_consent()` at `provision.sh:365`, called at `:802` | **proceeds**, printing an unmissable banner saying what nobody answered |
+| `commission-offline.sh` | its own inline backup question at `:331` | **refuses** — the bare `read` sees EOF, the answer is not `yes`, `exit 1` |
 
 `provision.sh` proceeds because the defect it replaced was an unguarded `read` whose EOF *cancelled the
 clean and returned 0*, so a scripted run silently did not clean while the operator believed the default
 did. `commission-offline.sh` refuses because it needs root and writes a card that is about to be
-handed over; an unattended run of it is not a thing anyone wants to have happened. **What both must
-never do is skip the clean and report success.**
+handed over. **What both must never do is skip the clean and report success.**
+
+**The one sanctioned unattended run is `commission-offline.sh --unattended`**, whose only caller is
+`rootfs/make-card-image.sh --bundle` (an image of our own root, mounted by the caller). It skips the backup
+question and `card-prep.sh`, reads `/dev/null`, and is **refused unless `--base`, `--no-clean` and
+`--no-sshd` are all given** (the guard at `commission-offline.sh:287-298`): the clean would delete our
+`rcS.d` links, and skipping a clean silently is the failure above, so the skip must be named.
 
 ## `commission-offline.sh` verifies what it installed, on the card
 
