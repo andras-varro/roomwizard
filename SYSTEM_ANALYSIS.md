@@ -1628,7 +1628,7 @@ OMAP3 ROM
 | p6 | ext3 | ~981 MB | `/` | Root filesystem |
 
 > **Gotcha — p6 is ext3, mounted by the ext4 driver.** U-Boot passes `rootfstype=ext4` and the ext4
-> driver happily mounts the ext3 filesystem. **Do not reformat it as ext4.**
+> driver happily mounts the ext3 filesystem. **Do not reformat it as ext4.** The converse also fails: `mke2fs -t ext3 -O none` makes a journal-less (ext2) filesystem that the kernel refuses as ext3 with `EINVAL`.
 
 Live usage: root 47 % used (474 MB free), data 40 %, log 4 %.
 
@@ -1655,6 +1655,10 @@ litter of `upgradeProgressListener_upgradeStatus=*` files dropped in `/` show it
 **[unverified]** whether it can still fire unattended — nobody has established it either way — but
 deleting `factory/` removes the payload it would need, which is why that deletion is a safety measure
 and not a space measure.
+
+**Vendor p5 content, measured on `.188` (2026-10-09):** `factory/nand_boot_redirect_oob.bin` (135168 B, plus
+`.md5`), `factory/uImage-system-original` (5225796 B), `factory/upgrade.conf`, `serialno` and `pointercal`.
+Nothing in the repo reads them except `clean-rules.conf` and the tests; the full-card backup holds them.
 
 **The layout is the identity; the UUIDs are not.** Measured across two units of the same firmware
 build (`/etc/version` `20180309123456`), the partition table is byte-identical — same start sector
@@ -1705,6 +1709,12 @@ holds anything. Everything else reads blank (`ff ff ff ff ...`):
 **This is a pure SD-boot device with a 12 KB NAND shim.** That shim is the only irreplaceable
 non-SD component, and there is no reason ever to write to it. (Writing `/dev/mtd4` is safe;
 `mtd0` is not.)
+
+⚠️ **Bare `blkid` probes `mtdblock0` and the kernel prints `ecc unrecoverable error`,
+`print_req_error: I/O error, dev mtdblock0, sector 0` and `Buffer I/O error` on the console, i.e. the
+panel.** Measured on `.188` on our own root: read-only, and the unit boots through that redirector, so it is
+intact. Why the kernel's ECC rejects it is `[inferred]` (a different ECC layout than the ROM's), not
+measured. Probe block devices by name, never bare `blkid`.
 
 ### 4.4 The U-Boot environment cannot be persisted
 
@@ -1924,6 +1934,11 @@ construction rather than merely unvisited: `device-files/CLAUDE.md`.
 **`S30avahi-daemon` is absent** on both units while `/usr/sbin/avahi-daemon`, `/etc/avahi/` and
 `/etc/init.d/avahi-daemon` are present — `commissioning/provision.sh` adds the link, and all four paths are `keep`
 entries in `clean-rules.conf` so that no clean can delete what setup enables.
+
+⚠️ **On our own Buildroot root, OpenSSH `sshd` does not listen until the kernel's crng is initialised, and with
+no seed that takes ~2 min after boot.** Measured twice on `.188`: 09:20:34 to 09:22:42, and rc 5 at 09:43:44
+to sshd listening at 09:45:50. BusyBox `seedrng` (`rootfs/board/roomwizard/overlay/etc/init.d/seedrng`, link
+`S01seedrng`) cut it to 1 s (rc 5 10:02:17, sshd 10:02:18). The first boot of a new card has no seed and stays slow.
 
 ⚠️ **`/var/log` is a symlink to `/home/root/log`, i.e. p3, and `syslogd` holds three files there
 open.** Measured from `/proc/<pid>/fd` on a unit in service, 2026-08-05: `messages` (its target per

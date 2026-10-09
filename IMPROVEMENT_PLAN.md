@@ -161,6 +161,14 @@ differ in more than the device, so the link is unproven. It needs a joint sessio
 (reading `in_voltage6_input` after each swap, and once with the port empty) and the table says which condition, if any, moves it.
 
 
+### B58. The monitor service (`rwmond`) is not running, so the Control Panel monitor page has no history — open, confirmed 2026-10-09 (operator report plus one `ps`)
+
+The operator reports the monitor page has no history. Measured on `.188` on our own root after `provision.sh --no-clean`
+and a reboot: `rwmond` (`/etc/init.d/rwmond`, link `S95rwmond` present) is absent from `ps`. The operator says it
+was already not running on the original vendor-root image, so this is not F102-specific. Cause not investigated: start
+with whether the init script runs at all, then whether `rwmond` starts and exits. **Done when** `rwmond` is in `ps` after a
+boot and the monitor page shows history.
+
 ## Features
 
 Userspace except F101, which is the image build.
@@ -300,7 +308,7 @@ rootfs is soft-float EABI, loader `/lib/ld-linux.so.3`, glibc 2.31; our dynamic 
 **Build system:** Buildroot 2025.02 LTS (supported to 2028-03), as a
 `BR2_EXTERNAL` tree in the repo, built out of tree in WSL's native fs (`~/`, not DrvFs; this host has 32
 cores and 939 GB free there, measured). `BR2_cortex_a8` + `BR2_ARM_EABI` + NEON, internal glibc with C++,
-`BR2_LINUX_KERNEL` off, custom 4.14 headers, BusyBox init with SysV-style `/etc/init.d/S??*`. Debian
+`BR2_LINUX_KERNEL` off, custom 4.14 headers, BusyBox init with SysV-style `/etc/init.d/S??*`. ⚠️ `BR2_PACKAGE_BASH` depends on `BR2_PACKAGE_BUSYBOX_SHOW_OTHERS`; `make defconfig` drops it silently otherwise (gated in `rootfs/build-rootfs.sh`). Debian
 debootstrap is out: no qemu-user/binfmt here, and generic ARMv7 packages may carry `sdiv`. Gate the target
 tree with `native_apps/check-arm-safe.sh`.
 
@@ -327,19 +335,60 @@ tmp + `rename()`, which replaces a symlink rather than writing through it — so
 not relocate that file. **The host keys are NOT per-unit today** — identical on `.188` and `.73`
 ([§5.2](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode)); our rootfs generates them on first boot instead.
 
-**Steps:** (1)–(3) are built and host-checked, none booted: `rootfs/build-rootfs.sh` (Buildroot tree,
-tarball checked by `rootfs/check-rootfs.sh`), the boot system in `rootfs/board/roomwizard/overlay`, and
-the card image — `rootfs/fetch-card-parts.sh` reads a running unit (read-only), `rootfs/make-card-image.sh`
-assembles an image FILE in WSL as root (the operator's USB reader reaches Windows only; they write the
-image from there). (4) **Next:** the 8 GB card (operator may wipe it) on `.188` with the image built
-2026-10-09 (`card-rootfs-188.img.gz` in the session scratch; the original 4 GB card is the fallback): boot,
-SSH in, then `commissioning/provision.sh --no-clean` and `deploy-all.sh` online, panel check. Whether
-provisioning runs cleanly on a non-vendor root is untested; the offline path (`commission-offline.sh
---base`) would need its clean sweeps, `rw_is_rootfs` markers and stdin prompts dealt with first. (5) `LICENSE.md` overhaul — operator ruling 2026-09-29: our GPL kernel and modules ship (source-offer
-duty), the glibc row names only `gnueabihf`, the obligation column is unreviewed; Buildroot's `legal-info`
-gives the package manifest. Operator rulings 2026-10-08: Buildroot; BlueZ/bluealsa stay our own builds;
-card-image install only, no over-SSH install; **p5 becomes data** (game data, saves). **Done when** a unit
-boots our p6, every component runs and the panel check passes.
+**State, 2026-10-09:** steps 1-3 (Buildroot tree `rootfs/build-rootfs.sh`, boot system in
+`rootfs/board/roomwizard/overlay`, card image by `rootfs/make-card-image.sh`) are **booted on `.188`** from the
+8 GB card: `commissioning/provision.sh --no-clean` and `deploy-all.sh` both ran green on it (all five
+components), the launcher is on the panel, and the touch device is present once the module is installed.
+Operator rulings 2026-10-09: nothing from Steelcase stays on the card except the boot chain (`mlo`,
+`u-boot.bin`, `u-boot-sd.bin`, `ctrlblock.bin`, which must stay for now); p2 and p3 hold only ours; p5 is
+cleared (no factory restore wanted, `serialno` not needed); a per-unit SSH identity is wanted; `.188` is fully
+experimental. Rulings 2026-10-08: Buildroot; BlueZ/bluealsa stay our own builds; card-image install only; p5
+becomes data. **Open, in priority order:**
+
+1. **HAZARD, highest:** `provision.sh` WITHOUT `--no-clean` (the default deep clean) on our root would delete
+   our `rcS.d` links. `device-files/clean-rules.conf`'s `scope sweeps /etc/rcS.d` keep-list (~lines 126-139)
+   names only the vendor's links (`S04udev`, `S35mountall.sh`, `S40networking`, ...); ours are `S01mountall`
+   `S01seedrng` `S02alignment` `S03udev` `S04hostname` `S05sysctl` `S06watchdog` `S07syslog` `S08networking`. The
+   `rc5.d` keep-list is not yet checked for our `S02dbus-1`/`S09sshd`. Inferred, not run: no network or SSH
+   after the reboot, recovery by reflash. Until fixed, use only `--no-clean` on our root.
+2. `provision.sh`'s default `--ssh-auth=password` writes `PasswordAuthentication yes` + `PermitRootLogin yes`
+   over our image's key-only `sshd_config` (the root password is locked, so not exploitable, but a regression),
+   and its fixed `KexAlgorithms` list drops the post-quantum kex, so the OpenSSH client prints "connection is
+   not using a post-quantum key exchange" on every connection after provisioning (none before).
+3. The touch module: `deploy-all.sh` never installs `cy8ctmg120_ts.ko`; only `kernel/build-modules.sh --out
+   <dir> --deploy <ip>` does. `make-card-image.sh --modules` puts it in the image; later module updates stay manual.
+4. `/home/root/backup` is an empty directory on p6 (p5 is empty, unmounted, label `rw-spare`):
+   `commissioning/provision.sh:520,624,628` `df` it and `control_panel/monitor_page.c:60` lists it, so both report
+   p6's numbers. `lib/rw-identify.sh:296` (role path) and the p5 rules in `clean-rules.conf` (210-214, 230,
+   371-374) still describe vendor p5 content.
+5. `state.tar` (carried into p6 by `make-card-image.sh`) brings an `/etc/hosts` whose first line is the vendor's
+   "# Generated by PV networkmanager", plus stray `home/root/kq2.000` and `wget.err`/`wget.out`.
+6. After a reflash the host key changes and WSL has its OWN `~/.ssh/known_hosts`: `deploy-all.sh` run in WSL
+   failed "REMOTE HOST IDENTIFICATION HAS CHANGED" although Git Bash's entry was already removed. `ssh-keygen -R`
+   is needed in both shells.
+7. Windows writes "System Volume Information" onto p1 when the card is written; harmless, a later step could delete it.
+8. The launcher's close dialog (the red X on `app_launcher`) has Shutdown and Reboot; on our root Reboot works and
+   Shutdown failed (operator report 2026-10-09). Which command the launcher runs for Shutdown, and why it fails,
+   is not checked. Our `inittab` runs `/etc/init.d/rc 0` on shutdown, and BusyBox may lack the applet it calls.
+9. `rwmond` is not running on our root (measured) nor, per the operator, on the vendor root: tracked as its own
+   bug above, not F102-specific.
+10. **Next physical step:** the operator writes `card-rootfs-188-v2.img.gz` from the session scratch (image md5
+   `618107a8d8b21db8ffd4979bf4b3936c`). Check: first boot of the slimmed p1 (five files only), empty p2 (fresh
+   host keys, expect a slow first boot), touch module from the image; then the operator's tap test.
+11. Operator wishes 2026-10-09: a non-root user model, tracked as its own feature; p7 swap stays off for now.
+12. `LICENSE.md` overhaul — operator ruling 2026-09-29: our GPL kernel and modules ship (source-offer duty), the
+    glibc row names only `gnueabihf`, the obligation column is unreviewed; Buildroot's `legal-info` gives the
+    package manifest. The offline path (`commission-offline.sh --base`) would need its clean sweeps,
+    `rw_is_rootfs` markers and stdin prompts dealt with first.
+
+**Done when** a unit boots our p6, every component runs and the panel check passes (the first three are met on
+`.188`; the items above are what remain).
+
+### F137. Users other than root — open, operator wish 2026-10-09, not designed
+
+The operator wants root not to be the default user on our root filesystem. Open question to the operator: login only
+(a non-root SSH account, apps stay root), or apps run as a non-root user too (which touches `/dev/fb0`, `/dev/input`,
+`/dev/dsp`, `/dev/watchdog` and the `roomwizard-app` respawn loop). **Done when** the operator has answered and the chosen shape is built.
 
 ### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
 
