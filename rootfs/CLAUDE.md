@@ -36,11 +36,14 @@ Everything that builds the **root filesystem we boot instead of the vendor's Yoc
 
 ## Per-unit state (carried by `make-card-image.sh`'s `state.tar`)
 
-`/etc/touch_calibration.conf` (+ `.bak*`), `/etc/input_config.conf`, `/opt/games/rw_config.conf`,
-`/opt/games/scummvm.ini` and saves in `/home/root`, `/opt/vnc_client/vnc_client.conf`,
-`/var/lib/alsa/asound.state`, `/var/lib/bluetooth` + `/var/lib/bluealsa`, `/etc/hostname` + `/etc/hosts`,
-`/etc/timezone` + `/etc/localtime`, `/home/root/.ssh`, `/opt/roomwizard/default-app`, a toggled `sshd_config`.
-Highscores, `websign/` and cron live on p2. ⚠️ **`config.c:65` saves by tmp + `rename()`, which replaces a
+**Both lists live in `lib/rw-state.sh` and nowhere else**: `RW_STATE_IMAGE` (what `fetch-card-parts.sh`
+puts in `state.tar`) and the BACKUP set (`commissioning/backup.sh` / `restore.sh`). ⚠️ **An image never
+carries** `vnc_client.conf` (plaintext password), `scummvm.ini`, ScummVM saves or game data, loose
+`/home/root` files, `touch_calibration.conf.bak*`, the vendor `/etc/hosts` or p2 contents:
+`make-card-image.sh` runs `rw_state_image_deny` (an allowlist plus a hard list) over `state.tar` before any
+image exists and refuses, never filters — an older `state.tar` fails and is re-fetched. It derives
+`/etc/hosts` from the carried `/etc/hostname` with `commissioning/set-hostname.sh`. Highscores, host keys
+(`/home/root/data/ssh`) and cron live on p2, which the image creates empty — `restore.sh` puts them back. ⚠️ **`config.c:65` saves by tmp + `rename()`, which replaces a
 symlink instead of writing through it**, so a symlink farm onto p2 does not relocate that file. **SSH host
 keys are generated on first boot** (the vendor's are identical across units, `SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode`),
 so a fresh p2 means a slow first boot.

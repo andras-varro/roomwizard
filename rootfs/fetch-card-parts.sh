@@ -20,6 +20,8 @@ case "$OUT" in /mnt/*) echo "outdir must be on WSL's native fs, not DrvFs: $OUT"
 
 # shellcheck source=lib/rw-ssh.sh
 source "$(dirname "$0")/../lib/rw-ssh.sh"
+# shellcheck source=lib/rw-state.sh
+source "$(dirname "$0")/../lib/rw-state.sh"
 rw_ssh_gate "root@$IP" || { echo "cannot continue without SSH to root@$IP" >&2; exit 1; }
 SSH=(ssh -o "ConnectTimeout=10" "root@$IP")
 mkdir -p "$OUT" || exit 1
@@ -62,24 +64,24 @@ while read -r name start _; do
 done < "$OUT/geometry.txt"
 
 echo "== per-unit state of the live p6"
-# The list is built on the unit so that only files which exist are named, and
-# is relative to /, so a symlink such as /etc/localtime is archived as one.
-LISTER=$(cat <<'REMOTE'
-cd / || exit 1
-for f in etc/touch_calibration.conf etc/touch_calibration.conf.bak* etc/input_config.conf opt/games/rw_config.conf opt/games/scummvm.ini opt/vnc_client/vnc_client.conf var/lib/alsa/asound.state var/lib/bluetooth var/lib/bluealsa etc/hostname etc/hosts etc/timezone etc/localtime home/root/.ssh opt/roomwizard/default-app; do
-    if [ -e "$f" ] || [ -L "$f" ]; then echo "$f"; fi
-done
-for f in home/root/*; do
-    case "$f" in home/root/uImage-*) continue ;; esac
-    if [ -f "$f" ]; then echo "$f"; fi
-done
-REMOTE
-)
+# The IMAGE set from lib/rw-state.sh, the one home of both state lists: never the
+# VNC password, ScummVM's ini and saves, the vendor /etc/hosts or p2's contents
+# (commissioning/backup.sh takes those). The list is built on the unit so that only
+# files which exist are named, and is relative to /, so a symlink such as
+# /etc/localtime is archived as one.
+LISTER=$(rw_state_lister image) || die "rw_state_lister"
 rssh "$LISTER" > "$OUT/state.list" || die "state list"
 if grep -q '[[:space:]]' "$OUT/state.list"; then die "a state file name contains whitespace"; fi
 cat "$OUT/state.list"
 rssh "cd / && tar -cf - $(tr '\n' ' ' < "$OUT/state.list")" > "$OUT/state.tar" || die "state tar"
 echo "state entries: $(wc -l < "$OUT/state.list")"
+# The same gate make-card-image.sh applies, so a bad state.tar fails here, at its source.
+LISTING=$(tar -tf "$OUT/state.tar") || die "state.tar does not list"
+if DENIED=$(printf '%s\n' "$LISTING" | rw_state_image_deny); then :; else
+    rm -f "$OUT/state.tar"
+    die "state.tar would carry entries no card image may hold (deleted):
+$DENIED"
+fi
 
 echo "== done"
 ls -l "$OUT"

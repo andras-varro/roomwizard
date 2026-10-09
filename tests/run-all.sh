@@ -96,6 +96,7 @@ SUITE_ROWS=(
     "rw_provision_test.sh|deploy"
     "rw_release_test.sh|deploy"
     "rw_ssh_test.sh|deploy"
+    "rw_state_test.sh|deploy"
     "setup_build_env_test.sh|deploy"
     "smoke_first_screen_test.sh|deploy"
     "doc_check.sh|docs"

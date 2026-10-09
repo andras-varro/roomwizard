@@ -14,6 +14,8 @@ libraries they drive are documented in `lib/CLAUDE.md`; the rules files they rea
 | `commission-offline.sh --bundle <tar.gz\|dir>` | all of the above, offline, **one** boot, for delivery |
 | `set-hostname.sh` | the one writer of the three name files |
 | `clone-to-32gb.sh` | optional card upgrade (`SD_CARD_UPGRADE.md`) |
+| `backup.sh <ip> [<out>]` | before an update or reflash: the unit's BACKUP set (`lib/rw-state.sh`) to `backups/` — read-only on the unit, archive holds secrets |
+| `restore.sh <ip> <tar.gz> [--dry-run]` | after: refuses unsafe or non-BACKUP paths, `roomwizard-app stop`, `tar -o` over `/`, SSH modes, `start` |
 
 ## Both bring-up paths CLEAN BY DEFAULT, and neither writes p1
 

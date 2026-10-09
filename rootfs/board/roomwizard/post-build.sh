@@ -92,8 +92,10 @@ done
 printf 'RoomWizard root filesystem, built from rootfs/ (Buildroot)\n' > "$TARGET/etc/roomwizard-rootfs"
 chmod 0644 "$TARGET/etc/roomwizard-rootfs"
 
-# Root: home on the card's tree, password locked (key-only login).
-sed -i 's|^root:\([^:]*\):0:0:root:/root:|root:\1:0:0:root:/home/root:|' "$TARGET/etc/passwd"
+# Root: home on the card's tree, bash as the login shell (the skeleton gives BusyBox
+# ash via /bin/sh), password locked (key-only login).
+sed -i 's|^root:\([^:]*\):0:0:root:/root:[^:]*$|root:\1:0:0:root:/home/root:/bin/bash|' "$TARGET/etc/passwd"
+grep -q '^root:[^:]*:0:0:root:/home/root:/bin/bash$' "$TARGET/etc/passwd" || { echo "post-build: root passwd line not rewritten" >&2; exit 1; }
 sed -i 's|^root:[^:]*:|root:*:|' "$TARGET/etc/shadow"
 
 exit 0

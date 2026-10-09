@@ -562,3 +562,7 @@ tests/.sab-*
 # The operator's own priority list; personal, never tracked
 prio.lst
 .claude/settings.json.bedrock
+
+# commissioning/backup.sh output: per-unit state of a unit, INCLUDING SECRETS (VNC
+# password, SSH host keys). Never committed.
+backups/

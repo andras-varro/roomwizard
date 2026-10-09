@@ -107,6 +107,23 @@ fi
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck disable=SC1090,SC1091
 . "$SCRIPT_DIR/../lib/rw-identify.sh" || die "cannot source rw-identify.sh"
+# shellcheck disable=SC1090,SC1091
+. "$SCRIPT_DIR/../lib/rw-state.sh" || die "cannot source rw-state.sh"
+
+# The image gate, before any image exists: state.tar may hold only the IMAGE set of
+# lib/rw-state.sh — never the VNC password, ScummVM's ini, saves or game data, loose
+# /home/root files, calibration .bak files, the vendor /etc/hosts or p2 contents.
+# Refused, not filtered: a state.tar that fails was made by an older
+# fetch-card-parts.sh, and the cure is to fetch a clean one.
+STATE_LIST=$(tar -tf "$PARTS/state.tar") || die "$PARTS/state.tar does not list"
+if ! STATE_DENIED=$(printf '%s\n' "$STATE_LIST" | rw_state_image_deny); then
+    echo "FAIL: $PARTS/state.tar carries entries no card image may hold:" >&2
+    printf '%s\n' "$STATE_DENIED" | sed 's/^/  /' >&2
+    echo "No image was written. Regenerate the parts with the current script (as the normal user):" >&2
+    echo "  rootfs/fetch-card-parts.sh <unit-ip> $PARTS" >&2
+    echo "and keep the unit's private config with commissioning/backup.sh <unit-ip>." >&2
+    exit 1
+fi
 
 geom() { awk -v n="$1" -v c="$2" '$1==n{print $c}' "$PARTS/geometry.txt"; }
 DISK_SECT=$(geom mmcblk0 3)
@@ -222,6 +239,13 @@ fill() {   # fill <partnum> <rootfs tar> [<state tar>]
         mkdir -p "$MNT/p/home/root/data" "$MNT/p/home/root/log" "$MNT/p/home/root/backup"
         [ ! -d "$MNT/p/home/root/.ssh" ] || chmod 700 "$MNT/p/home/root/.ssh"
         [ ! -f "$MNT/p/home/root/.ssh/authorized_keys" ] || chmod 600 "$MNT/p/home/root/.ssh/authorized_keys"
+        # state.tar no longer carries /etc/hosts (the vendor's), so the rootfs's own
+        # maps 127.0.1.1 to the build-time name; map the carried one to loopback too.
+        if [ -f "$MNT/p/etc/hostname" ]; then
+            UNIT_NAME=$(head -n 1 "$MNT/p/etc/hostname" | tr -d ' \t\r')
+            sh "$SCRIPT_DIR/../commissioning/set-hostname.sh" "$UNIT_NAME" "$MNT/p" \
+                || die "set-hostname.sh $UNIT_NAME on p6"
+        fi
         EXTRA="$MNT/p/lib/modules/4.14.52/extra"
         mkdir -p "$EXTRA" || die "mkdir $EXTRA"
         NKO=0

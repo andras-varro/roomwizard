@@ -62,6 +62,19 @@ used `/scummvm.ini`, an SSH shell in `$HOME` wrote `/home/root/scummvm.ini`, and
 looked like the setting being ignored. Both strays are gone — `initBackend()` resolves the path
 against `/opt/games` now, and `scummvm-roomwizard/CLAUDE.md` has the reasoning.)
 
+### Games
+
+**No game data ships with this project** — not in a release bundle and not in a card image; commercial
+titles are copyrighted, and the build and image scripts refuse ScummVM config and saves. Bring your
+own: copy a game's files to a directory on the unit (e.g. `scp -r <game>/ root@<ip>:/home/root/data/games/<game>/`),
+then add it from ScummVM's launcher with **Add Game…**.
+
+Free, legally downloadable games — Beneath a Steel Sky, Flight of the Amazon Queen, Lure of the
+Temptress, Drascula, DreamWeb, Soltys and others — are listed on **<https://www.scummvm.org/games/>**.
+The default build has the `sky` and `queen` engines, so the first two run as-is; the others need an
+engine from a later batch (`ENGINE_BATCH=1 ./build-and-deploy.sh …`; the lists are in that script). Prefer the floppy versions: a few MiB
+each, against 66–230 MiB for the CD ones.
+
 ## Status
 
 ✅ Fully functional — GUI, touch, keyboard, mouse, gamepad, audio (OPL/AdLib music + SFX), virtual keyboard all working. All input verified with EcoQuest and Full Throttle.
