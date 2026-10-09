@@ -275,7 +275,7 @@ and a DT panel node, and answer two questions: does the panel light, and does th
 (`fbset`, `/sys/class/graphics/fb0/bits_per_pixel`). Anything past that (touch, Bluetooth, modules) waits on
 a yes to both.
 
-### F102. Build our own root filesystem for p6 — open, asked for by the operator 2026-09-25
+### F102. Build our own root filesystem for p6 — open, questions measured 2026-10-08, asked for by the operator 2026-09-25
 
 **The deliverable is a p6 image we built (Buildroot or similar), replacing the vendor's Yocto 3.1.4
 rootfs instead of cleaning it.** F101 replaces only the kernel. Everything the cleanup fights lives on
@@ -284,31 +284,57 @@ the software watchdog, and the vendor's `rc`/`rcS` wrappers, whose leftover swit
 to chase. A rootfs we build would also be the first one we are allowed to ship: the vendor's may not be
 redistributed (`LICENSE.md`).
 
-**What makes it small** — our binaries need nothing beyond glibc, `libstdc++` and `libasound` (native apps and
-ScummVM link those dynamically; `vnc_client` is `-static`), measured
-([§6](SYSTEM_ANALYSIS.md#6-building-for-this-device)). So the base needs those, `/usr/share/alsa`, and what our init scripts and
-services call: `sshd`, `cron`, `dbus` (inferred as needed), an mDNS responder, the hardware watchdog
-feeder, `rdate`, `amixer`, `insmod`, and a `start-stop-daemon`/`ps` that `device-files/roomwizard-app`
-accepts. Inferred, from reading `device-files/` and `device-files/provision-rules.conf`, not from a
-build. `disable-steelcase.sh` and the whole of `device-files/clean-rules.conf` would have nothing left
-to act on.
-
 **Fixed by the boot chain, measured:** the root must stay on p6. U-Boot's `root=/dev/mmcblk0p6` is
 compiled in, with no `saveenv`, and `/etc/fstab` names p2, p3, p5 and p7 by position
 ([§4](SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery)). p1's `mlo`/`u-boot.bin`/`ctrlblock.bin` stay
-untouched, so the recovery is still "reimage the card".
+untouched, so the recovery is still "reimage the card". The MAC is in the LAN9221 EEPROM and survives
+([§3.5](SYSTEM_ANALYSIS.md#35-network-and-power)).
 
-**Open before designing it — none measured:**
+**ABI, measured 2026-10-08 (`readelf` of the vendor `libc.so.6` and of `/opt/games/snake`):** the vendor
+rootfs is soft-float EABI, loader `/lib/ld-linux.so.3`, glibc 2.31; our dynamic binaries need at most
+`GLIBC_2.28`, plus `libasound.so.2`, `libm`, `libstdc++`. The BlueZ 5.66 and bluealsa we build
+(`bluetooth/build-bluez.sh`, `build-bluealsa.sh`) also need glib 2.62-ish, `libdbus-1.so.3` and readline 8.
+`vnc_client` and `devmem_write` are static hard-float and need nothing. So a new rootfs must be **EABI
+(not EABIHF), glibc >= 2.31**, or every dynamic binary is rebuilt with it.
 
-| Question | Why it matters |
-|---|---|
-| Where does the MAC address come from — the LAN9221's EEPROM, U-Boot, or a vendor script? | If a vendor script sets it, replacing p6 changes every unit's address. |
-| Which per-unit state lives on p6? | `/etc/touch_calibration.conf` and `/var/lib/alsa/asound.state` are on `/`, so a new p6 loses them unless they move to p2 or get carried over. |
-| Does anything in userspace need `/usr/share/alsa`? | `clean-rules.conf` keeps it "for the OSS shim", but OSS here is kernel emulation ([§3.4](SYSTEM_ANALYSIS.md#34-audio)). |
-| Does `S40ctrlblk` do anything we need? | [unverified]. The kept boot link finds no `/opt/sbin/ctrlblk` after the clean. |
-| What obligations come with busybox and the other GPL/LGPL packages? | Their source offer goes beside the kernel's in `LICENSE.md`. Operator ruling 2026-09-29: the whole `LICENSE.md` overhaul is part of this item — our GPL kernel image and modules now ship (source-offer duty), native apps and ScummVM link glibc and libasound dynamically, the glibc row names only `gnueabihf`, and the obligation column is unreviewed. |
-| What does p5 become? | It frees 1.5 GB of space. |
+**Build system — default chosen, for overrule:** Buildroot 2025.02 LTS (supported to 2028-03), as a
+`BR2_EXTERNAL` tree in the repo, built out of tree in WSL's native fs (`~/`, not DrvFs; this host has 32
+cores and 939 GB free there, measured). `BR2_cortex_a8` + `BR2_ARM_EABI` + NEON, internal glibc with C++,
+`BR2_LINUX_KERNEL` off, custom 4.14 headers, BusyBox init with SysV-style `/etc/init.d/S??*`. Debian
+debootstrap is out: no qemu-user/binfmt here, and generic ARMv7 packages may carry `sdiv`. Gate the target
+tree with `native_apps/check-arm-safe.sh`.
 
+**What it must carry — read from code 2026-10-08, not yet built:** OpenSSH, not dropbear
+(`rw-sshd.sh` runs `sshd -t` and sets `Ciphers`/`MACs`/`KexAlgorithms`/`PubkeyAcceptedKeyTypes`); a
+`/dev/watchdog` feeder on every boot (60 s); udev, plus whatever rule makes `/dev/input/touchscreen0`
+(`app_launcher` exits without it; the rule's home on the vendor image is unread); dbus (+
+`DBUS_SYSTEM_BUS_ADDRESS`, [§3.6](SYSTEM_ANALYSIS.md#36-usb)), avahi, `amixer`, `libasound` **with `/usr/share/alsa`**
+([§3.4](SYSTEM_ANALYSIS.md#34-audio)); `insmod`/`lsmod` (all loads are by path), `rdate`, `hwclock -u`,
+`date -s`, `logger` + a syslogd (`/etc/default/syslogd` passes sysklogd's `-s -s`, which BusyBox lacks),
+`start-stop-daemon`, `pidof -x`, `killall`, `/usr/share/zoneinfo`, DHCP on eth0 sending the host name,
+`reboot`/`shutdown`. Not needed: cron (only vendor jobs use it), `S40ctrlblk` (`/opt/sbin/ctrlblk` is gone
+after the clean and nothing of ours reads the block), `update-rc.d`, `/var/watchdog_test`, all of
+`disable-steelcase.sh` and `clean-rules.conf`. Whether BlueZ/bluealsa come from Buildroot packages or stay
+our own builds is open — one implementation either way.
+
+**Per-unit state on p6 today, measured on `.188`** — a new p6 must carry these over or lose them:
+`/etc/touch_calibration.conf` (+ `.bak*`), `/etc/input_config.conf` if present, `/opt/games/rw_config.conf`
+(BT audio address, pad slots), `/opt/games/scummvm.ini` and the saves in `/home/root`, `/opt/vnc_client/vnc_client.conf`,
+`/var/lib/alsa/asound.state`, `/var/lib/bluetooth` + `/var/lib/bluealsa` (pairings), `/etc/hostname` +
+`/etc/hosts`, `/etc/timezone` + `/etc/localtime`, `/home/root/.ssh`, `/opt/roomwizard/default-app`, a
+toggled `sshd_config`. Highscores, `websign/` and cron already live on p2. ⚠️ `config.c:65` saves by
+tmp + `rename()`, which replaces a symlink rather than writing through it — so a symlink farm onto p2 does
+not relocate that file. **The host keys are NOT per-unit today** — identical on `.188` and `.73`
+([§5.2](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode)); our rootfs generates them on first boot instead.
+
+**Steps:** (1) the external tree + defconfig, built to a `rootfs.tar`, ARM gate green. (2) Our init
+scripts and rules as the only rc links; first-boot host keys. (3) An offline installer that writes p6 and
+carries the per-unit list from the old p6. (4) A spare card on `.188`: boot, `deploy-all.sh`, panel check.
+(5) `LICENSE.md` overhaul — operator ruling 2026-09-29: our GPL kernel and modules ship (source-offer duty),
+the glibc row names only `gnueabihf`, the obligation column is unreviewed; Buildroot's `legal-info` gives
+the package manifest. **Still open:** what p5 (1.5 GB) becomes; whether an install over SSH is wanted at
+all (p6 cannot be rewritten while mounted). **Done when** a unit boots our p6, every component runs and
+the panel check passes.
 
 ### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
 

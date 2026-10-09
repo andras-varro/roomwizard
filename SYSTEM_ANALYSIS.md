@@ -711,7 +711,8 @@ Native rate is 48000 Hz; `plughw` and the OSS shim both sample-rate-convert auto
 `CONFIG_SND`, `SND_PCM`, `SND_SOC`, `SND_OMAP_SOC`, `SND_OMAP_SOC_MCBSP`, `SND_SOC_TWL4030` all `=y`
 (`usb_host/device_config:2711`, `:2713`, `:2757`, `:2778-2779`, `:2855`); OSS is `SND_PCM_OSS` emulation
 (`:2718-2720`) over the same cards. Userspace ships `libasound.so.2.0.0` (**alsa-lib 1.2.1.2**), `aplay`,
-`amixer`, `alsactl`, 238 files under `/usr/share/alsa`, but no headers — a same-version alsa-lib build
+`amixer`, `alsactl`, 238 files under `/usr/share/alsa` — which **`libasound` itself needs**: every
+`snd_pcm_open` loads `alsa.conf`, and `plughw`/`plug` are defined only there [inferred from alsa-lib] — but no headers — a same-version alsa-lib build
 supplies them (§6.3). Measured 2026-09-27 on our kernel: a soft-float client played on `plughw:0,0` and
 `plughw:1,0`. **Native apps and ScummVM are such clients, and ALSA is their only output** — `audio_out.c`
 opens `plughw:N,0` for `/dev/dspN`; on `.188` 2026-09-28 native apps and ScummVM held `/dev/snd/pcmC1D0p`, and ScummVM's 22050 Hz
@@ -969,7 +970,11 @@ was ever wired to the capture path.
 
 **Ethernet.** 10/100 Mbps via `J3` (TE MagJack `1-6605834-1`) and `U15` **SMSC LAN9221** — a
 **MAC+PHY in one package** on the GPMC bus, so there is no separate PHY chip. MAC seen on RW09:
-`00:07:B0:0D:30:53`.
+`00:07:B0:0D:30:53`. **The MAC lives in the LAN9221's own EEPROM, so no rootfs sets it** — measured
+2026-10-08 on `.188`: `ethtool -e eth0` reads `a5` (the valid-EEPROM signature) then `00 07 b0 0d 3c 5e`,
+which is what `smsc911x` prints at probe (3.17 s, before any init script); `addr_assign_type` is `0`, and
+neither `/proc/cmdline` nor the DT carries one (`smsc911x_init_mac_address` falls back to the registers the
+EEPROM loaded).
 
 **Power: 802.3af PoE only. There is no barrel jack.** The whole PD front end is on the main board:
 
@@ -1892,7 +1897,7 @@ runtime.** Native apps and ScummVM link the device's loader, glibc, `libasound`,
 | Item | Purpose |
 |---|---|
 | `watchdog` | Hardware watchdog feeder — prevents hard resets |
-| `sshd` | Remote access |
+| `sshd` | Remote access. ⚠️ **Its host keys ship in the image, so every unit has the same ones** — `md5sum /etc/ssh/ssh_host_{ed25519,rsa}_key.pub` identical on `.188` and `.73` (measured 2026-10-08) |
 | `cron` | Runs the two surviving jobs |
 | `dbus` | System message bus |
 | `audio-enable` | Speaker amplifier GPIO + mixer setup |
