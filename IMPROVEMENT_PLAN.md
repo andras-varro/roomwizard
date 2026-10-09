@@ -332,7 +332,8 @@ No per-unit state: flash, insert, and it boots and works. First boot picks a ran
 login to every unit flashed from it); the image build refuses one, like the `lib/rw-state.sh` deny check. `sshd` is key-only, so
 the image is closed out of the box (root's password is locked: no default password exists). Operator's design, 2026-10-09: a
 Control Panel SSH page — mode Off / Key only / Key + password / Password only, "set password" on the on-screen keyboard (required
-before any password mode), and the unit's IP and host name; README then explains: set a password, pick Key + password,
+before any password mode), the unit's IP, and the host name — editable there too (replaces the random first-boot name; same
+`/etc/hostname` + `/etc/hosts` logic as `commissioning/set-hostname.sh`, then mDNS re-announces); README then explains: set a password, pick Key + password,
 `ssh-copy-id`, optionally back to Key only. While `/etc/touch_calibration.conf` is
 absent the launcher shows a "not calibrated" status text on top. The per-unit image (a `state.tar` from one unit) stays as the second
 package kind. Needs: `rootfs/make-card-image.sh` accepting no `state.tar` (today `rootfs/fetch-card-parts.sh` makes it from a unit);
