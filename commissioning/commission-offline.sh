@@ -679,7 +679,7 @@ echo "────────────────────────�
 INSTALLED=()
 put() {
     local mode="$1" dev="$2" src="$3" dest
-    dest=$(rw_clean_offline_path "$BASE" "$dev") || { err "cannot resolve $dev"; }
+    dest=$(rw_offline_path "$BASE" "$dev") || { err "cannot resolve $dev"; }
     case "$dest/" in
         "${BASE%/}"/*) ;;
         *) err "$dev resolved to $dest, outside $BASE — refusing" ;;
@@ -768,7 +768,7 @@ fi
 if [[ -z "$DRY" ]]; then
     while IFS=$'\t' read -r pkind pmode ptarget psrc; do
         case "$pkind" in install|touch) ;; *) continue ;; esac
-        pdest=$(rw_clean_offline_path "$BASE" "$ptarget") || continue
+        pdest=$(rw_offline_path "$BASE" "$ptarget") || continue
         INSTALLED+=("$pmode|$ptarget|$pdest")
     done < "$PROV_PLAN"
 fi
@@ -805,7 +805,7 @@ for m in "$BUNDLE_DIR"/manifest.d/*.md5; do
     [[ -f "$m" ]] || continue
     while read -r want dev; do
         [[ -n "$dev" ]] || continue
-        dest=$(rw_clean_offline_path "$BASE" "$dev")
+        dest=$(rw_offline_path "$BASE" "$dev")
         if [[ ! -f "$dest" ]]; then
             vfail "not installed: $dev"
             continue
@@ -853,7 +853,7 @@ if [[ -d "$APPS_DIR" ]]; then
             continue
         fi
         EXECS="$EXECS $e"
-        d=$(rw_clean_offline_path "$BASE" "$e")
+        d=$(rw_offline_path "$BASE" "$e")
         if [[ ! -f "$d" ]]; then
             vfail "$(basename "$a"): exec=$e is not installed"
         elif [[ ! -x "$d" ]]; then
@@ -862,7 +862,7 @@ if [[ -d "$APPS_DIR" ]]; then
         # icon= too: a tile with no icon renders, but as a hole in the grid.
         i=$(sed -n 's/^icon=//p' "$a" | head -1 | tr -d '\r')
         if [[ -n "$i" ]]; then
-            di=$(rw_clean_offline_path "$BASE" "$i")
+            di=$(rw_offline_path "$BASE" "$i")
             [[ -f "$di" ]] || vfail "$(basename "$a"): icon=$i is not installed"
         fi
     done
@@ -879,7 +879,7 @@ if [[ ! -f "$DEFAULT_APP_FILE" ]]; then
     vfail "no /opt/roomwizard/default-app — /etc/init.d/roomwizard-app would start nothing"
 else
     da=$(head -1 "$DEFAULT_APP_FILE" | tr -d ' \t\r\n')
-    dad=$(rw_clean_offline_path "$BASE" "$da")
+    dad=$(rw_offline_path "$BASE" "$da")
     if [[ ! -x "$dad" ]]; then
         vfail "default-app is '$da', which is not installed or not executable"
     else

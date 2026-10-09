@@ -240,7 +240,7 @@ fi
 # stages; this one needs the first two verbatim and substitutes for the third.
 #
 # Normalise before comparing, so that "//" and "/." cannot spell root past a
-# string test — rw_clean_check_base does exactly this, for exactly this reason,
+# string test — rw_offline_base_ok does exactly this, for exactly this reason,
 # and both spellings pass an un-normalised comparison.
 OUT_NORM="$(printf '%s' "$OUT" | sed -e 's:/\{2,\}:/:g' -e 's:/\.$:/:' -e 's:\(.\)/$:\1:')"
 case "$OUT_NORM" in

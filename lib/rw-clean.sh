@@ -33,7 +33,7 @@
 #
 # Keeps come first so a single-pass interpreter works.  Paths are DEVICE-absolute
 # in the plan; mapping them onto p2/p3/p5/p6 is the offline executor's job, via
-# rw_clean_offline_path.
+# rw_offline_path.
 #
 # ── ⚠️ The guard is the point of this file ──────────────────────────────────
 #
@@ -300,75 +300,6 @@ rw_clean_plan() {
 }
 
 # ---------------------------------------------------------------------------
-# rw_clean_offline_path BASE DEVPATH
-#
-# Map a device-absolute path onto the right one of the four offline mounts.
-#
-# LONGEST prefix wins, and it must match on a component boundary.  Both matter:
-# role "root" has device path "/", which prefixes everything, and /home/rootless
-# must not be mistaken for something under /home/root.
-# ---------------------------------------------------------------------------
-rw_clean_offline_path() {
-    local base="$1" dev="$2" entry role dp best_role="root" best_dp="/" rest
-    [ -n "$base" ] || return 1
-    case "$dev" in /*) ;; *) return 1 ;; esac
-    base="${base%/}"
-
-    for entry in $RW_ROLE_DEVICE_PATH; do
-        role="${entry%%:*}"
-        dp="${entry#*:}"
-        [ "$dp" = "/" ] && continue
-        case "$dev" in
-            "$dp"|"$dp"/*)
-                if [ "${#dp}" -gt "${#best_dp}" ]; then best_role="$role"; best_dp="$dp"; fi
-                ;;
-        esac
-    done
-
-    if [ "$best_role" = "root" ]; then
-        echo "$base/root$dev"
-    else
-        rest="${dev#$best_dp}"
-        echo "$base/$best_role$rest"
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# rw_clean_check_base BASE
-#
-# The guard.  Refuses every base that would make the rules resolve to the dev
-# host's own filesystem.  Called once by rw_clean_apply and again by every
-# rw_clean_del, because a caller that skipped the first would otherwise get no
-# check at all.
-# ---------------------------------------------------------------------------
-rw_clean_check_base() {
-    local base="$1" norm
-
-    if [ -z "$base" ]; then
-        echo "rw-clean: refusing an EMPTY base — the rules would resolve to this host's /etc, /opt and /usr/lib" >&2
-        return 1
-    fi
-
-    # Collapse repeated slashes and a trailing "/." so that "//" and "/." are
-    # recognised as "/" rather than sneaking past a string comparison.
-    norm=$(printf '%s' "$base" | sed -e 's:/\{2,\}:/:g' -e 's:/\.$:/:' -e 's:\(.\)/$:\1:')
-    if [ "$norm" = "/" ] || [ -z "$norm" ]; then
-        echo "rw-clean: refusing base '$base' — '/' is this host's root, not a mounted card" >&2
-        return 1
-    fi
-
-    case "$base" in
-        *..*) echo "rw-clean: refusing base '$base' — it contains '..'" >&2; return 1 ;;
-    esac
-
-    if [ ! -d "$base" ]; then
-        echo "rw-clean: refusing base '$base' — not a directory" >&2
-        return 1
-    fi
-    return 0
-}
-
-# ---------------------------------------------------------------------------
 # rw_clean_del BASE DEVPATH
 #
 # Delete DEVPATH (device-absolute, globs allowed in the last component) from the
@@ -380,7 +311,7 @@ rw_clean_check_base() {
 rw_clean_del() {
     local base="$1" dev="$2" dir name hostdir m sz
 
-    rw_clean_check_base "$base" || return 1
+    rw_offline_base_ok "$base" || return 1
 
     if [ -z "$dev" ]; then
         echo "rw_clean_del: empty path" >&2
@@ -398,7 +329,7 @@ rw_clean_del() {
     dir="${dev%/*}"; [ -n "$dir" ] || dir="/"
     name="${dev##*/}"
 
-    hostdir=$(rw_clean_offline_path "$base" "$dir") || return 1
+    hostdir=$(rw_offline_path "$base" "$dir") || return 1
 
     # Belt and braces: after mapping, the target must still be under the base.
     case "$hostdir/" in
@@ -438,7 +369,7 @@ rw_clean_del() {
 rw_clean_truncate() {
     local base="$1" dev="$2" host sz
 
-    rw_clean_check_base "$base" || return 1
+    rw_offline_base_ok "$base" || return 1
     case "$dev" in
         /*) ;;
         *) echo "rw_clean_truncate: path must be device-absolute: $dev" >&2; return 1 ;;
@@ -447,7 +378,7 @@ rw_clean_truncate() {
         *..*) echo "rw_clean_truncate: refusing a path containing '..': $dev" >&2; return 1 ;;
     esac
 
-    host=$(rw_clean_offline_path "$base" "$dev") || return 1
+    host=$(rw_offline_path "$base" "$dev") || return 1
     [ -f "$host" ] || return 0
 
     sz=$(du -sh "$host" 2>/dev/null | awk '{print $1}')
@@ -474,7 +405,7 @@ rw_clean_truncate() {
 rw_clean_apply() {
     local base="$1" plan="$2" kind a b hostdir child name kept
 
-    rw_clean_check_base "$base" || return 1
+    rw_offline_base_ok "$base" || return 1
     [ -f "$plan" ] || { echo "rw_clean_apply: no such plan: $plan" >&2; return 1; }
 
     while IFS=$'\t' read -r kind a b; do
@@ -484,7 +415,7 @@ rw_clean_apply() {
 
     while IFS=$'\t' read -r kind a b; do
         [ "$kind" = "sweep" ] || continue
-        hostdir=$(rw_clean_offline_path "$base" "$a") || continue
+        hostdir=$(rw_offline_path "$base" "$a") || continue
         [ -d "$hostdir" ] || continue
 
         # find rather than a glob, so a dotfile is swept too and a dangling

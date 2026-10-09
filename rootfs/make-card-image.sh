@@ -265,7 +265,7 @@ fill 6 "$ROOTTAR" "$PARTS/state.tar"
 
 if [ -n "$BUNDLE" ]; then
     echo "== installing bundle $BUNDLE_TAG"
-    # The layout rw_check_card_mounts and rw_clean_offline_path expect: p6 as root,
+    # The layout rw_check_card_mounts and rw_offline_path expect: p6 as root,
     # p2/p3/p5 as data/log/backup — mounted, so a bundle path under /home/root/data
     # lands on p2 and not in p6's empty mount point. p1 is not mounted.
     for rp in root:6 data:2 log:3 backup:5; do

@@ -155,7 +155,7 @@ CANARY_MD5=$(cd "$CANARY" && find . | LC_ALL=C sort | md5sum)
 
 # A base that is a real directory with real content to remove.  Laid out like a
 # mounted card — BASE/{root,data,log,backup} — because rw_clean_del resolves a
-# device-absolute path through rw_clean_offline_path, so /opt/junk lands under
+# device-absolute path through rw_offline_path, so /opt/junk lands under
 # BASE/root and not BASE.
 B="$TMP/base"
 mkdir -p "$B/root/etc/rc5.d" "$B/root/opt/junk" "$B/root/usr/lib" \
@@ -431,15 +431,15 @@ echo ""
 echo "D. device-absolute path -> the right one of four offline mounts"
 # ═══════════════════════════════════════════════════════════════════════════
 
-assert_eq "/mnt/x/root/etc/rc5.d"        "$(rw_clean_offline_path /mnt/x /etc/rc5.d)"              "D1 /etc -> p6"
-assert_eq "/mnt/x/data/websign"          "$(rw_clean_offline_path /mnt/x /home/root/data/websign)" "D2 data -> p2"
-assert_eq "/mnt/x/log/Xorg.0.log"        "$(rw_clean_offline_path /mnt/x /home/root/log/Xorg.0.log)" "D3 log -> p3"
-assert_eq "/mnt/x/backup/factory"        "$(rw_clean_offline_path /mnt/x /home/root/backup/factory)" "D4 backup -> p5"
+assert_eq "/mnt/x/root/etc/rc5.d"        "$(rw_offline_path /mnt/x /etc/rc5.d)"              "D1 /etc -> p6"
+assert_eq "/mnt/x/data/websign"          "$(rw_offline_path /mnt/x /home/root/data/websign)" "D2 data -> p2"
+assert_eq "/mnt/x/log/Xorg.0.log"        "$(rw_offline_path /mnt/x /home/root/log/Xorg.0.log)" "D3 log -> p3"
+assert_eq "/mnt/x/backup/factory"        "$(rw_offline_path /mnt/x /home/root/backup/factory)" "D4 backup -> p5"
 # The longest-prefix case: root's device path is "/", which prefixes everything,
 # and /home/root is NOT one of the three mount points.
-assert_eq "/mnt/x/root/home/root/.ssh"   "$(rw_clean_offline_path /mnt/x /home/root/.ssh)"         "D5 /home/root/.ssh -> p6, not p2"
-assert_eq "/mnt/x/root/home/rootless"    "$(rw_clean_offline_path /mnt/x /home/rootless)"          "D6 a prefix match on a partial component does not count"
-assert_eq "/mnt/x/data"                  "$(rw_clean_offline_path /mnt/x /home/root/data)"          "D7 the mount point itself maps to the mount"
+assert_eq "/mnt/x/root/home/root/.ssh"   "$(rw_offline_path /mnt/x /home/root/.ssh)"         "D5 /home/root/.ssh -> p6, not p2"
+assert_eq "/mnt/x/root/home/rootless"    "$(rw_offline_path /mnt/x /home/rootless)"          "D6 a prefix match on a partial component does not count"
+assert_eq "/mnt/x/data"                  "$(rw_offline_path /mnt/x /home/root/data)"          "D7 the mount point itself maps to the mount"
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""

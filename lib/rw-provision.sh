@@ -5,9 +5,9 @@
 #                   (as an interpreter piped to the device over ssh).
 #
 # SOURCED, not executed:   . "$REPO_ROOT/lib/rw-provision.sh"
-#                          (needs lib/rw-identify.sh and lib/rw-clean.sh sourced first —
-#                          rw_clean_offline_path does the p2/p3/p5/p6 mapping and
-#                          rw_clean_check_base is the guard)
+#                          (needs lib/rw-identify.sh sourced first — rw_offline_path does the
+#                          p2/p3/p5/p6 mapping and rw_offline_base_ok is the guard — and
+#                          lib/rw-clean.sh, whose keep rules rw_provision_check_keeps reads)
 #
 # The delete half is lib/rw-clean.sh; this is the install half
 # and it is deliberately the same shape.
@@ -465,14 +465,14 @@ rw_provision_apply_offline() {
     local base="$1" plan="$2" repo="$3"
     local kind mode target src dest hostdir name m rc=0
 
-    rw_clean_check_base "$base" || return 1
+    rw_offline_base_ok "$base" || return 1
     [ -f "$plan" ] || { echo "rw_provision_apply_offline: no such plan: $plan" >&2; return 1; }
     [ -d "$repo" ] || { echo "rw_provision_apply_offline: no such repo root: $repo" >&2; return 1; }
 
     # resolve <device-path> -> host path, refusing anything that lands outside base.
     _rwp_resolve() {
         local dev="$1" out
-        out=$(rw_clean_offline_path "$base" "$dev") || return 1
+        out=$(rw_offline_path "$base" "$dev") || return 1
         case "$out/" in
             "${base%/}"/*) ;;
             *) echo "  refusing $dev — resolved to $out, outside $base" >&2; return 1 ;;

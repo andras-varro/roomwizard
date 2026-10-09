@@ -352,6 +352,74 @@ rw_role_device_path() {
 }
 
 # ---------------------------------------------------------------------------
+# rw_offline_path BASE DEVPATH
+#
+# Map a device-absolute path onto the right one of the four offline mounts.
+#
+# LONGEST prefix wins, and it must match on a component boundary.  Both matter:
+# role "root" has device path "/", which prefixes everything, and /home/rootless
+# must not be mistaken for something under /home/root.
+# ---------------------------------------------------------------------------
+rw_offline_path() {
+    local base="$1" dev="$2" entry role dp best_role="root" best_dp="/" rest
+    [ -n "$base" ] || return 1
+    case "$dev" in /*) ;; *) return 1 ;; esac
+    base="${base%/}"
+
+    for entry in $RW_ROLE_DEVICE_PATH; do
+        role="${entry%%:*}"
+        dp="${entry#*:}"
+        [ "$dp" = "/" ] && continue
+        case "$dev" in
+            "$dp"|"$dp"/*)
+                if [ "${#dp}" -gt "${#best_dp}" ]; then best_role="$role"; best_dp="$dp"; fi
+                ;;
+        esac
+    done
+
+    if [ "$best_role" = "root" ]; then
+        echo "$base/root$dev"
+    else
+        rest="${dev#$best_dp}"
+        echo "$base/$best_role$rest"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# rw_offline_base_ok BASE
+#
+# The guard.  Refuses every base that would make device-absolute paths resolve
+# to the dev host's own filesystem: unprefixed, /etc, /opt and /usr/lib are THIS
+# host's.  Every offline writer calls it before its first write.
+# ---------------------------------------------------------------------------
+rw_offline_base_ok() {
+    local base="$1" norm
+
+    if [ -z "$base" ]; then
+        echo "rw-identify: refusing an EMPTY base — the rules would resolve to this host's /etc, /opt and /usr/lib" >&2
+        return 1
+    fi
+
+    # Collapse repeated slashes and a trailing "/." so that "//" and "/." are
+    # recognised as "/" rather than sneaking past a string comparison.
+    norm=$(printf '%s' "$base" | sed -e 's:/\{2,\}:/:g' -e 's:/\.$:/:' -e 's:\(.\)/$:\1:')
+    if [ "$norm" = "/" ] || [ -z "$norm" ]; then
+        echo "rw-identify: refusing base '$base' — '/' is this host's root, not a mounted card" >&2
+        return 1
+    fi
+
+    case "$base" in
+        *..*) echo "rw-identify: refusing base '$base' — it contains '..'" >&2; return 1 ;;
+    esac
+
+    if [ ! -d "$base" ]; then
+        echo "rw-identify: refusing base '$base' — not a directory" >&2
+        return 1
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # rw_host_root_disk
 #
 # Echo the whole disk this host boots from.

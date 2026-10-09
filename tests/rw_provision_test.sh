@@ -7,8 +7,8 @@
 #
 #   wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && ./tests/rw_provision_test.sh"
 #
-# The delete half's suite is tests/rw_clean_test.sh, and the
-# two share rw_clean_offline_path — path mapping is tested there, not here.
+# The delete half's suite is tests/rw_clean_test.sh; path mapping and the base
+# guard (rw_offline_path, rw_offline_base_ok) are tests/rw_identify_test.sh's.
 #
 # ── What each group of cases is for ────────────────────────────────────────
 #

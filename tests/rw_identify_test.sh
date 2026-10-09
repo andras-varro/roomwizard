@@ -288,6 +288,40 @@ else
 fi
 
 echo ""
+echo "rw_offline_path / rw_offline_base_ok"
+expect_eq "/mnt/x/root/etc/rc5.d"      "$(rw_offline_path /mnt/x /etc/rc5.d)"                "/etc → p6"
+expect_eq "/mnt/x/data/websign"        "$(rw_offline_path /mnt/x /home/root/data/websign)"   "data → p2"
+expect_eq "/mnt/x/log/Xorg.0.log"      "$(rw_offline_path /mnt/x /home/root/log/Xorg.0.log)" "log → p3"
+expect_eq "/mnt/x/backup/factory"      "$(rw_offline_path /mnt/x /home/root/backup/factory)" "backup → p5"
+# Longest prefix wins: root's device path "/" prefixes everything, and
+# /home/root itself is NOT one of the three mount points.
+expect_eq "/mnt/x/root/home/root/.ssh" "$(rw_offline_path /mnt/x /home/root/.ssh)"           "/home/root/.ssh → p6, not p2"
+expect_eq "/mnt/x/root/home/rootless"  "$(rw_offline_path /mnt/x /home/rootless)"            "a partial-component prefix does not count"
+expect_eq "/mnt/x/data"                "$(rw_offline_path /mnt/x /home/root/data)"           "the mount point itself maps to the mount"
+if rw_offline_path /mnt/x etc/rc5.d >/dev/null 2>&1; then
+    bad "a relative device path must not resolve"
+else
+    ok "a relative device path does not resolve"
+fi
+
+# The guard every offline writer calls first: unprefixed, the rules resolve to
+# this host's own /etc, /opt and /usr/lib.
+mkdir -p "$TMP/offline-base"
+for b in "" "/" "/." "//" "$TMP/offline-base/../offline-base" "$TMP/does-not-exist"; do
+    if rw_offline_base_ok "$b" 2>/dev/null; then
+        bad "base '$b' must be refused"
+    else
+        ok "base '$b' is refused"
+    fi
+done
+# The positive control: a guard that refuses everything is invisible.
+if rw_offline_base_ok "$TMP/offline-base" 2>/dev/null; then
+    ok "a real directory is accepted as a base"
+else
+    bad "a real directory must be accepted as a base"
+fi
+
+echo ""
 echo "rw_host_root_disk / rw_is_host_root_disk"
 
 HOST_ROOT_DISK=$(rw_host_root_disk 2>/dev/null || true)
@@ -400,10 +434,10 @@ echo "  $PASS passed, $FAIL failed, $SKIP skipped"
 # = 33.  rw_host_root_disk's 3 are skippable (they need a working lsblk), and the
 # two real card images are gitignored, so neither is counted.  The 4 synthetic
 # rw_is_card_disk cases need sfdisk, so on a host without it the floor drops to
-# 29 -- otherwise fixing the skip above just trades a red FAIL for a red harness
+# 44 -- otherwise fixing the skip above just trades a red FAIL for a red harness
 # error, which is the same defect wearing a different label.
-MIN_CASES=33
-[ "$HAVE_SFDISK" = no ] && MIN_CASES=29
+MIN_CASES=48
+[ "$HAVE_SFDISK" = no ] && MIN_CASES=44
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then
     echo -e "  ${RED}HARNESS ERROR${NC}: only $TOTAL cases ran, expected at least $MIN_CASES."
     echo "  Cases were skipped that cannot be skipped, or the file was truncated."
