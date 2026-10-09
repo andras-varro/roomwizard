@@ -1,0 +1,14 @@
+#!/bin/sh
+# Credit the random pool from a seed saved by the previous boot, and save a fresh one.
+# Nothing on this board feeds the kernel entropy early, so without a seed crng init comes
+# about 2 minutes after boot and sshd, which waits for it, starts only then. The first boot
+# of a new card has no seed and stays slow. The seed lives in /var/lib/seedrng on the root
+# filesystem; a seed shipped in the image would be shared by every unit and is not made.
+case "$1" in
+    start|stop)
+        seedrng
+        ;;
+    restart|reload) ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

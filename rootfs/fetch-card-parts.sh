@@ -2,10 +2,9 @@
 # fetch-card-parts.sh <unit-ip> <outdir>
 #
 # Reads the pieces of a running RoomWizard's SD card that make-card-image.sh
-# needs to build a whole card image whose p6 is our own root filesystem: the
-# partition table and p1 (raw), the extended-partition boot records, the
-# CONTENT of the three data partitions (they are mounted read-write on the
-# unit, so tar, not dd), and the per-unit files of the live p6.
+# needs: the partition table and p1 (raw), the extended-partition boot records
+# and the per-unit files of the live p6. The three data partitions are NOT read:
+# the new card gets them empty (nothing of the vendor stays on it).
 #
 # READ-ONLY on the unit: everything streams over ssh stdout, nothing is written
 # there. Run it as the normal WSL user (that user's key reaches the unit under
@@ -61,11 +60,6 @@ while read -r name start _; do
     echo "ebr-$n: sector $((start - 63)), signature $sig"
     [ "$sig" = 55aa ] || die "ebr-$n has no 55AA signature"
 done < "$OUT/geometry.txt"
-
-echo "== data partitions (tar, numeric ids)"
-rssh 'tar -C /home/root/data -cf - .' > "$OUT/p2.tar" || die "p2 tar"
-rssh 'tar -C /home/root/log -cf - .' > "$OUT/p3.tar" || die "p3 tar"
-rssh 'tar -C /home/root/backup -cf - .' > "$OUT/p5.tar" || die "p5 tar"
 
 echo "== per-unit state of the live p6"
 # The list is built on the unit so that only files which exist are named, and

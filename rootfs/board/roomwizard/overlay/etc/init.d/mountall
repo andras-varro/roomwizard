@@ -12,6 +12,10 @@ case "$1" in
         mkdir -p /var/volatile/run /var/volatile/lock /var/volatile/tmp /var/volatile/cache
         chmod 1777 /var/volatile/tmp
         chmod 1777 /var/volatile/lock
+        # /var/lib/avahi-autoipd links here (Buildroot's layout); its S05avahi-setup.sh,
+        # which made it, is not shipped. Without it avahi-autoipd logs "stat(): No such file".
+        mkdir -p /var/volatile/tmp/avahi-autoipd
+        chown avahi:avahi /var/volatile/tmp/avahi-autoipd
         mkdir -p /home/root/log
         ;;
     stop|restart|reload) ;;

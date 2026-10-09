@@ -66,6 +66,16 @@ fi
 
 cd "$BR_SRC"
 make O="$BUILD_DIR" BR2_EXTERNAL="${SCRIPT_DIR}" BR2_DL_DIR="$DL_DIR" roomwizard_defconfig
+# defconfig silently drops a symbol whose dependency is unset (bash needs
+# BUSYBOX_SHOW_OTHERS), so every set line must survive into .config.
+# BR2_DL_DIR is excluded: the command line overrides it with an expanded path.
+dropped=$(grep -E '^BR2_[A-Z0-9_]+=' "${SCRIPT_DIR}/configs/roomwizard_defconfig" | grep -v '^BR2_DL_DIR=' |
+    grep -vxF -f "${BUILD_DIR}/.config" || true)
+if [ -n "$dropped" ]; then
+    echo "roomwizard_defconfig lines that did not reach .config (an unmet dependency):" >&2
+    echo "$dropped" >&2
+    exit 1
+fi
 make O="$BUILD_DIR" BR2_DL_DIR="$DL_DIR" -j"$(nproc)"
 
 cp "${BUILD_DIR}/images/rootfs.tar" "${OUT_DIR}/rootfs.tar"

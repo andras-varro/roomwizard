@@ -1,10 +1,12 @@
 #!/bin/bash
-# make-card-image.sh <partsdir> <rootfs.tar> <out.img>
+# make-card-image.sh [--modules <dir>] <partsdir> <rootfs.tar> <out.img>
 #
 # Builds a whole SD-card IMAGE FILE for a RoomWizard whose p6 is our own root
 # filesystem. Inputs: the directory fetch-card-parts.sh filled (partition table
-# and p1 raw, the extended-partition boot records, the content of the three data
-# partitions, the per-unit state of the old p6) and a Buildroot rootfs.tar.
+# and p1 raw, the extended-partition boot records, the per-unit state of the old
+# p6), a Buildroot rootfs.tar, and a directory of kernel modules (*.ko, built by
+# kernel/build-modules.sh --out <dir>; default ~/rw-kmods of the invoking user,
+# i.e. $SUDO_USER under sudo; cy8ctmg120_ts.ko must be there).
 #
 # Run as ROOT in WSL (wsl.exe -u root -e bash -lc ...), on the native WSL fs:
 # DrvFs (/mnt/c) keeps no symlinks, modes or device nodes, so the image is
@@ -13,14 +15,41 @@
 # never opens /dev/mmcblk* or any other disk, and any argument that is a
 # block device is refused.
 #
-# The p1 area (mlo, u-boot.bin, ctrlblock.bin) is copied byte for byte, so the
-# boot chain is the unit's own and the recovery stays "write the old card back".
+# p1 is copied byte for byte (the FAT geometry must not change), then everything
+# on it except the five boot-chain files is deleted. p2/p3/p5 are made fresh and
+# EMPTY; p6 gets the rootfs, the per-unit state and the kernel modules.
 set -u
 
 die() { echo "FAIL: $*" >&2; exit 1; }
 
-[ $# -eq 3 ] || { echo "usage: $0 <partsdir> <rootfs.tar> <out.img>" >&2; exit 2; }
+usage() {
+    cat <<'USAGE'
+Usage: make-card-image.sh [--modules <dir>] <partsdir> <rootfs.tar> <out.img>
+
+  --modules <dir>  directory of kernel modules (*.ko) copied to p6
+                   /lib/modules/4.14.52/extra/ (default: ~/rw-kmods of the
+                   invoking user, $SUDO_USER under sudo). cy8ctmg120_ts.ko is required.
+  -h, --help       this text
+USAGE
+}
+MODDIR=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -h|--help) usage; exit 0 ;;
+        --modules) [ $# -ge 2 ] || { usage >&2; exit 2; }; MODDIR="$2"; shift 2 ;;
+        --modules=*) MODDIR="${1#--modules=}"; shift ;;
+        --) shift; break ;;
+        -*) usage >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
+[ $# -eq 3 ] || { usage >&2; exit 2; }
 PARTS="$1"; ROOTTAR="$2"; OUT="$3"
+if [ -z "$MODDIR" ]; then
+    UHOME=$HOME
+    if [ -n "${SUDO_USER:-}" ]; then UHOME=$(getent passwd "$SUDO_USER" | cut -d: -f6); fi
+    MODDIR="$UHOME/rw-kmods"
+fi
 
 for a in "$@"; do
     [ ! -b "$a" ] || die "$a is a block device; this script only writes an image file"
@@ -34,7 +63,8 @@ esac
 [ ! -e "$OUTABS" ] || [ -f "$OUTABS" ] || die "$OUTABS exists and is not a regular file"
 [ -d "$PARTS" ] || die "no parts directory $PARTS"
 [ -f "$ROOTTAR" ] || die "no rootfs tar $ROOTTAR"
-for f in geometry.txt head.bin md5.txt state.tar p2.tar p3.tar p5.tar; do
+[ -f "$MODDIR/cy8ctmg120_ts.ko" ] || die "no $MODDIR/cy8ctmg120_ts.ko (build with kernel/build-modules.sh --out <dir>, or pass --modules)"
+for f in geometry.txt head.bin md5.txt state.tar; do
     [ -f "$PARTS/$f" ] || die "missing $PARTS/$f"
 done
 for t in sfdisk losetup mke2fs mkswap e2fsck truncate; do
@@ -101,7 +131,7 @@ echo "all seven partitions match geometry.txt (p4 by start only)"
 
 LOOP=$(losetup -P --show -f "$OUTABS") || die "losetup"
 echo "== loop device $LOOP"
-for n in 2 3 5 6 7; do
+for n in 1 2 3 5 6 7; do
     PD=$(rw_part_dev "$LOOP" "$n")
     for _ in 1 2 3 4 5 6 7 8 9 10; do [ -b "$PD" ] && break; sleep 0.5; done
     [ -b "$PD" ] || die "$PD did not appear"
@@ -114,11 +144,33 @@ echo "== mkfs"
 mkext() { mke2fs -F -q -t "$1" -O "$2" -L "$3" -m 1 "$4" || die "mke2fs $4"; }
 mkext ext4 ^metadata_csum,^64bit rw-data "$(rw_part_dev "$LOOP" 2)"
 mkext ext4 ^metadata_csum,^64bit rw-log "$(rw_part_dev "$LOOP" 3)"
-mkext ext3 none rw-backup "$(rw_part_dev "$LOOP" 5)"
+# p5: formatted like p2, empty and not mounted (kept so the table matches the unit).
+mkext ext4 ^metadata_csum,^64bit rw-spare "$(rw_part_dev "$LOOP" 5)"
 mkext ext4 ^metadata_csum,^64bit rw-root "$(rw_part_dev "$LOOP" 6)"
 mkswap "$(rw_part_dev "$LOOP" 7)" > /dev/null || die "mkswap"
 
+echo "== p1: whitelist (the byte copy keeps the FAT geometry; only entries are deleted)"
+P1DEV=$(rw_part_dev "$LOOP" 1)
 mkdir "$MNT/p" || die "mkdir mnt"
+mount -t vfat "$P1DEV" "$MNT/p" || die "mount p1"
+P1KEEP="mlo u-boot.bin u-boot-sd.bin ctrlblock.bin uImage-system"
+shopt -s nullglob dotglob
+for e in "$MNT/p"/*; do
+    b=$(basename "$e")
+    keep=0
+    for k in $P1KEEP; do [ "${b,,}" != "${k,,}" ] || keep=1; done   # FAT names are case-insensitive
+    if [ "$keep" -eq 0 ]; then
+        echo "p1: removing $b"
+        rm -rf -- "$e" || die "rm p1/$b"
+    fi
+done
+shopt -u nullglob dotglob
+for k in $P1KEEP; do [ -f "$MNT/p/$k" ] || die "p1 lacks $k after the whitelist"; done
+sync
+echo "p1 final listing:"
+ls -la "$MNT/p"
+umount "$MNT/p" || die "umount p1"
+
 fill() {   # fill <partnum> <tar>...
     local n="$1"; shift
     mount "$(rw_part_dev "$LOOP" "$n")" "$MNT/p" || die "mount p$n"
@@ -126,19 +178,25 @@ fill() {   # fill <partnum> <tar>...
         tar --numeric-owner -xpf "$t" -C "$MNT/p" || die "extract $t into p$n"
     done
     if [ "$n" = 6 ]; then
-        # The three data partitions mount here; their content is on p2/p3/p5.
+        # The data partitions mount here; the mount points stay empty (p5 is not mounted).
         mkdir -p "$MNT/p/home/root/data" "$MNT/p/home/root/log" "$MNT/p/home/root/backup"
         [ ! -d "$MNT/p/home/root/.ssh" ] || chmod 700 "$MNT/p/home/root/.ssh"
         [ ! -f "$MNT/p/home/root/.ssh/authorized_keys" ] || chmod 600 "$MNT/p/home/root/.ssh/authorized_keys"
-        echo "p6 holds $(find "$MNT/p" -xdev | wc -l) entries; files inside the three mount points: $(find "$MNT/p/home/root/data" "$MNT/p/home/root/log" "$MNT/p/home/root/backup" -mindepth 1 | wc -l)"
+        EXTRA="$MNT/p/lib/modules/4.14.52/extra"
+        mkdir -p "$EXTRA" || die "mkdir $EXTRA"
+        NKO=0
+        for ko in "$MODDIR"/*.ko; do
+            [ -f "$ko" ] || continue
+            install -m 0644 -o 0 -g 0 "$ko" "$EXTRA/" || die "install $ko"
+            NKO=$((NKO + 1))
+        done
+        [ -f "$EXTRA/cy8ctmg120_ts.ko" ] || die "cy8ctmg120_ts.ko did not land in p6"
+        echo "p6 holds $(find "$MNT/p" -xdev | wc -l) entries; $NKO kernel modules in /lib/modules/4.14.52/extra"
     fi
     sync
     umount "$MNT/p" || die "umount p$n"
 }
-echo "== filling partitions"
-fill 2 "$PARTS/p2.tar"
-fill 3 "$PARTS/p3.tar"
-fill 5 "$PARTS/p5.tar"
+echo "== filling p6 (p2, p3, p5 stay empty)"
 fill 6 "$ROOTTAR" "$PARTS/state.tar"
 
 echo "== fsck"
@@ -154,9 +212,12 @@ done
 losetup -d "$LOOP" && LOOP=""
 sync
 
-echo "== head check"
-IMG_MD5=$(dd if="$OUTABS" bs=512 count="$P2START" status=none | md5sum | awk '{print $1}')
-if [ "$IMG_MD5" = "$WANT_MD5" ]; then MATCH=yes; else MATCH=no; fi
+echo "== head check (MBR and gap before p1; p1 itself was edited on purpose)"
+P1START=$(geom mmcblk0p1 2)
+[ -n "$P1START" ] || die "geometry.txt lacks p1"
+IMG_MD5=$(dd if="$OUTABS" bs=512 count="$P1START" status=none | md5sum | awk '{print $1}')
+HEAD_MD5=$(dd if="$PARTS/head.bin" bs=512 count="$P1START" status=none | md5sum | awk '{print $1}')
+if [ "$IMG_MD5" = "$HEAD_MD5" ]; then MATCH=yes; else MATCH=no; fi
 
 STATE_N=$(tar -tf "$PARTS/state.tar" | grep -vc '/$')
 echo
@@ -164,7 +225,7 @@ echo "==================== SUMMARY ===================="
 echo "image:           $OUTABS"
 echo "size:            $(stat -c %s "$OUTABS") bytes apparent, $(du -h "$OUTABS" | awk '{print $1}') allocated"
 echo "rootfs tar:      $ROOTTAR ($(stat -c %y "$ROOTTAR"))"
-echo "head md5 match:  $MATCH (sectors 0..$((P2START - 1)) vs the unit's md5)"
+echo "head match:      $MATCH (sectors 0..$((P1START - 1)) vs head.bin)"
 echo "fsck:            $([ "$FSCK_BAD" -eq 0 ] && echo 'all four clean' || echo 'PROBLEMS, see above')"
 echo "state carried:   $STATE_N non-directory entries from the old p6"
 echo

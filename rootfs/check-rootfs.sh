@@ -110,12 +110,17 @@ n=$(awk '{ name = $0; sub(/^[^ ]+ +[^ ]+ +[0-9]+ +[^ ]+ +[^ ]+ +/, "", name); su
 
 has lib/ld-linux.so.3
 check "lib/ld-linux.so.3 present" $?
+# The deploy scripts run their remote halves under bash; BusyBox ships no bash applet.
+has bin/bash
+check "bin/bash present" $?
 
 # fstab
-for dev in '/dev/mmcblk0p2 /home/root/data' '/dev/mmcblk0p3 /home/root/log' '/dev/mmcblk0p5 /home/root/backup'; do
+for dev in '/dev/mmcblk0p2 /home/root/data' '/dev/mmcblk0p3 /home/root/log'; do
     member etc/fstab | tr -s ' \t' '  ' | grep -q "^$dev "
     check "fstab mounts $dev" $?
 done
+! member etc/fstab | grep -q 'mmcblk0p5'
+check "fstab does not mount p5 (kept formatted but unmounted)" $?
 
 # /var/log is the log partition
 [ "$(target_of var/log)" = "/home/root/log" ]

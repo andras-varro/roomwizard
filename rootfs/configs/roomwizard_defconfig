@@ -31,6 +31,11 @@ BR2_TARGET_GENERIC_ROOT_PASSWD=""
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_ROOMWIZARD_PATH)/board/roomwizard/overlay"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_ROOMWIZARD_PATH)/board/roomwizard/post-build.sh"
 
+# The deploy scripts run their remote halves as `ssh "$DEVICE" bash <<'REMOTE'`.
+# bash depends on SHOW_OTHERS (it only unhides packages BusyBox overlaps); without it
+# defconfig drops BR2_PACKAGE_BASH silently.
+BR2_PACKAGE_BUSYBOX_SHOW_OTHERS=y
+BR2_PACKAGE_BASH=y
 BR2_PACKAGE_OPENSSH=y
 BR2_PACKAGE_DBUS=y
 BR2_PACKAGE_AVAHI=y

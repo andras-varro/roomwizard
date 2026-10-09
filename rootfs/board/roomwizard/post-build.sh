@@ -31,6 +31,8 @@ link() { # <runlevel dir> <link name> <script in init.d>
     ln -sfn "../init.d/$3" "$TARGET/etc/$1/$2"
 }
 link rcS.d S01mountall    mountall
+# After mountall by name order: seedrng writes its new seed to the root filesystem.
+link rcS.d S01seedrng     seedrng
 link rcS.d S02alignment   alignment
 link rcS.d S03udev        udev
 link rcS.d S04hostname    hostname
@@ -46,6 +48,7 @@ for lvl in rc0.d rc6.d; do
     link $lvl K20dbus-1     dbus-1
     link $lvl K30hwclock.sh hwclock.sh
     link $lvl K40syslog     syslog
+    link $lvl K50seedrng    seedrng
     link $lvl K99watchdog   watchdog
 done
 mkdir -p "$TARGET/etc/rc1.d" "$TARGET/etc/rc2.d" "$TARGET/etc/rc3.d" "$TARGET/etc/rc4.d"
