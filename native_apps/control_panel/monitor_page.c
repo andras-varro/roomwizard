@@ -56,8 +56,7 @@ typedef struct {
 static const char *mount_points[] = {
     "/",
     "/home/root/data",
-    "/home/root/log",
-    "/home/root/backup"
+    "/home/root/log"
 };
 #define NUM_MOUNT_POINTS ((int)(sizeof(mount_points) / sizeof(mount_points[0])))
 
