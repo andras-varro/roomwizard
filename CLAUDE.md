@@ -55,6 +55,7 @@ don't copy.
 | `device-files/CLAUDE.md` | what is installed verbatim, and how to author the two rules files |
 | `tests/CLAUDE.md` | the host regressions, what each cannot see, sabotage-harness discipline |
 | `scummvm-roomwizard/CLAUDE.md`, `vnc_client/CLAUDE.md` | those ports |
+| `rootfs/CLAUDE.md` | our own p6 root filesystem: Buildroot tree, ABI, rc links, per-unit state, card image |
 | `kernel/CLAUDE.md` | our 4.14.52 image: its patches, DT changes, build script and missing drivers — notes in `kernel/README.md` |
 
 ⚠️ **The vanilla kernel tree is the authority for every subsystem the vendor did not patch, and

@@ -430,6 +430,12 @@ shellcheck-baseline.txt	tests/CLAUDE.md	-
 harness-error channel	tests/rw_provision_test.sh	IMPROVEMENT_PLAN.md
 musb_debug.h:38-41	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 omap2430.c:171-181	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
+BUSYBOX_SHOW_OTHERS	rootfs/CLAUDE.md	IMPROVEMENT_PLAN.md
+S01seedrng	rootfs/CLAUDE.md	IMPROVEMENT_PLAN.md
+GLIBC_2.28	rootfs/CLAUDE.md	IMPROVEMENT_PLAN.md
+config.c:65	rootfs/CLAUDE.md	IMPROVEMENT_PLAN.md
+u-boot-sd.bin	rootfs/CLAUDE.md	IMPROVEMENT_PLAN.md
+rw-spare	rootfs/CLAUDE.md	IMPROVEMENT_PLAN.md
 EOF
 }
 
@@ -920,7 +926,8 @@ group_c() {
 # The plan shed five closed entries and its ceiling was not lowered, for the reason above.
 # 2026-10-05: kernel/README.md 160 -> 180. The Mainline and omapfb section is new content (the measured upstream omapfb finding,
 # the unproven list, gains and costs) that replaced a false claim held in the system analysis; no stale text in this file to cut.
-#
+# 2026-10-09: rootfs/CLAUDE.md is a NEW entry at 60, with its measured size 46 non-blank lines plus room for the card-image
+# rules still to land; it holds the facts moved in from the closed root-filesystem plan entry (group C rows).
 #
 #
 ceilings() {
@@ -942,6 +949,7 @@ ceilings() {
 137	.claude/skills/doc-update/SKILL.md
 180	kernel/README.md
 40	kernel/CLAUDE.md
+60	rootfs/CLAUDE.md
 EOF
 }
 
