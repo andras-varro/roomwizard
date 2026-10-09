@@ -176,8 +176,8 @@ PRE
 do_commission_offline() {
     hdr "6. THE WHOLE JOB — commission a card completely, offline (one boot)"
     cat <<'PRE'
-  This does the WHOLE job against the card: password, host name, SSH, DHCP, the
-  vendor cleanup, the boot scripts and the apps. Then one boot and the unit works.
+  This does the WHOLE job against the card: password, host name, SSH, DHCP,
+  the boot scripts and the apps. Then one boot and the unit works.
   Items 1, 2 and 3 are the same ground in three phases, with two boots and a
   network in between; this is the delivery path.
 
@@ -243,12 +243,10 @@ do_setup_menu() {
     while true; do
         hdr "2. Set up a booted device (ssh)"
         cat <<'MENU'
-  a) Standard setup                 disable bloatware, install launcher, reboot
-  b) Setup + remove vendor software  --remove       (named stacks, PERMANENT)
-  c) Deep clean DRY RUN             --deep-clean --dry-run   (deletes nothing)
-  d) Deep clean                     --deep-clean   (+ whitelist sweeps, PERMANENT)
-  e) Set host name only             --hostname NAME          (no reboot)
-  f) Device status                  --status                 (read-only)
+  a) Update this unit               backup, install the plan, reboot
+  b) Update DRY RUN                 --dry-run      (prints the plan; changes nothing)
+  c) Set host name only             --hostname NAME          (no reboot)
+  d) Device status                  --status                 (read-only)
   q) Back
 MENU
         echo ""
@@ -259,29 +257,10 @@ MENU
                bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" || err "Setup failed."
                pause ;;
             b) ask_target || { pause; continue; }
-               warn "--remove DELETES the Steelcase software, including the 472 MB"
-               warn "on-device factory restore. Recovery is your host-side card image."
-               if confirm "Proceed with --remove on $TARGET?"; then
-                   bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --remove || err "Setup failed."
-               else
-                   warn "Skipped."
-               fi
-               pause ;;
-            c) ask_target || { pause; continue; }
-               bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --deep-clean --dry-run \
+               bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --dry-run \
                    || err "Dry run failed."
                pause ;;
-            d) ask_target || { pause; continue; }
-               warn "Deep clean is PERMANENT: --remove plus every path in /etc/rc*.d,"
-               warn "/opt and the data partitions that the keep-list does not name."
-               warn "Run option (c) first if you have not."
-               if confirm "Really deep-clean $TARGET?"; then
-                   bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --deep-clean || err "Deep clean failed."
-               else
-                   warn "Skipped."
-               fi
-               pause ;;
-            e) ask_target || { pause; continue; }
+            c) ask_target || { pause; continue; }
                local name
                read -r -p "New host name (single label, e.g. rw09): " name
                if [ -n "$name" ]; then
@@ -291,7 +270,7 @@ MENU
                    warn "No name given; skipped."
                fi
                pause ;;
-            f) ask_target || { pause; continue; }
+            d) ask_target || { pause; continue; }
                bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --status || err "Status failed."
                pause ;;
             back|q|Q|"") return 0 ;;
@@ -402,7 +381,7 @@ PRE
     wait_for_ssh "$TARGET" 300 || return 1
 
     hdr "Phase 2: system setup"
-    info "Standard setup (no file removal). Use menu item 2 for --remove/--deep-clean."
+    info "Update: backs the unit up first, then installs the plan and reboots."
     confirm "Run setup on $TARGET now?" || { warn "Stopping after Phase 1."; return 0; }
     bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" || { err "Setup failed."; return 1; }
 
@@ -440,7 +419,7 @@ while true; do
     [ -n "$TARGET" ] && info "Target: $TARGET"
     cat <<'MENU'
   1) Prepare the card            PHASE 1 of 3   offline; then 2 and 3, over ssh
-  2) Set up a booted device      PHASE 2 of 3   ssh; cleans, ends in a reboot
+  2) Set up a booted device      PHASE 2 of 3   ssh; backup, update, reboot
   3) Deploy apps                 PHASE 3 of 3   ssh; source, bundle or release
   5) All three, in sequence      1 -> 2 -> 3    ssh between; you boot the unit
 

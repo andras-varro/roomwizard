@@ -189,20 +189,12 @@ expect "$(printf 'install\t0755\t/etc/init.d/audio-enable\tdevice-files/audio-en
     "$PLAN_ALL" "B1 the audio-enable install, with its declared mode"
 expect "$(printf 'install\t0644\t/etc/sysctl.conf\tdevice-files/sysctl.conf')" \
     "$PLAN_ALL" "B2 sysctl.conf is 0644, not 0755"
-expect "$(printf 'unlink\t-\t/etc/sysctl.d/99-security.conf\t-')" \
-    "$PLAN_ALL" "B2b the old sysctl.d copy, which nothing reads, is removed"
 expect "$(printf 'install\t0755\t/etc/init.d/roomwizard-app\tdevice-files/roomwizard-app')" \
     "$PLAN_ALL" "B3 the init script is installed under a different name from its source"
 expect "$(printf 'link\t-\t/etc/rc5.d/S99roomwizard-app\t../init.d/roomwizard-app')" \
     "$PLAN_ALL" "B4 the rc5.d app link"
-expect "$(printf 'unlink\t-\t/etc/rc5.d/S*roomwizard-games\t-')" \
-    "$PLAN_ALL" "B5 the stale former-name link is unlinked — THE drift this file fixes"
-expect "$(printf 'touch\t0644\t/var/watchdog_test\t-')" \
-    "$PLAN_ALL" "B6 the watchdog bypass"
 expect "$(printf 'directive\t-\t/etc/ssh/sshd_config\tPermitEmptyPasswords=no')" \
     "$PLAN_ALL" "B7 the sshd directive that the factory default requires"
-expect "$(printf 'dropline\t-\t/etc/profile\twsplatform\\.conf')" \
-    "$PLAN_ALL" "B8 the /etc/profile fix, which used to exist only on the online path"
 expect "$(printf 'link-opt\t-\t/etc/rc5.d/S30avahi-daemon\t../init.d/avahi-daemon')" \
     "$PLAN_ALL" "B9 the avahi link is optional, not mandatory"
 
@@ -219,8 +211,6 @@ pos() { printf '%s\n' "$PLAN_ALL" | grep -n "^$1" | head -1 | cut -d: -f1; }
 LAST_UNLINK=$(printf '%s\n' "$PLAN_ALL" | grep -n '^unlink' | tail -1 | cut -d: -f1)
 FIRST_LINK=$(pos link)
 LAST_INSTALL=$(printf '%s\n' "$PLAN_ALL" | grep -n '^install' | tail -1 | cut -d: -f1)
-FIRST_DROP=$(pos dropline)
-LAST_OTHER=$(printf '%s\n' "$PLAN_ALL" | grep -vn '^dropline' | tail -1 | cut -d: -f1)
 
 if [ "$LAST_UNLINK" -lt "$FIRST_LINK" ]; then
     ok "B11 every unlink precedes every link — else the glob eats the link just made"
@@ -231,11 +221,6 @@ if [ "$LAST_INSTALL" -lt "$FIRST_LINK" ]; then
     ok "B12 every install precedes every link — else the link dangles on a card"
 else
     bad "B12 every install precedes every link (last install $LAST_INSTALL, first link $FIRST_LINK)"
-fi
-if [ "$FIRST_DROP" -gt "$LAST_OTHER" ]; then
-    ok "B13 dropline comes last — it edits files install may have just written"
-else
-    bad "B13 dropline comes last (first dropline $FIRST_DROP, last other $LAST_OTHER)"
 fi
 
 # ── Groups ────────────────────────────────────────────────────────────────
@@ -261,32 +246,22 @@ else
     ok "B18 an unknown group name is refused"
 fi
 
-# ── Network listeners: syslogd off the network, avahi narrowed ───────────────
-# Measured on a unit in service: /usr/sbin/syslogd is sysklogd v2.1.1, started with
-# no arguments, and its own help says it listens on UDP 514 on every interface
-# unless started with -s; twice means no network socket at all. The init script
-# passes $SYSLOGD from /etc/default/syslogd, which the image does not ship.
-expect "$(printf 'install\t0644\t/etc/default/syslogd\tdevice-files/default-syslogd')" \
-    "$PLAN_ALL" "B19 /etc/default/syslogd is installed, in base"
-expect "$(printf 'install\t0644\t/etc/default/syslogd\tdevice-files/default-syslogd')" \
-    "$PLAN_NOMDNS" "B19b and stays when mDNS is off — it has nothing to do with avahi"
+# ── Vendor-era leftovers: units imaged with an older bundle carry these ──────
+# Our own root has no Steelcase watchdog and its syslog init script never sources
+# /etc/default/syslogd, so the files are dead weight and are only removed, never made.
+for _p in /opt/roomwizard/disable-steelcase.sh /var/watchdog_test /etc/default/syslogd; do
+    expect "$(printf 'unlink\t-\t%s\t-' "$_p")" \
+        "$PLAN_ALL" "B6 the stale vendor-era file $_p is unlinked"
+done
+absent "$(printf 'touch\t0644\t/var/watchdog_test\t-')" \
+    "$PLAN_ALL" "B6b the watchdog bypass is no longer CREATED"
+
+# ── avahi narrowed ───────────────────────────────────────────────────────────expect "$(printf 'install	0644	/etc/avahi/avahi-daemon.conf	device-files/avahi-daemon.conf')" \
 expect "$(printf 'install\t0644\t/etc/avahi/avahi-daemon.conf\tdevice-files/avahi-daemon.conf')" \
     "$PLAN_ALL" "B20 avahi-daemon.conf is installed with the mdns group"
 absent "$(printf 'install\t0644\t/etc/avahi/avahi-daemon.conf\tdevice-files/avahi-daemon.conf')" \
     "$PLAN_NOMDNS" "B21 --no-mdns leaves the vendor avahi config alone"
 
-# What syslogd is actually started with: the init script's own expansion of $SYSLOGD.
-# shellcheck source=/dev/null
-SYSLOGD_ARGS=$( (SYSLOGD=; . "$REPO_DIR/device-files/default-syslogd" 2>/dev/null; echo "$SYSLOGD") )
-NSFLAG=0
-for w in $SYSLOGD_ARGS; do
-    case "$w" in -ss) NSFLAG=$((NSFLAG + 2)) ;; -s) NSFLAG=$((NSFLAG + 1)) ;; esac
-done
-assert_eq 2 "$NSFLAG" "B22 syslogd gets -s twice: no UDP socket at all (got '$SYSLOGD_ARGS')"
-case " $SYSLOGD_ARGS " in
-    *" -a"*|*" -b"*) bad "B23 no -a/-b, which would re-open a network socket" ;;
-    *)               ok  "B23 no -a/-b, which would re-open a network socket" ;;
-esac
 
 # avahi-daemon.conf is INI; a commented key is NOT set — the vendor file ships
 # "#allow-interfaces=eth0", so a grep for the key alone would pass on it.
@@ -376,7 +351,6 @@ build_card() {
     : > "$CARD/root/etc/init.d/avahi-daemon"; chmod +x "$CARD/root/etc/init.d/avahi-daemon"
     : > "$CARD/root/usr/sbin/avahi-daemon"
     # Stale links from an older setup run — the drift this file fixes.
-    ln -sf ../init.d/roomwizard-games "$CARD/root/etc/rc5.d/S50roomwizard-games"
     ln -sf ../init.d/roomwizard-app   "$CARD/root/etc/rc5.d/S50roomwizard-app"
 }
 
@@ -412,7 +386,6 @@ exists "$CARD/root/etc/init.d/audio-enable"          "D4 audio-enable installed"
 exists "$CARD/root/etc/init.d/time-sync"             "D5 time-sync installed"
 exists "$CARD/root/etc/sysctl.conf"    "D6 sysctl.conf installed"
 exists "$CARD/root/etc/init.d/roomwizard-app"        "D7 the init script installed under its DEPLOYED name"
-exists "$CARD/root/opt/roomwizard/disable-steelcase.sh" "D8 disable-steelcase.sh installed, directory created"
 
 # The bytes must be the repo's, not a heredoc's idea of them.
 assert_eq "$(md5sum < "$REPO_DIR/device-files/audio-enable")" \
@@ -425,11 +398,9 @@ assert_eq "$(md5sum < "$REPO_DIR/device-files/roomwizard-app")" \
 # Modes. WSL's /tmp honours them; /mnt/c would not.
 assert_eq "755" "$(stat -c %a "$CARD/root/etc/init.d/audio-enable")" "D11 audio-enable is 0755"
 assert_eq "644" "$(stat -c %a "$CARD/root/etc/sysctl.conf")" "D12 sysctl.conf is 0644, as declared"
-assert_eq "755" "$(stat -c %a "$CARD/root/opt/roomwizard/disable-steelcase.sh")" "D13 disable-steelcase.sh is 0755"
 
 # Links, and that they RESOLVE — a dangling rc5.d link is skipped in silence.
-for l in rc5.d/S28time-sync rc5.d/S29audio-enable rc5.d/S99roomwizard-app \
-         rc2.d/S99roomwizard-app rc3.d/S99roomwizard-app rc4.d/S99roomwizard-app; do
+for l in rc5.d/S28time-sync rc5.d/S29audio-enable rc5.d/S99roomwizard-app; do
     if [ -L "$CARD/root/etc/$l" ] && [ -e "$CARD/root/etc/$l" ]; then
         ok "D14.$(basename "$l") $l links and resolves"
     else
@@ -443,14 +414,10 @@ else
 fi
 
 # The drift: stale links gone.
-gone "$CARD/root/etc/rc5.d/S50roomwizard-games" "D16 the stale former-name link is GONE — the offline path used to keep it"
 gone "$CARD/root/etc/rc5.d/S50roomwizard-app"   "D17 and the wrong-priority copy of our own link"
 
-exists "$CARD/root/var/watchdog_test"           "D18 the watchdog bypass file exists"
-assert_eq "644" "$(stat -c %a "$CARD/root/var/watchdog_test")" "D19 with its declared mode"
-
 # /etc/default and /etc/avahi are not in build_card: the installer must create them.
-for pair in "etc/default/syslogd:default-syslogd" "etc/avahi/avahi-daemon.conf:avahi-daemon.conf"; do
+for pair in "etc/avahi/avahi-daemon.conf:avahi-daemon.conf"; do
     t="${pair%%:*}"; s="${pair#*:}"
     if [ -f "$CARD/root/$t" ] && cmp -s "$REPO_DIR/device-files/$s" "$CARD/root/$t"; then
         ok "D19b /$t is byte-for-byte device-files/$s"
@@ -477,20 +444,6 @@ exists "$CARD/root/etc/ssh/sshd_config.orig" "D24 the factory sshd_config is bac
 assert_eq "$(printf 'PermitRootLogin yes\nPermitEmptyPasswords yes\n' | md5sum)" \
           "$(md5sum < "$CARD/root/etc/ssh/sshd_config.orig")" \
     "D25 and the backup is the FACTORY bytes, not the hardened ones"
-
-# droplines
-if grep -q 'wsplatform' "$CARD/root/etc/profile"; then
-    bad "D26 /etc/profile no longer sources the deleted wsplatform.conf"
-else
-    ok "D26 /etc/profile no longer sources the deleted wsplatform.conf"
-fi
-assert_eq "2" "$(grep -c . "$CARD/root/etc/profile")" "D27 and the rest of /etc/profile is intact"
-if grep -q 'tty4' "$CARD/root/etc/inittab"; then
-    bad "D28 the tty4 getty line is gone from /etc/inittab"
-else
-    ok "D28 the tty4 getty line is gone from /etc/inittab"
-fi
-assert_eq "1" "$(grep -c . "$CARD/root/etc/inittab")" "D29 and sysinit survived"
 
 # ── idempotence: a second run must be a no-op, not a doubling ────────────
 rw_provision_apply_offline "$CARD" "$TMP/plan" "$REPO_DIR" >/dev/null 2>&1
@@ -690,12 +643,10 @@ assert_eq 0 "$DIFFER" "F6 every installed file is byte-identical to its device-f
 
 assert_eq "$NINST" "$(grep -c '^mkdir -p' "$FW/ssh.calls" || :)" \
     "F7 a mkdir -p preceded every copy"
-# The two that do not exist on a vendor unit — /etc/init.d does, so it proves nothing.
+# The directory that may not exist on a unit — /etc/init.d does, so it proves nothing.
 NODIR=0
-for d in /opt/roomwizard /usr/local/bin; do
-    grep -q "mkdir -p '$d'" "$FW/ssh.calls" || NODIR=$((NODIR + 1))
-done
-assert_eq 0 "$NODIR" "F8 the two directories a vendor unit lacks are created first"
+grep -q "mkdir -p '/usr/local/bin'" "$FW/ssh.calls" || NODIR=1
+assert_eq 0 "$NODIR" "F8 the directory a unit may lack is created first"
 
 # ── F9-F11: a missing source is a refusal, before the device is touched ──────
 reset_stubs

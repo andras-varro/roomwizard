@@ -16,14 +16,13 @@
 # Set the default app with:
 #   echo /opt/roomwizard/app_launcher > /opt/roomwizard/default-app
 #
-# The system /usr/sbin/watchdog daemon (started by /etc/init.d/watchdog
-# via /etc/default/watchdog) feeds /dev/watchdog.  No separate feeder needed.
+# The hardware watchdog (/dev/watchdog) is fed by /sbin/watchdog, started by
+# rcS.d/S06watchdog (rootfs post-build.sh).  No separate feeder needed here.
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="RoomWizard App Launcher"
 NAME=roomwizard-app
 CONFIG=/opt/roomwizard/default-app
-DISABLE_SCRIPT=/opt/roomwizard/disable-steelcase.sh
 PIDFILE=/var/run/roomwizard-app.pid
 RESPAWN_SCRIPT=/opt/roomwizard/respawn.sh
 
@@ -77,22 +76,6 @@ app_pids() {
 
 do_start() {
     echo "Starting $DESC..."
-
-    # Disable Steelcase bloatware (idempotent — safe on every boot)
-    if [ -x "$DISABLE_SCRIPT" ]; then
-        # `|| touch` is the same safety net as the else branch: the script does
-        # the bypass as its very first command now, but a truncated scp or
-        # a CRLF shebang can still make it fail before that, and a device with an
-        # armed Steelcase watchdog reboots every ~70 minutes.
-        "$DISABLE_SCRIPT" || {
-            echo "WARNING: $DISABLE_SCRIPT failed, applying watchdog bypass only"
-            touch /var/watchdog_test
-        }
-    else
-        echo "WARNING: $DISABLE_SCRIPT not found, skipping cleanup"
-        # Minimal safety net: at least create the watchdog bypass
-        touch /var/watchdog_test
-    fi
 
     # Read configured app
     read_config

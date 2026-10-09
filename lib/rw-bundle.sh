@@ -19,7 +19,7 @@
 #
 # Deliberate, decided 2026-09-01: no device scripts go in.  A holder of nothing but
 # the tarball therefore gets xpad.ko/joydev.ko/ff-memless.ko/devmem_write and nothing
-# that loads them at boot, and gets no roomwizard-app or disable-steelcase.sh either.
+# that loads them at boot, and gets no roomwizard-app either.
 # That is not a gap to fix.  commissioning/commission-offline.sh is the only consumer
 # that installs those, it runs from a clone, so it has device-files/ beside it either
 # way — a self-sufficient tarball would buy a second copy of them and a second path

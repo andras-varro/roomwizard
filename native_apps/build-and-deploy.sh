@@ -510,8 +510,9 @@ ok "SSH OK"
 rw_bundle_clear_stamp "$DEVICE" \
     || warn "could not clear /opt/roomwizard/bundle.info — it may still name an older release"
 
-# Verify system setup has been done
-if ! ssh "$DEVICE" "[ -f /opt/roomwizard/disable-steelcase.sh ]" 2>/dev/null; then
+# Verify system setup has been done: the respawn loop that provision installs is what
+# starts the launcher this deploy is about to replace.
+if ! ssh "$DEVICE" "[ -x /etc/init.d/roomwizard-app ]" 2>/dev/null; then
     warn "System setup not detected on device."
     warn "Run commissioning/provision.sh first:  ../commissioning/provision.sh $DEVICE_IP"
     echo ""

@@ -90,6 +90,7 @@ SUITE_ROWS=(
     "check_arm_safe_test.sh|deploy"
     "commission_offline_test.sh|deploy"
     "commission_prep_test.sh|deploy"
+    "provision_online_test.sh|deploy"
     "rw_bundle_ssh_test.sh|deploy"
     "rw_clean_test.sh|deploy"
     "rw_identify_test.sh|deploy"
