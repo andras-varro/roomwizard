@@ -1,0 +1,10 @@
+#!/bin/sh
+# Apply /etc/sysctl.conf, which commissioning installs.
+case "$1" in
+    start|reload|restart)
+        [ -f /etc/sysctl.conf ] && sysctl -q -p /etc/sysctl.conf
+        ;;
+    stop) ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

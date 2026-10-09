@@ -1,0 +1,14 @@
+# /etc/inittab for BusyBox init. BusyBox ignores the runlevel field, so the SysV runlevel
+# directories are driven explicitly: rcS runs rcS.d at boot, then rc 5 runs rc5.d.
+# The provisioning scripts install their services as /etc/init.d/<name> plus a link
+# /etc/rc5.d/S<NN><name>, and this file is what makes those links run.
+::sysinit:/etc/init.d/rcS
+::wait:/etc/init.d/rc 5
+
+# Serial console on the UART header.
+ttyO1::respawn:/sbin/getty -L 115200 ttyO1 vt102
+
+# BusyBox halt, poweroff and reboot all run the shutdown entries below first.
+::ctrlaltdel:/sbin/reboot
+::shutdown:/etc/init.d/rc 0
+::restart:/sbin/init

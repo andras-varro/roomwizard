@@ -1,0 +1,28 @@
+#!/bin/sh
+# System message bus. The daemon drops to the dbus user and writes /run/messagebus.pid
+# (set in /usr/share/dbus-1/system.conf); /run is a link to /var/run.
+DAEMON=/usr/bin/dbus-daemon
+PIDFILE=/run/messagebus.pid
+case "$1" in
+    start)
+        [ -x "$DAEMON" ] || exit 0
+        mkdir -p /var/run/dbus /var/lib/dbus
+        chown dbus:dbus /var/run/dbus
+        dbus-uuidgen --ensure
+        start-stop-daemon -S -q -p "$PIDFILE" -x "$DAEMON" -- --system
+        ;;
+    stop)
+        start-stop-daemon -K -q -p "$PIDFILE"
+        rm -f "$PIDFILE"
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    reload)
+        dbus-send --print-reply --system --type=method_call --dest=org.freedesktop.DBus \
+            / org.freedesktop.DBus.ReloadConfig > /dev/null
+        ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

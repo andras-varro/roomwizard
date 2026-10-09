@@ -1,0 +1,30 @@
+#!/bin/sh
+# Bring the interfaces in /etc/network/interfaces up. A "hostname <name>" line from
+# /etc/hostname is added to every dhcp stanza first, so the DHCP request carries the unit's
+# name. BusyBox ifup runs udhcpc with -t1 -A3 -b: one attempt, then it backgrounds and keeps
+# retrying, so a missing cable delays boot by a few seconds, not forever.
+IFACES=/var/run/network-interfaces
+prepare() {
+    name=$(cat /etc/hostname 2>/dev/null)
+    awk -v h="$name" '
+        { print }
+        h != "" && /^iface[ \t].*[ \t]inet[ \t]+dhcp/ { print "    hostname " h }
+    ' /etc/network/interfaces > "$IFACES"
+}
+case "$1" in
+    start)
+        prepare
+        ifup -a -i "$IFACES"
+        ;;
+    stop)
+        [ -f "$IFACES" ] || prepare
+        ifdown -a -i "$IFACES"
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    reload) ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

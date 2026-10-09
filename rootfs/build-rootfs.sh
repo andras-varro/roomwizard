@@ -70,3 +70,6 @@ make O="$BUILD_DIR" BR2_DL_DIR="$DL_DIR" -j"$(nproc)"
 
 cp "${BUILD_DIR}/images/rootfs.tar" "${OUT_DIR}/rootfs.tar"
 ls -l "${OUT_DIR}/rootfs.tar"
+
+# A tarball that lacks the boot-critical files is a failed build, whatever make said.
+"${SCRIPT_DIR}/check-rootfs.sh" "${OUT_DIR}/rootfs.tar"

@@ -1,0 +1,10 @@
+# <file system>  <mount point>     <type>   <options>                    <dump> <pass>
+# /dev is devtmpfs, mounted by the kernel itself; do not mount it again.
+proc             /proc             proc     defaults                     0      0
+sysfs            /sys              sysfs    defaults                     0      0
+devpts           /dev/pts          devpts   mode=0620,gid=5              0      0
+tmpfs            /var/volatile     tmpfs    defaults,nodev               0      0
+tmpfs            /dev/shm          tmpfs    mode=0777                    0      0
+/dev/mmcblk0p2   /home/root/data   ext4     defaults,nodev,noatime       0      0
+/dev/mmcblk0p5   /home/root/backup ext3     defaults,nodev,noatime       0      0
+/dev/mmcblk0p3   /home/root/log    ext4     defaults,nodev,noatime       0      0

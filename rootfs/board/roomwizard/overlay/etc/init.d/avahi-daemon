@@ -1,0 +1,23 @@
+#!/bin/sh
+# mDNS responder, so <hostname>.local resolves. No boot link ships with the image:
+# commissioning adds /etc/rc5.d/S30avahi-daemon when this script exists. It needs dbus.
+DAEMON=/usr/sbin/avahi-daemon
+case "$1" in
+    start)
+        [ -x "$DAEMON" ] || exit 0
+        mkdir -p /var/run/avahi-daemon
+        "$DAEMON" -c || "$DAEMON" -D
+        ;;
+    stop)
+        "$DAEMON" -c && "$DAEMON" -k
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    reload)
+        "$DAEMON" -c && "$DAEMON" -r
+        ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

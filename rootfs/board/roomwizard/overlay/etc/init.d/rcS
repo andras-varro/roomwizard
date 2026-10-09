@@ -1,0 +1,9 @@
+#!/bin/sh
+# Boot-time services: run every /etc/rcS.d/S* link, in name order, with "start".
+# Started by init as the sysinit entry; init waits for it to finish.
+for s in /etc/rcS.d/S*; do
+    [ -e "$s" ] || continue
+    echo "rcS: $s"
+    if [ -x "$s" ]; then "$s" start; else sh "$s" start; fi
+done
+exit 0

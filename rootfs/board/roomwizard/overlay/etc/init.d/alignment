@@ -1,0 +1,11 @@
+#!/bin/sh
+# Make the kernel silently fix up unaligned accesses instead of logging or killing: the
+# vendor image set this to 0 on ARMv7 and the deployed binaries were tested that way.
+case "$1" in
+    start)
+        [ -w /proc/cpu/alignment ] && echo 0 > /proc/cpu/alignment
+        ;;
+    stop|restart|reload) ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

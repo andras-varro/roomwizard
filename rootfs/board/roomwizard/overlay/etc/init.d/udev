@@ -1,0 +1,23 @@
+#!/bin/sh
+# eudev: start the device manager and replay the events of the devices already present.
+case "$1" in
+    start)
+        [ -x /sbin/udevd ] || exit 0
+        udevd --daemon
+        udevadm trigger --type=subsystems --action=add
+        udevadm trigger --type=devices --action=add
+        udevadm settle --timeout=5
+        ;;
+    stop)
+        udevadm control --exit
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    reload)
+        udevadm control --reload
+        ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

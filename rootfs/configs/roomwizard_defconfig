@@ -26,8 +26,9 @@ BR2_INIT_BUSYBOX=y
 BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
 # No serial console is reachable on the unit.
 # BR2_TARGET_GENERIC_GETTY is not set
-# Empty root password until the init scripts that replace it exist.
+# Empty here; post-build.sh locks the account (key-only login).
 BR2_TARGET_GENERIC_ROOT_PASSWD=""
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_ROOMWIZARD_PATH)/board/roomwizard/overlay"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_ROOMWIZARD_PATH)/board/roomwizard/post-build.sh"
 
 BR2_PACKAGE_OPENSSH=y

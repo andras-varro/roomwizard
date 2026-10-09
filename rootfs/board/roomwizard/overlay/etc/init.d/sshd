@@ -1,0 +1,58 @@
+#!/bin/sh
+# OpenSSH server. Host keys live on the data partition (/home/root/data/ssh) so they survive
+# a reflash of the root filesystem; /etc/ssh/ssh_host_*_key link there. If that partition
+# is not mounted, the keys go to the tmpfs and sshd still starts, with fresh keys each boot.
+DAEMON=/usr/sbin/sshd
+PIDFILE=/var/run/sshd.pid
+KEYDIR=/home/root/data/ssh
+
+genkeys() {
+    if mountpoint -q /home/root/data; then
+        dir=$KEYDIR
+    else
+        dir=/var/run/ssh
+        logger -t sshd "data partition not mounted: host keys on tmpfs"
+    fi
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    # The links in /etc/ssh point at $KEYDIR, so the fallback keys must be reachable there.
+    if [ "$dir" != "$KEYDIR" ]; then
+        mkdir -p "$KEYDIR"
+        for t in ed25519 rsa; do
+            ln -sf "$dir/ssh_host_${t}_key" "$KEYDIR/ssh_host_${t}_key"
+            ln -sf "$dir/ssh_host_${t}_key.pub" "$KEYDIR/ssh_host_${t}_key.pub"
+        done
+    fi
+    for t in ed25519 rsa; do
+        if [ ! -s "$dir/ssh_host_${t}_key" ]; then
+            echo "sshd: generating $t host key"
+            ssh-keygen -q -t "$t" -N "" -f "$dir/ssh_host_${t}_key"
+        fi
+    done
+}
+
+case "$1" in
+    start)
+        [ -x "$DAEMON" ] || exit 0
+        genkeys
+        mkdir -p /var/empty
+        if ! "$DAEMON" -t; then
+            logger -t sshd "configuration or host key check failed: not starting"
+            exit 1
+        fi
+        start-stop-daemon -S -q -p "$PIDFILE" -x "$DAEMON"
+        ;;
+    stop)
+        start-stop-daemon -K -q -p "$PIDFILE"
+        rm -f "$PIDFILE"
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    reload)
+        start-stop-daemon -K -q -s HUP -p "$PIDFILE"
+        ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

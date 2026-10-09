@@ -1,0 +1,16 @@
+#!/bin/sh
+# Usage: rc <runlevel>
+# Run the links of one runlevel directory in name order: S* with "start" for a startup
+# level, K* with "stop" for 0 and 6. A script that fails does not stop the others.
+level=${1:-}
+case "$level" in
+    0|6) prefix=K; action=stop ;;
+    [1-5]) prefix=S; action=start ;;
+    *) echo "Usage: $0 <runlevel 0-6>" >&2; exit 1 ;;
+esac
+for s in /etc/rc"$level".d/"$prefix"*; do
+    [ -e "$s" ] || continue
+    echo "rc $level: $s $action"
+    if [ -x "$s" ]; then "$s" "$action"; else sh "$s" "$action"; fi
+done
+exit 0

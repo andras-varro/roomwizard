@@ -1,0 +1,20 @@
+#!/bin/sh
+# Mount the filesystems listed in /etc/fstab and lay out the volatile part of /var.
+# /var/run, /var/lock, /var/tmp and /var/cache are links into /var/volatile (a tmpfs),
+# which is empty after every boot, so the directories under it are created here.
+case "$1" in
+    start)
+        mount -o remount,rw / 2>/dev/null
+        mountpoint -q /proc || mount -t proc proc /proc
+        mountpoint -q /sys || mount -t sysfs sysfs /sys
+        mkdir -p /dev/pts /dev/shm
+        mount -a
+        mkdir -p /var/volatile/run /var/volatile/lock /var/volatile/tmp /var/volatile/cache
+        chmod 1777 /var/volatile/tmp
+        chmod 1777 /var/volatile/lock
+        mkdir -p /home/root/log
+        ;;
+    stop|restart|reload) ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

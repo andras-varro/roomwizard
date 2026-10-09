@@ -1,0 +1,24 @@
+#!/bin/sh
+# Feed the 60 s hardware watchdog. This starts early in boot: once /dev/watchdog is opened
+# the SoC resets if nothing writes it, and nothing else on this image does.
+# Stop uses SIGKILL on purpose. BusyBox watchdog answers SIGTERM by writing the magic
+# close character, which disarms the hardware timer; killing it hard leaves the timer
+# armed, so a shutdown that hangs still ends in a reset.
+PIDFILE=/var/run/watchdog.pid
+case "$1" in
+    start)
+        [ -c /dev/watchdog ] || exit 0
+        start-stop-daemon -S -q -p "$PIDFILE" -x /sbin/watchdog -- -t 10 -T 60 /dev/watchdog
+        ;;
+    stop)
+        start-stop-daemon -K -q -s KILL -p "$PIDFILE"
+        rm -f "$PIDFILE"
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    reload) ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

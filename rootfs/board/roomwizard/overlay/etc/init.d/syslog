@@ -1,0 +1,22 @@
+#!/bin/sh
+# BusyBox syslogd and klogd. The log is /home/root/log/messages (the log partition),
+# rotated at 1024 KB with four old copies kept.
+LOGFILE=/home/root/log/messages
+case "$1" in
+    start)
+        start-stop-daemon -S -q -b -m -p /var/run/syslogd.pid -x /sbin/syslogd -- -n -s 1024 -b 4 -O "$LOGFILE"
+        start-stop-daemon -S -q -b -m -p /var/run/klogd.pid -x /sbin/klogd -- -n
+        ;;
+    stop)
+        start-stop-daemon -K -q -p /var/run/klogd.pid
+        start-stop-daemon -K -q -p /var/run/syslogd.pid
+        rm -f /var/run/klogd.pid /var/run/syslogd.pid
+        ;;
+    restart)
+        "$0" stop
+        "$0" start
+        ;;
+    reload) ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0

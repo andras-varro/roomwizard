@@ -1,0 +1,7 @@
+# Read by /etc/init.d/networking. The script adds a "hostname" line from /etc/hostname to
+# every dhcp stanza, so the DHCP request carries the unit's name.
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp

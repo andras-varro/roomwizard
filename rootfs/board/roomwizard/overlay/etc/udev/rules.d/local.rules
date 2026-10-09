@@ -1,0 +1,3 @@
+# Symlink the touchscreen's event node. ID_INPUT_TOUCHSCREEN is set by the input_id builtin
+# in /lib/udev/rules.d/60-input-id.rules. The launcher and the games open this path.
+SUBSYSTEM=="input", KERNEL=="event[0-9]*", ENV{ID_INPUT_TOUCHSCREEN}=="1", SYMLINK+="input/touchscreen0"

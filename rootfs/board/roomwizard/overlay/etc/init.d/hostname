@@ -1,0 +1,10 @@
+#!/bin/sh
+# Set the kernel hostname from /etc/hostname.
+case "$1" in
+    start)
+        [ -f /etc/hostname ] && hostname -F /etc/hostname
+        ;;
+    stop|restart|reload) ;;
+    *) echo "Usage: $0 {start|stop|restart|reload}" >&2; exit 1 ;;
+esac
+exit 0
