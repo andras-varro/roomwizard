@@ -1,9 +1,8 @@
 browser_games/compile_servlet.sh SC2034 1
 browser_games/compile_servlet.sh SC2086 1
 commissioning/card-prep.sh SC2002 1
-commissioning/commission-offline.sh SC2001 1
 commissioning/commission-offline.sh SC2034 2
-commissioning/provision.sh SC2029 4
+commissioning/provision.sh SC2029 2
 deploy-all.sh SC2207 1
 device-files/enable-usb-host.sh SC2181 2
 lib/rw-clean.sh SC2034 1
@@ -35,11 +34,8 @@ tests/c11_plan_diff.sh SC2016 1
 tests/c11_plan_diff.sh SC2034 1
 tests/c11_plan_diff.sh SC2094 2
 tests/commission_offline_test.sh SC2016 2
-tests/commission_offline_test.sh SC2059 5
 tests/commission_prep_test.sh SC2016 3
 tests/doc_check.sh SC2129 1
-tests/make-fake-card.sh SC2016 1
-tests/make-fake-card.sh SC2028 1
 tests/measure_arm_gate_sabotage.sh SC2016 2
 tests/measure_bundle_ssh_sabotage.sh SC2016 4
 tests/measure_provision_sabotage.sh SC2016 4

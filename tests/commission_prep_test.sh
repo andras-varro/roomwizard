@@ -345,14 +345,6 @@ expect_out no  "Remaining steps"         "$TMP/orch.out" "orchestrated: no next-
 expect_out no  "Commissioning Complete!" "$TMP/orch.out" "orchestrated: no Complete banner"
 expect_out yes "Card prep complete"      "$TMP/orch.out" "orchestrated: says what happens next"
 
-# 12. The orchestrator must actually set the flag. Two correct halves that never
-#     meet is the failure this catches, and it is the whole fix in one grep.
-if grep -q 'RW_COMMISSION_ORCHESTRATED=1' "$REPO_DIR/commissioning/commission-offline.sh"; then
-    ok "commissioning/commission-offline.sh sets RW_COMMISSION_ORCHESTRATED"
-else
-    bad "commissioning/commission-offline.sh does NOT set RW_COMMISSION_ORCHESTRATED — the suppression is dead code"
-fi
-
 # ── the vendor network regenerator: verdict, wiring, and the two writes ─────
 #
 # WHY: phase 1 wrote a host name and DHCP, and an RW20 undid both ~7 s into the

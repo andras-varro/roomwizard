@@ -7,10 +7,9 @@
 #
 #   wsl.exe -u root -e bash -lc "cd /mnt/c/work/roomwizard && tests/commission_offline_test.sh"
 #
-# Needs root (or passwordless sudo), because commissioning/card-prep.sh writes
-# through sudo. ⚠️ Under a plain `wsl.exe -e bash -lc` this suite stalls on
-# `sudo: a password is required` at card-prep.sh's /etc/shadow write and reports no
-# useful verdict — `-u root` above is what sidesteps it, not a convenience.
+# Needs root, kept from when card-prep.sh wrote through sudo and a plain `wsl.exe -e bash -lc`
+# stalled on `sudo: a password is required`; nothing in this path asks for sudo now, but the
+# gate counts a non-root run as a skip, so `-u root` above stays the one way to run it.
 # Needs a staged bundle: ./release.sh --stage-only [--component
 # native_apps] leaves one in build/release.
 #
@@ -23,8 +22,8 @@
 #
 # Section 4 is the one exception and is the mirror image: the --no-usb skip must
 # exit ZERO and still say which flag skipped it, so it uses expect_says rather
-# than expect_fires; so is section 5's --unattended success case, beside its three
-# refusals. Section 0 is neither — it is the structural check on the fixture tree
+# than expect_fires; section 6 mixes both (refusals fire, the no-prompt run says). Section 0
+# is neither — it is the structural check on the fixture tree
 # itself.
 #
 # The sabotages run against COPIES — a copy of the bundle, and a copy of just the
@@ -52,7 +51,7 @@ ok()  { PASS=$((PASS + 1)); echo -e "  ${GREEN}pass${NC}  $1"; }
 bad() { FAIL=$((FAIL + 1)); echo -e "  ${RED}FAIL${NC}  $1"; }
 
 if [ "$(id -u)" -ne 0 ]; then
-    echo -e "  ${YELLOW}skip${NC}  needs root — commissioning/card-prep.sh writes through sudo"
+    echo -e "  ${YELLOW}skip${NC}  needs root — run it with wsl.exe -u root"
     exit 0
 fi
 if [ ! -d "$BUNDLE_SRC" ]; then
@@ -64,19 +63,14 @@ fi
 TMP=$(mktemp -d /tmp/rw-comm-test.XXXXXX)
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
-# The two answers plus commissioning/card-prep.sh's own three prompts.
-ANSWERS='yes\nrwfake\nrwfake\nrwfake\nn\n'
-
 # A copy of only what commissioning/commission-offline.sh reads. `cp -a` on device-files/ so the
-# init scripts keep their bytes — that copy is also what brings roomwizard-app and
-# disable-steelcase.sh, which the provision plan installs from there; nothing here
-# needs the 4 GB card images.
+# init scripts keep their bytes — that copy is also what brings roomwizard-app and the
+# other files the provision plan installs from there; nothing here needs the 4 GB card
+# images. lib/rw-clean.sh is here because rw_provision_check_keeps still reads through it.
 REPO="$TMP/repo"
 mkdir -p "$REPO/native_apps" "$REPO/commissioning" "$REPO/lib"
-for f in commissioning/commission-offline.sh commissioning/card-prep.sh commissioning/set-hostname.sh \
-         lib/rw-identify.sh lib/rw-clean.sh lib/rw-provision.sh lib/rw-bundle.sh \
-         lib/rw-release.sh lib/rw-ssh.sh \
-         COMMISSIONING.md; do
+for f in commissioning/commission-offline.sh \
+         lib/rw-identify.sh lib/rw-clean.sh lib/rw-provision.sh lib/rw-bundle.sh; do
     cp "$REPO_DIR/$f" "$REPO/$f"
 done
 cp -a "$REPO_DIR/device-files" "$REPO/device-files"
@@ -88,8 +82,8 @@ run() {
     local bundle="$1" repo="$2"; shift 2
     bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null || return 1
     set +e
-    OUT=$(printf "$ANSWERS" | bash "$repo/commissioning/commission-offline.sh" \
-              --bundle "$bundle" --base "$TMP/card" "$@" 2>&1)
+    OUT=$(bash "$repo/commissioning/commission-offline.sh" \
+              --bundle "$bundle" --base "$TMP/card" "$@" 2>&1 < /dev/null)
     ST=$?
     set -e
 }
@@ -137,16 +131,14 @@ echo "0. the fixture tree covers everything the tool sources"
 # cases below actually execute.
 #
 # ⚠️ Scans EVERY script in the fixture, not just commission-offline.sh. The first
-# version of this check read that one file, and thereby missed lib/rw-ssh.sh —
-# sourced by commissioning/card-prep.sh, which commission-offline.sh hands over to
-# in phase 3. Every case downstream of phase 3 died on it. A negative control for a
-# copy list has to cover every script the list is FOR.
+# version of this check read that one file, and thereby missed a library one of the
+# other scripts sourced (a copied tree has to cover every script the list is FOR).
 #
 # The pattern keys on the "/lib/" path component rather than on $REPO_ROOT, so a
 # caller using $SCRIPT_DIR/../lib is covered too.
 #
-# ⚠️ Third instance, measured 2026-09-06: lib/rw-release.sh. Unlike the two above
-# its `.` is EAGER — near the top of commission-offline.sh, before any argument is
+# ⚠️ The EAGER shape, measured 2026-09-06 on a library since dropped: unlike a lazy
+# source, its `.` sits near the top of commission-offline.sh, before any argument is
 # looked at — so every case in sections 1-4 died on it and the suite read 7 passed /
 # 30 failed. That shape is worth recognising: when only section 0 survives, the
 # fixture is what is broken, not the tool, and 0b names the file. A near-total red
@@ -157,8 +149,8 @@ SRC_LINES=$(grep -hoE '\.[[:space:]]+"[^"]*/lib/[^"]+"' \
 SRC_N=$(printf '%s\n' "$SRC_LINES" | grep -c . )
 # Ask which part of the count is the harness: a grep whose pattern has rotted
 # matches nothing and every per-file case below then passes over an empty list.
-if [ "$SRC_N" -ge 6 ]; then
-    ok "0a the source-line grep found $SRC_N libraries (>= 6)"
+if [ "$SRC_N" -ge 4 ]; then
+    ok "0a the source-line grep found $SRC_N libraries (>= 4)"
 else
     bad "0a the source-line grep found only $SRC_N libraries — the pattern has rotted"
 fi
@@ -186,7 +178,7 @@ else
     printf '%s\n' "$OUT" | tail -20 | sed 's/^/        /'
 fi
 for want in 'md5: all' '\+x: all' '\.app: all' 'default-app:' 'n: all .* /bin/sh' \
-            'boot links resolve' 'regenerator removed'; do
+            'boot links resolve'; do
     if printf '%s\n' "$OUT" | grep -qE "$want"; then
         ok "1b every verify check ran: /$want/"
     else
@@ -301,7 +293,7 @@ expect_fires 'no ELF binaries' "2g a bundle with no ARM binaries is refused, not
 # say so loudly rather than report a pass over zero artifacts. Simulated through
 # the OBJDUMP override, because uninstalling binutils to test this is absurd.
 set +e
-OUT=$(printf "$ANSWERS" | OBJDUMP=definitely-no-such-objdump bash "$REPO/commissioning/commission-offline.sh" \
+OUT=$(OBJDUMP=definitely-no-such-objdump bash "$REPO/commissioning/commission-offline.sh" \
           --bundle "$BUNDLE" --base "$TMP/card" 2>&1); ST=$?
 set -e
 if [ "$ST" -ne 0 ] && printf '%s\n' "$OUT" | grep -q 'IS NOT INSTALLED' \
@@ -313,7 +305,7 @@ fi
 
 bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null
 set +e
-OUT=$(printf "$ANSWERS" | OBJDUMP=definitely-no-such-objdump bash "$REPO/commissioning/commission-offline.sh" \
+OUT=$(OBJDUMP=definitely-no-such-objdump bash "$REPO/commissioning/commission-offline.sh" \
           --bundle "$BUNDLE" --base "$TMP/card" --arm-check=skip 2>&1); ST=$?
 set -e
 if [ "$ST" -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'NOT CHECKED'; then
@@ -328,14 +320,6 @@ rm -f "$B/root/opt/games/snake"
 run "$B" "$REPO"
 expect_fires 'not self-consistent' "2h a manifest entry with no staged file is refused"
 
-# ── --no-clean must SAY what it leaves behind rather than quietly doing so.
-run "$BUNDLE" "$REPO" --no-clean
-if [ "$ST" -eq 0 ] && printf '%s\n' "$OUT" | grep -q 'websign in place'; then
-    ok "2i --no-clean warns that the host name will be overwritten on boot"
-else
-    bad "2i --no-clean warns that the host name will be overwritten on boot"
-fi
-
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "3. the card itself"
@@ -346,7 +330,7 @@ echo "3. the card itself"
 bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null
 mv "$TMP/card/root" "$TMP/card/.r"; mv "$TMP/card/data" "$TMP/card/root"; mv "$TMP/card/.r" "$TMP/card/data"
 set +e
-OUT=$(printf "$ANSWERS" | bash "$REPO/commissioning/commission-offline.sh" \
+OUT=$(bash "$REPO/commissioning/commission-offline.sh" \
           --bundle "$BUNDLE" --base "$TMP/card" 2>&1); ST=$?
 set -e
 expect_fires 'do not look right|does not look like' "3a the four mounts in the wrong order are refused"
@@ -354,7 +338,7 @@ expect_fires 'do not look right|does not look like' "3a the four mounts in the w
 # A base that is not a card at all.
 mkdir -p "$TMP/notacard"
 set +e
-OUT=$(printf "$ANSWERS" | bash "$REPO/commissioning/commission-offline.sh" \
+OUT=$(bash "$REPO/commissioning/commission-offline.sh" \
           --bundle "$BUNDLE" --base "$TMP/notacard" 2>&1); ST=$?
 set -e
 expect_fires 'do not look right|does not look like' "3b a directory that is not a card is refused"
@@ -394,55 +378,72 @@ fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "5. --unattended, the mode rootfs/make-card-image.sh --bundle drives"
+echo "6. the image step takes no prompt and refuses the vendor-era flags"
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# It skips the two interactive steps, so each of the two flags that make that
-# safe is refused when absent — above all --no-clean: an unattended run that
-# skipped the clean on its own and reported success is the defect named in
-# commissioning/CLAUDE.md. The refusals use run(), whose piped "yes" would answer
-# the backup question, so a refusal here is the guard's and not an EOF's.
+# commission-offline.sh is the installer rootfs/make-card-image.sh --bundle runs
+# against partitions it has mounted; updates to a unit in service go online
+# through provision.sh. A flag from the retired card-update path must be REFUSED
+# by name: one accepted and ignored reads as a choice honoured, and --no-clean in
+# particular would otherwise be a no-op that sounds like safety.
+#
+# Each refusal runs with a mounted fixture and a good bundle, so the only thing
+# that can make it fail is the flag.
 
-run "$BUNDLE" "$REPO" --unattended
-expect_fires 'unattended refused: .*--no-clean' "5a --unattended without --no-clean is refused, naming it"
-run "$BUNDLE" "$REPO" --unattended --no-clean --ssh-auth=key
-expect_fires 'ssh-auth=key: removed' "5b --ssh-auth=key is refused: sshd_config is the root overlay's alone"
-set +e
-OUT=$(bash "$REPO/commissioning/commission-offline.sh" --bundle "$BUNDLE" \
-          --unattended --no-clean < /dev/null 2>&1); ST=$?
-set -e
-expect_fires 'unattended refused: .*--base' "5c --unattended without --base is refused before any disk scan"
-
-# The success case, under </dev/null as its caller runs it: no prompt may be
-# reached, and the verify pass must still run every check (all but the
-# regenerator's, which is conditional on a clean). The fixture's /etc/shadow is the
-# witness that card-prep.sh did not run — it rewrites the root password there.
-bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null
-_shadow0=$(md5sum < "$TMP/card/root/etc/shadow")
-set +e
-OUT=$(bash "$REPO/commissioning/commission-offline.sh" --bundle "$BUNDLE" --base "$TMP/card" \
-          --unattended --no-clean < /dev/null 2>&1); ST=$?
-set -e
-expect_says 'skipping commissioning/card-prep.sh' "5d --unattended under </dev/null succeeds and says card-prep.sh was skipped"
-for want in 'md5: all' '\+x: all' '\.app: all' 'default-app:' 'n: all .* /bin/sh' 'boot links resolve'; do
-    if [ "$ST" -eq 0 ] && printf '%s\n' "$OUT" | grep -qE "$want"; then
-        ok "5e the unattended verify pass ran: /$want/"
-    else
-        bad "5e the unattended verify pass ran: /$want/ (exit $ST)"
-    fi
+for flag in --no-clean --unattended --delete-factory --keep-factory --keep-sweeps \
+            "--disk /dev/null" "--release latest"; do
+    read -ra fa <<< "$flag"; run "$BUNDLE" "$REPO" "${fa[@]}"
+    expect_fires "(^|[^-])${flag%% *}(=[^ ]*)?: removed" "6a the retired flag ${flag%% *} is refused by name, exit non-zero"
 done
-if [ "$ST" -eq 0 ] && [ "$(md5sum < "$TMP/card/root/etc/shadow")" = "$_shadow0" ]; then
-    ok "5f --unattended left /etc/shadow untouched (card-prep.sh did not run)"
+
+# The witness that the refusal is the flag's and not a general failure: the very
+# same invocation without it succeeds (case 1a), and the fixture is untouched.
+bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null
+_sum0=$(find "$TMP/card" -type f -o -type l | sort | md5sum)
+set +e
+OUT=$(bash "$REPO/commissioning/commission-offline.sh" --bundle "$BUNDLE" --base "$TMP/card" --no-clean 2>&1 < /dev/null); ST=$?
+set -e
+if [ "$ST" -ne 0 ] && [ "$(find "$TMP/card" -type f -o -type l | sort | md5sum)" = "$_sum0" ]; then
+    ok "6b a refused flag writes nothing to the card"
 else
-    bad "5f --unattended left /etc/shadow untouched (exit $ST)"
+    bad "6b a refused flag writes nothing to the card (exit $ST)"
 fi
+
+# Never prompts: stdin is /dev/null and no flag asks for that. A prompt would see
+# EOF and either refuse (the old backup question) or hang a terminal.
+bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null
+set +e
+OUT=$(timeout 120 bash "$REPO/commissioning/commission-offline.sh" --bundle "$BUNDLE" --base "$TMP/card" < /dev/null 2>&1); ST=$?
+set -e
+if [ "$ST" -eq 0 ] && ! printf '%s\n' "$OUT" | grep -qiE 'backup\?|\(yes/no\)|\(y/n\)|\[y/N\]'; then
+    ok "6c </dev/null runs to completion with no prompt"
+else
+    bad "6c </dev/null runs to completion with no prompt (exit $ST)"
+    printf '%s\n' "$OUT" | tail -5 | sed 's/^/        /'
+fi
+# And nothing in the script can ask: no bare `read` (a read from a file is not a prompt).
+if grep -nE "^[[:space:]]*read[[:space:]]" "$REPO/commissioning/commission-offline.sh" | grep -v "<" | grep -q .; then
+    bad "6d commission-offline.sh contains a terminal read"
+else
+    ok "6d commission-offline.sh contains no terminal read"
+fi
+
+# A root without our marker (a vendor tree, or p2 mounted as p6) is not ours to install
+# into: with no clean, the vendor stack would keep running beside the bundle.
+bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null
+rm -f "$TMP/card/root/etc/roomwizard-rootfs"
+printf 'SteelCase RW20 Embedded Platform (Yocto) 3.1.4 \\n \\l\n' > "$TMP/card/root/etc/issue"
+set +e
+OUT=$(bash "$REPO/commissioning/commission-offline.sh" --bundle "$BUNDLE" --base "$TMP/card" 2>&1 < /dev/null); ST=$?
+set -e
+expect_fires 'etc/roomwizard-rootfs' "6e a root without our marker is refused, naming the marker"
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "════════════════════════════════════════"
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $TOTAL total"
-if [ "$TOTAL" -lt 30 ]; then
+if [ "$TOTAL" -lt 36 ]; then
     echo -e "  ${RED}✗ only $TOTAL cases ran — the harness itself is broken${NC}"
     exit 1
 fi

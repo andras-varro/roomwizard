@@ -9,13 +9,13 @@
 #   commissioning/card-prep.sh           Phase 1, offline, needs a mounted card + sudo
 #   commissioning/provision.sh           Phase 2, over SSH, ends in a reboot
 #   deploy-all.sh                        Phase 3, over SSH, per-component
-#   commissioning/commission-offline.sh  all three at once, offline, ONE boot
+#   rootfs/make-card-image.sh            a whole card image, offline (runs commission-offline.sh)
 #
 # Why a composition layer and not one merged script: the three phases have
 # genuinely different connection models, and the cleanup in Phase 2 touches paths
 # spread across FOUR partitions that only a booted kernel assembles into one tree,
-# while commissioning locates just p6. commissioning/commission-offline.sh is what does mount
-# all four and map every absolute path onto them; the
+# while rootfs/make-card-image.sh mounts all four partitions of an image itself
+# (commission-offline.sh maps every absolute path onto them); the
 # SSH phases stay as the verified development loop. There are three further
 # reasons in COMMISSIONING.md ("why these are separate").
 #
@@ -65,7 +65,7 @@ scripts it calls. To script a step, call that script directly:
   ./commissioning/provision.sh <target> [flags]         Phase 2 of 3 (ssh, reboots)
   ./commissioning/provision.sh <target> --hostname NAME name only, no reboot
   ./deploy-all.sh <target> [component]                  Phase 3 of 3 (ssh)
-  ./commissioning/commission-offline.sh --bundle <b>    THE WHOLE JOB, offline, one boot
+  ./rootfs/make-card-image.sh --bundle <b> <parts> <rootfs.tar> <out.img>   card image
   ./setup-build-env.sh [--install-deps] [--scummvm]     host build prerequisites
 
 Full guide: COMMISSIONING.md
@@ -170,72 +170,49 @@ PRE
     bash "$SCRIPT_DIR/commissioning/card-prep.sh" || err "Commissioning failed."
 }
 
-# ── Phase 1+2+3 in one offline pass ─────────────────────────────────────────
-# A composition like everything else here: it execs commissioning/commission-offline.sh, which
-# in turn orchestrates commissioning/card-prep.sh rather than restating its prompts.
-do_commission_offline() {
-    hdr "6. THE WHOLE JOB — commission a card completely, offline (one boot)"
+# ── Image a card ────────────────────────────────────────────────────────────
+# A composition like everything else here: it execs rootfs/make-card-image.sh, which builds
+# the whole image file and itself runs commissioning/commission-offline.sh over the
+# partitions it mounts. Nothing is written to a physical card by this item.
+do_image_card() {
+    hdr "6. Build a card IMAGE (our own root, bundle installed, offline)"
     cat <<'PRE'
-  This does the WHOLE job against the card: password, host name, SSH, DHCP,
-  the boot scripts and the apps. Then one boot and the unit works.
-  Items 1, 2 and 3 are the same ground in three phases, with two boots and a
-  network in between; this is the delivery path.
+  Builds an image file of the whole card: our Buildroot root on p6, empty p2/p3/p5,
+  the release bundle installed and verified. You write the file to a card yourself
+  and the unit boots working. Updating a unit that is already running is item 2.
 
   Before continuing:
 
-    - the card is out of the RoomWizard and in this host's reader
-    - a full-card image backup exists SOMEWHERE ELSE. You will be asked.
-    - you have a bundle: ./release.sh --stage-only leaves one in build/release,
-      or point --bundle at a release tarball
-    - you will be asked for sudo, because it mounts all four partitions
+    - this must run as root on the native WSL filesystem (not /mnt/c)
+    - the parts directory is what rootfs/fetch-card-parts.sh filled
+    - the root filesystem tar is what rootfs/build-rootfs.sh left in ~/br-rw-out
+    - you have a bundle: ./release.sh --stage-only leaves one in build/release
+    - the kernel modules are in ~/rw-kmods (cy8ctmg120_ts.ko is required)
 
-  It never mounts or writes p1 (the boot partition).
+  It never touches a block device or p1's boot files.
 PRE
     echo ""
-    cat <<'SRC'
-  Where should the binaries come from?
-
-    b) a local bundle       build/release, or a path       (default)
-    r) a published release  fetched from GitHub, sha256-checked against the
-                            digest it publishes. THE ONE STEP HERE THAT NEEDS
-                            A NETWORK — everything else works from the card
-                            alone, which is the whole point of this item.
-SRC
-    echo ""
-    local src bundle tag
-    read -r -p "Source [b]: " src
-    case "${src:-b}" in
-        r|R|release)
-            read -r -p "Release tag [latest]: " tag
-            echo ""
-            confirm "Card in the reader and ready?" || { warn "Skipped."; return 0; }
-            echo ""
-            # sudo here rather than inside: mounting is the only step that needs
-            # root, and the child refuses clearly if it is missing. The fetch runs
-            # as root as a consequence, which is why rw_release_fetch hands the
-            # cached file back to $SUDO_UID.
-            sudo bash "$SCRIPT_DIR/commissioning/commission-offline.sh" --release "${tag:-latest}" \
-                || err "Offline commissioning failed."
-            return $? ;;
-        b|B|bundle|"") ;;
-        *) err "Not a choice: $src"; return 1 ;;
-    esac
+    local bundle parts tar out
     read -r -p "  Bundle (tarball or directory) [build/release]: " bundle
     bundle="${bundle:-build/release}"
     if [ ! -e "$SCRIPT_DIR/$bundle" ] && [ ! -e "$bundle" ]; then
         err "No such bundle: $bundle"
         info "Build one first:  ./release.sh --stage-only"
-        info "Or choose 'r' to fetch a published release."
         return 1
     fi
     [ -e "$bundle" ] || bundle="$SCRIPT_DIR/$bundle"
+    read -r -p "  Parts directory: " parts
+    [ -d "$parts" ] || { err "No such directory: $parts"; return 1; }
+    read -r -p "  Root filesystem tar [$HOME/br-rw-out/rootfs.tar]: " tar
+    tar="${tar:-$HOME/br-rw-out/rootfs.tar}"
+    [ -f "$tar" ] || { err "No such file: $tar"; return 1; }
+    read -r -p "  Output image file: " out
+    [ -n "$out" ] || { err "An output file is required."; return 1; }
     echo ""
-    confirm "Card in the reader and ready?" || { warn "Skipped."; return 0; }
+    confirm "Build $out?" || { warn "Skipped."; return 0; }
     echo ""
-    # sudo here rather than inside: mounting is the only step that needs root, and
-    # the child refuses clearly if it is missing.
-    sudo bash "$SCRIPT_DIR/commissioning/commission-offline.sh" --bundle "$bundle" \
-        || err "Offline commissioning failed."
+    sudo bash "$SCRIPT_DIR/rootfs/make-card-image.sh" --bundle "$bundle" "$parts" "$tar" "$out" \
+        || err "Building the image failed."
 }
 
 # ── Phase 2 ─────────────────────────────────────────────────────────────────
@@ -423,7 +400,7 @@ while true; do
   3) Deploy apps                 PHASE 3 of 3   ssh; source, bundle or release
   5) All three, in sequence      1 -> 2 -> 3    ssh between; you boot the unit
 
-  6) THE WHOLE JOB, offline, one boot   <-- deliver a unit  (bundle, or fetch one)
+  6) Build a card image          offline; our root + bundle, one boot (deliver a unit)
 
   4) Device status               read-only
   7) Host build prerequisites    this machine; no device, no card
@@ -437,7 +414,7 @@ MENU
         3) do_deploy; pause ;;
         4) do_status; pause ;;
         5) do_full; pause ;;
-        6) do_commission_offline; pause ;;
+        6) do_image_card; pause ;;
         7) do_setup_build_env; pause ;;
         q|Q|quit|exit) echo ""; ok "Bye."; exit 0 ;;
         "") ;;
