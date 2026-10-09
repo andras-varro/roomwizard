@@ -28,7 +28,7 @@ rm -rf "$BASE"
 mkdir -p "$BASE"/root/etc/{init.d,rcS.d,rc0.d,rc1.d,rc2.d,rc3.d,rc4.d,rc5.d,rc6.d,ssh,network,sysctl.d} \
          "$BASE"/root/{opt/games,opt/roomwizard,usr/sbin,usr/lib,usr/share} \
          "$BASE"/root/home/root/{data,log,backup,.ssh} \
-         "$BASE"/data/lost+found "$BASE"/log/lost+found "$BASE"/backup/lost+found
+         "$BASE"/data/lost+found "$BASE"/log/lost+found
 
 # rw_is_rootfs's four required files, our marker, and the per-unit name.
 echo 'root:*:19000:0:99999:7:::'                    > "$BASE/root/etc/shadow"

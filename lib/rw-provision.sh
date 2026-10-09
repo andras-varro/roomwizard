@@ -42,17 +42,12 @@
 #   install	<mode>	<device-path>	<repo-relative-source>
 #   link	-	<link-path>	<link-target>
 #   link-opt	-	<link-path>	<link-target>
-#   touch	<mode>	<device-path>	-
-#   backup	-	<copy-to>	<copy-from>
-#   directive	-	<config-file>	<Key>=<Value>
-#   dropline	-	<config-file>	<ERE>
 #
 # unlink before link (a glob would eat the link just made), install before link (a
-# link to a not-yet-written file dangles on a card), dropline last (it edits files
-# install may just have placed). Paths are DEVICE-absolute; mapping them onto
+# link to a not-yet-written file dangles on a card). Paths are DEVICE-absolute; mapping them onto
 # p2/p3/p5/p6 is the offline executor's job.
 
-RW_PROVISION_TYPES="install link link-opt unlink touch backup directive dropline"
+RW_PROVISION_TYPES="install link link-opt unlink"
 RW_PROVISION_GROUPS_ALL="base mdns usb bluetooth"
 RW_PROVISION_GROUPS_DEFAULT="base mdns usb bluetooth"
 RW_PROVISION_GROUPS_OPTIONAL="mdns usb bluetooth"
@@ -108,9 +103,8 @@ rw_provision_validate() {
             # Which types use which columns. Everything else must be "-", because a
             # value in a column the type ignores is a value somebody expected to
             # take effect.
-            WANTMODE["install"] = 1; WANTMODE["touch"] = 1
+            WANTMODE["install"] = 1
             WANTSRC["install"] = 1; WANTSRC["link"] = 1; WANTSRC["link-opt"] = 1
-            WANTSRC["backup"] = 1;  WANTSRC["directive"] = 1; WANTSRC["dropline"] = 1
         }
         /^[ \t]*#/ { next }
         /^[ \t]*$/ { next }
@@ -203,10 +197,6 @@ rw_provision_validate() {
                 }
             }
 
-            if (type == "directive" && src !~ /^[A-Za-z][A-Za-z0-9]*=/) {
-                printf "  line %d: a directive source must be Key=Value, got: %s\n", NR, src
-                bad++
-            }
         }
         END {
             if (records == 0) { print "  no records at all — every line is a comment or blank"; bad++ }
@@ -227,8 +217,8 @@ rw_provision_validate() {
 # Compile FILE into a plan for the enabled GROUPS (space-separated, must include
 # "base"), emitted in dependency order.
 #
-# Unlike rw_clean_plan there is no "a disabled group protects" rule: not
-# installing a file has no counterpart that could then remove it by surprise.
+# A disabled group simply contributes nothing: not installing a file has no
+# counterpart that could then remove it by surprise.
 # ---------------------------------------------------------------------------
 rw_provision_plan() {
     local file="$1" groups="$2" g found
@@ -310,21 +300,13 @@ _rw_provision_emit() {
             rec = $1 "\t" $3 "\t" $4 "\t" $5
             if      ($1 == "unlink")    unl[++nu]  = rec
             else if ($1 == "install")   ins[++ni]  = rec
-            else if ($1 == "backup")    bak[++nb]  = rec
             else if ($1 == "link")      lnk[++nl]  = rec
             else if ($1 == "link-opt")  lnk[++nl]  = rec
-            else if ($1 == "touch")     tch[++nt]  = rec
-            else if ($1 == "directive") dir[++nd]  = rec
-            else if ($1 == "dropline")  drp[++np]  = rec
         }
         END {
             for (i = 1; i <= nu; i++) print unl[i]   # stale links first
             for (i = 1; i <= ni; i++) print ins[i]   # then the payload
-            for (i = 1; i <= nb; i++) print bak[i]   # back up before editing
             for (i = 1; i <= nl; i++) print lnk[i]   # link only what exists
-            for (i = 1; i <= nt; i++) print tch[i]
-            for (i = 1; i <= nd; i++) print dir[i]
-            for (i = 1; i <= np; i++) print drp[i]   # edits last
         }'
 }
 
@@ -414,15 +396,6 @@ rw_provision_apply_offline() {
                         && printf '  install         %-5s %s\n' "$mode" "$dest" || rc=1
                 fi
                 ;;
-            backup)
-                dest=$(_rwp_resolve "$target") || { rc=1; continue; }
-                hostdir=$(_rwp_resolve "$src")  || { rc=1; continue; }
-                if [ -n "${RW_PROVISION_DRY:-}" ]; then
-                    printf '  would backup    -     %s\t%s\t-> %s\n' "$target" "$src" "$dest"
-                elif [ -f "$hostdir" ] && [ ! -f "$dest" ]; then
-                    cp "$hostdir" "$dest" && printf '  backup          %s\n' "$dest" || rc=1
-                fi
-                ;;
             link|link-opt)
                 dest=$(_rwp_resolve "$target") || { rc=1; continue; }
                 if [ -n "${RW_PROVISION_DRY:-}" ]; then
@@ -438,32 +411,6 @@ rw_provision_apply_offline() {
                     ln -sf "$src" "$dest" && printf '  link            %s -> %s\n' "$dest" "$src" || rc=1
                 fi
                 ;;
-            touch)
-                dest=$(_rwp_resolve "$target") || { rc=1; continue; }
-                if [ -n "${RW_PROVISION_DRY:-}" ]; then
-                    printf '  would touch     %-5s %s\t-\t-> %s\n' "$mode" "$target" "$dest"
-                else
-                    mkdir -p "$(dirname "$dest")"
-                    [ -f "$dest" ] || : > "$dest"
-                    chmod "$mode" "$dest" && printf '  touch           %-5s %s\n' "$mode" "$dest" || rc=1
-                fi
-                ;;
-            directive)
-                dest=$(_rwp_resolve "$target") || { rc=1; continue; }
-                if [ -n "${RW_PROVISION_DRY:-}" ]; then
-                    printf '  would directive -     %s\t%s\t-> %s\n' "$target" "$src" "$dest"
-                else
-                    _rwp_set_directive "$dest" "${src%%=*}" "${src#*=}" || rc=1
-                fi
-                ;;
-            dropline)
-                dest=$(_rwp_resolve "$target") || { rc=1; continue; }
-                if [ -n "${RW_PROVISION_DRY:-}" ]; then
-                    printf '  would dropline  -     %s\t%s\t-> %s\n' "$target" "$src" "$dest"
-                else
-                    _rwp_dropline "$dest" "$src" || rc=1
-                fi
-                ;;
             *) echo "  unknown plan verb: $kind" >&2; rc=1 ;;
         esac
     done < "$plan"
@@ -473,67 +420,11 @@ rw_provision_apply_offline() {
 }
 
 # ---------------------------------------------------------------------------
-# _rwp_dropline FILE ERE
-#
-# Remove every line matching ERE.
-#
-# ⚠️ awk and not `sed -E "/$ere/d"`, because these EREs contain SLASHES —
-# `^4:12345:respawn:/sbin/getty 38400 tty4` closes sed's address after `respawn:`
-# and the rest is read as a command, so sed exits non-zero and the line stays. The
-# symptom was a passing install and an unedited /etc/inittab.
-#
-# The result is written back through `cat >` rather than `mv`, so the file keeps its
-# inode, owner and mode — /etc/profile and /etc/inittab are vendor files and a mv
-# would silently give them the temp file's 0600.
-# ---------------------------------------------------------------------------
-_rwp_dropline() {
-    local file="$1" ere="$2" tmp
-    [ -f "$file" ] || return 0
-    grep -qE "$ere" "$file" || return 0
-    tmp="$file.rwp.$$"
-    awk -v re="$ere" '$0 !~ re' "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
-    if cat "$tmp" > "$file"; then rm -f "$tmp" || return 1; else rm -f "$tmp"; return 1; fi
-    printf '  dropline        %s (%s)\n' "$file" "$ere"
-}
-
-# ---------------------------------------------------------------------------
-# _rwp_set_directive FILE KEY VALUE
-#
-# "KEY VALUE" is present exactly once afterwards: substituted if the key is there
-# (commented or not), appended if it is not.
-#
-# ⚠️ Stronger than the `sed s/^PermitEmptyPasswords yes/.../` it replaces, which
-# matched one exact string — so a config saying "#PermitEmptyPasswords yes" or
-# "PermitEmptyPasswords YES" passed through untouched and the hardening silently
-# did nothing. Idempotent, which matters because both bring-up paths can be re-run.
-#
-# ⚠️ The `#` must touch the key: `#Key value` is a commented-out setting, `# Key
-# words` is prose. The vendor sshd_config has `# Ciphers and keying` twice, and
-# when a space was allowed there the Ciphers directive turned both into
-# duplicate `Ciphers …` lines (measured against the card capture).
-# ---------------------------------------------------------------------------
-_rwp_set_directive() {
-    local file="$1" key="$2" val="$3"
-    [ -f "$file" ] || { echo "  directive: no such file: $file" >&2; return 1; }
-    # ${key} is braced, not bare: shellcheck reads a bare "$key[" as a botched
-    # array expansion (SC1087, error severity) when it is in fact $key followed
-    # by a literal POSIX class.  The braces change no behaviour and say so.
-    if grep -qE "^[[:space:]]*#?${key}[[:space:]]" "$file"; then
-        sed -i -E "s|^[[:space:]]*#?${key}[[:space:]].*|$key $val|" "$file"
-    else
-        printf '%s %s\n' "$key" "$val" >> "$file"
-    fi
-    printf '  directive       %s: %s %s\n' "$file" "$key" "$val"
-}
-
-# ---------------------------------------------------------------------------
 # rw_provision_plan_summary PLAN
 #
-# One line naming every record type present, counted from the plan. The callers
-# used to hand-roll `N install, N link, N unlink`, which accounted for 27 of 35
-# actions and left backup/touch/directive/dropline out of the summary — the kind
-# of arithmetic that hides a verb nobody is executing. Computed, so it cannot
-# drift from the plan or from a new record type.
+# One line naming every record type present, counted from the plan. Computed, so it
+# cannot drift from the plan or from a new record type: a hand-rolled count once
+# accounted for 27 of 35 actions and hid the verbs it left out.
 # ---------------------------------------------------------------------------
 rw_provision_plan_summary() {
     local plan="$1"
@@ -542,7 +433,7 @@ rw_provision_plan_summary() {
         NF { n[$1]++; total++ }
         END {
             # Emitted order, so the summary reads in the order the plan runs.
-            split("unlink install backup link link-opt touch directive dropline", o, " ")
+            split("unlink install link link-opt", o, " ")
             out = ""
             for (i = 1; i in o; i++) if (o[i] in n) {
                 out = out (out == "" ? "" : ", ") n[o[i]] " " o[i]
@@ -633,29 +524,6 @@ R="${RW_PROVISION_ROOT:-}"
 DRY="${RW_PROVISION_DRY:-}"
 rc=0
 
-set_directive() {
-    f="$1"; k="$2"; v="$3"
-    [ -f "$f" ] || { echo "  directive: no such file: $f" >&2; return 1; }
-    if grep -qE "^[[:space:]]*#?$k[[:space:]]" "$f"; then
-        sed -i -E "s|^[[:space:]]*#?$k[[:space:]].*|$k $v|" "$f"
-    else
-        printf '%s %s\n' "$k" "$v" >> "$f"
-    fi
-    printf '  directive       %s: %s %s\n' "$f" "$k" "$v"
-}
-
-# awk, not `sed -E "/$ere/d"`: these EREs contain slashes, which close sed's address
-# early. Written back through `cat >` so the vendor file keeps its inode and mode.
-dropline() {
-    f="$1"; re="$2"
-    [ -f "$f" ] || return 0
-    grep -qE "$re" "$f" || return 0
-    t="$f.rwp.$$"
-    awk -v re="$re" '$0 !~ re' "$f" > "$t" || { rm -f "$t"; return 1; }
-    cat "$t" > "$f" && rm -f "$t" || { rm -f "$t"; return 1; }
-    printf '  dropline        %s (%s)\n' "$f" "$re"
-}
-
 while IFS='	' read -r kind mode target src; do
     [ -n "$kind" ] || continue
     dest="$R$target"
@@ -682,13 +550,6 @@ while IFS='	' read -r kind mode target src; do
             echo "  MISSING $dest — it should have been copied before this ran" >&2; rc=1
         fi
         ;;
-    backup)
-        if [ -n "$DRY" ]; then
-            printf '  would backup    -     %s\t%s\t-> %s\n' "$target" "$src" "$dest"
-        elif [ -f "$R$src" ] && [ ! -f "$dest" ]; then
-            cp "$R$src" "$dest" && printf '  backup          %s\n' "$dest" || rc=1
-        fi
-        ;;
     link|link-opt)
         if [ -n "$DRY" ]; then
             printf '  would %-9s -     %s\t%s\t-> %s\n' "$kind" "$target" "$src" "$dest"
@@ -699,29 +560,6 @@ while IFS='	' read -r kind mode target src; do
             else
                 ln -sf "$src" "$dest" && printf '  link            %s -> %s\n' "$dest" "$src" || rc=1
             fi
-        fi
-        ;;
-    touch)
-        if [ -n "$DRY" ]; then
-            printf '  would touch     %-5s %s\t-\t-> %s\n' "$mode" "$target" "$dest"
-        else
-            mkdir -p "${dest%/*}"
-            [ -f "$dest" ] || : > "$dest"
-            chmod "$mode" "$dest" && printf '  touch           %-5s %s\n' "$mode" "$dest" || rc=1
-        fi
-        ;;
-    directive)
-        if [ -n "$DRY" ]; then
-            printf '  would directive -     %s\t%s\t-> %s\n' "$target" "$src" "$dest"
-        else
-            set_directive "$dest" "${src%%=*}" "${src#*=}" || rc=1
-        fi
-        ;;
-    dropline)
-        if [ -n "$DRY" ]; then
-            printf '  would dropline  -     %s\t%s\t-> %s\n' "$target" "$src" "$dest"
-        else
-            dropline "$dest" "$src" || rc=1
         fi
         ;;
     *) echo "  unknown plan verb: $kind" >&2; rc=1 ;;

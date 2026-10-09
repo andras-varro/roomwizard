@@ -8,14 +8,14 @@
 #
 # WHAT IT COVERS, and why each case is here rather than being obvious:
 #
-#   rw_is_rootfs      Every state a real card can be in — vendor-fresh, after a
-#                     default clean (which deletes /opt/sbin), and stripped down
-#                     to nothing but the login banner. Plus the
+#   rw_is_rootfs      Only our own root is a rootfs: the marker is required. The case
+#                     that matters: a tree with every vendor file (/opt/pv02,
+#                     /opt/roomwizard, the RW20 banner) and no marker is rejected,
+#                     because nothing prepares a vendor root any more. Plus the
 #                     negative control that matters: a tree that has all four
-#                     files the caller EDITS and none of the vendor markers,
-#                     i.e. an ordinary Linux host's own root. The detector this
-#                     replaces looked up a UUID, so it could not select the dev
-#                     host; a content scan could, and case 4 is what forbids it.
+#                     required files and no marker, i.e. an ordinary Linux host's
+#                     own root. The detector the UUID lookup replaced could not
+#                     select the dev host; a content scan could, and case 4 forbids it.
 #
 #   rw_is_card_disk   Partition tables built with sfdisk on sparse files, so the
 #                     positive AND the negative control are synthetic and need
@@ -103,74 +103,55 @@ make_required() {
 echo ""
 echo "rw_is_rootfs"
 
-# 1. Vendor-fresh card: every marker present.
+# 1. Our own root filesystem (rootfs/): the marker post-build.sh writes is what
+#    identifies it, and nothing of the vendor's is here.
+O="$TMP/ours"
+make_required "$O"
+echo 'Welcome to Buildroot' > "$O/etc/issue"
+: > "$O/etc/roomwizard-rootfs"
+expect_rootfs yes "$O" "our own rootfs identified by etc/roomwizard-rootfs"
+
+# 2. THE case this file gained when vendor detection was deleted: a tree with all
+#    four required files and EVERY vendor marker (/opt/pv02, /opt/roomwizard, the
+#    RW20 banner, the watchdog script) but no marker of ours. Nothing prepares a
+#    vendor root any more, so accepting one would install beside a running vendor stack.
 V="$TMP/vendor"
 make_required "$V"
-mkdir -p "$V/opt/pv02" "$V/opt/sbin/watchdog"
+mkdir -p "$V/opt/pv02" "$V/opt/roomwizard" "$V/opt/sbin/watchdog"
 : > "$V/opt/sbin/watchdog/watchdog.sh"
 echo 'SteelCase RW20 Embedded Platform (Yocto) 3.1.4 \n \l' > "$V/etc/issue"
-expect_rootfs yes "$V" "vendor-fresh rootfs"
+expect_rootfs no "$V" "a tree without our marker is not a rootfs even with vendor files present"
 
-# 2. After a default clean: /opt/sbin is deleted (group `vendorscripts`) and our
-#    own /opt/roomwizard has arrived. /opt/pv02 is a `keep`, so it stays.
-R="$TMP/removed"
-make_required "$R"
-mkdir -p "$R/opt/pv02" "$R/opt/roomwizard"
-echo 'SteelCase RW20 Embedded Platform (Yocto) 3.1.4 \n \l' > "$R/etc/issue"
-expect_rootfs yes "$R" "rootfs after a default clean (no /opt/sbin)"
-
-# 3. Stripped to the banner alone: no /opt marker of any kind survives.
+# 3. The banner alone, the weakest vendor marker the old detector had.
 B="$TMP/banner"
 make_required "$B"
 echo 'SteelCase RW20 Embedded Platform (Yocto) 3.1.4 \n \l' > "$B/etc/issue"
-expect_rootfs yes "$B" "rootfs identified by /etc/issue alone"
+expect_rootfs no "$B" "the vendor login banner alone is not a rootfs"
 
-# 4. THE negative control: an ordinary Linux root. Everything a caller edits is
-#    present; nothing identifies it as a RoomWizard. Selecting this would mean
-#    rewriting the dev host's own /etc/shadow.
+# 4. THE negative control: an ordinary Linux root. Everything the required list
+#    names is present; nothing identifies it as a RoomWizard. Selecting this would
+#    mean rewriting the dev host's own /etc/shadow.
 H="$TMP/host"
 make_required "$H"
 mkdir -p "$H/opt"
 echo 'Ubuntu 20.04.6 LTS \n \l' > "$H/etc/issue"
 expect_rootfs no "$H" "ordinary Linux root is rejected"
 
-# 5. A RoomWizard non-root partition (p2/p3/p5): no /etc at all.
+# 5. A RoomWizard non-root partition (p2/p3): no /etc at all.
 D="$TMP/datapart"
 mkdir -p "$D/cron" "$D/websign"
 expect_rootfs no "$D" "RoomWizard data partition is rejected"
 
-# 6. Vendor markers present but a file the caller edits is missing. Identity is
-#    not the question here — proceeding would fail partway through.
+# 6. Our marker present but a required file missing: a half-built tree.
 I="$TMP/incomplete"
 make_required "$I"
 rm -f "$I/etc/shadow"
-mkdir -p "$I/opt/pv02"
-expect_rootfs no "$I" "vendor tree missing /etc/shadow is rejected"
+: > "$I/etc/roomwizard-rootfs"
+expect_rootfs no "$I" "our tree missing /etc/shadow is rejected"
 
 # 7. Empty directory — an unmounted mount point.
 mkdir -p "$TMP/empty"
 expect_rootfs no "$TMP/empty" "empty directory is rejected"
-
-# 8. Our own root filesystem (rootfs/): no vendor file at all, and no /opt/roomwizard
-#    either, so the marker post-build.sh writes is the only thing that identifies it.
-#    Case 4 is its negative control: the same tree without the marker.
-O="$TMP/ours"
-make_required "$O"
-echo 'Welcome to Buildroot' > "$O/etc/issue"
-: > "$O/etc/roomwizard-rootfs"
-expect_rootfs yes "$O" "our own rootfs identified by etc/roomwizard-rootfs alone"
-
-# ── firmware description ────────────────────────────────────────────────────
-
-echo ""
-echo "rw_rootfs_firmware"
-echo '20180309123456' > "$V/etc/version"
-FW=$(rw_rootfs_firmware "$V")
-case "$FW" in
-    "SteelCase RW20 Embedded Platform (Yocto) 3.1.4 (build 20180309123456)")
-        ok "firmware line reads: $FW" ;;
-    *)  bad "firmware line reads: $FW" ;;
-esac
 
 # ── synthetic partition tables ──────────────────────────────────────────────
 
@@ -259,15 +240,14 @@ PARTS=$(rw_card_partitions /dev/mmcblk0)
 expect_eq "root /dev/mmcblk0p6" "$(echo "$PARTS" | grep '^root ')"   "p6 is root"
 expect_eq "data /dev/mmcblk0p2" "$(echo "$PARTS" | grep '^data ')"   "p2 is data"
 expect_eq "log /dev/mmcblk0p3"  "$(echo "$PARTS" | grep '^log ')"    "p3 is log"
-expect_eq "backup /dev/mmcblk0p5" "$(echo "$PARTS" | grep '^backup ')" "p5 is backup"
-expect_eq "4" "$(echo "$PARTS" | grep -c .)"                         "exactly four roles"
+expect_eq "3" "$(echo "$PARTS" | grep -c .)"                         "exactly three roles"
 
 # ⚠️ THE assertion in this section. p1 carries mlo, u-boot.bin, ctrlblock.bin and
 # uImage-system; an untouched p1 is what keeps a power cycle a free undo. If it
 # ever appears in the role table, every consumer gains the ability to write to it
 # — so the table is checked for its absence rather than the consumers for their
 # restraint. p4 (extended container) and p7 (swap) likewise have nothing to mount.
-for forbidden in 1 4 7; do
+for forbidden in 1 4 5 7; do
     if echo "$PARTS" | grep -q "p${forbidden}\$"; then
         bad "p$forbidden must NOT be in the role table"
     else
@@ -280,9 +260,8 @@ echo "rw_role_device_path"
 expect_eq "/"                    "$(rw_role_device_path root)"   "root  → /"
 expect_eq "/home/root/data"      "$(rw_role_device_path data)"   "data  → /home/root/data"
 expect_eq "/home/root/log"       "$(rw_role_device_path log)"    "log   → /home/root/log"
-expect_eq "/home/root/backup"    "$(rw_role_device_path backup)" "backup → /home/root/backup"
-if rw_role_device_path boot >/dev/null 2>&1; then
-    bad "an unknown role must not resolve to a path"
+if rw_role_device_path boot >/dev/null 2>&1 || rw_role_device_path backup >/dev/null 2>&1; then
+    bad "an unknown role (boot, and the retired backup) must not resolve to a path"
 else
     ok "an unknown role does not resolve"
 fi
@@ -292,7 +271,7 @@ echo "rw_offline_path / rw_offline_base_ok"
 expect_eq "/mnt/x/root/etc/rc5.d"      "$(rw_offline_path /mnt/x /etc/rc5.d)"                "/etc → p6"
 expect_eq "/mnt/x/data/websign"        "$(rw_offline_path /mnt/x /home/root/data/websign)"   "data → p2"
 expect_eq "/mnt/x/log/Xorg.0.log"      "$(rw_offline_path /mnt/x /home/root/log/Xorg.0.log)" "log → p3"
-expect_eq "/mnt/x/backup/factory"      "$(rw_offline_path /mnt/x /home/root/backup/factory)" "backup → p5"
+expect_eq "/mnt/x/root/home/root/backup/factory" "$(rw_offline_path /mnt/x /home/root/backup/factory)" "backup is not a role: under p6, not p5"
 # Longest prefix wins: root's device path "/" prefixes everything, and
 # /home/root itself is NOT one of the three mount points.
 expect_eq "/mnt/x/root/home/root/.ssh" "$(rw_offline_path /mnt/x /home/root/.ssh)"           "/home/root/.ssh → p6, not p2"
@@ -362,11 +341,10 @@ echo "rw_check_card_mounts"
 # of the check is exercised against realistic input rather than empty directories.
 GOOD="$TMP/mnt-good"
 mkdir -p "$GOOD"
-cp -a "$V" "$GOOD/root"
-mkdir -p "$GOOD/data/websign" "$GOOD/data/cron/tabs" "$GOOD/log" "$GOOD/backup/factory"
+cp -a "$O" "$GOOD/root"
+mkdir -p "$GOOD/data/websign" "$GOOD/data/cron/tabs" "$GOOD/log"
 : > "$GOOD/data/websign/net.mode"
 : > "$GOOD/log/messages"
-: > "$GOOD/backup/serialno"
 if OUT=$(rw_check_card_mounts "$GOOD"); then
     ok "a correctly mounted card passes"
 else
@@ -379,9 +357,9 @@ fi
 # reports having deleted nothing.
 SWAPPED="$TMP/mnt-swapped"
 mkdir -p "$SWAPPED"
-cp -a "$V" "$SWAPPED/root"
-cp -a "$V" "$SWAPPED/data"
-mkdir -p "$SWAPPED/log" "$SWAPPED/backup"
+cp -a "$O" "$SWAPPED/root"
+cp -a "$O" "$SWAPPED/data"
+mkdir -p "$SWAPPED/log"
 if rw_check_card_mounts "$SWAPPED" >/dev/null; then
     bad "a rootfs mounted as 'data' must be rejected"
 else
@@ -391,7 +369,7 @@ fi
 # root/ is not a rootfs at all — e.g. p2 mounted alone, which is what happens if
 # the partition numbers are read off a differently-partitioned card.
 NOROOT="$TMP/mnt-noroot"
-mkdir -p "$NOROOT/root/cron" "$NOROOT/data" "$NOROOT/log" "$NOROOT/backup"
+mkdir -p "$NOROOT/root/cron" "$NOROOT/data" "$NOROOT/log"
 if rw_check_card_mounts "$NOROOT" >/dev/null; then
     bad "a non-rootfs mounted as 'root' must be rejected"
 else
@@ -424,20 +402,21 @@ TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $SKIP skipped"
 
 # A harness that runs nothing reports success.  The non-skippable cases are:
-#   8  rw_is_rootfs
-#   1  rw_rootfs_firmware
-#   4  rw_is_card_disk (synthetic)
+#   7  rw_is_rootfs
+#   5  rw_is_card_disk (synthetic, incl. the directory)
 #   4  rw_part_dev
-#   5  rw_card_partitions + 3 forbidden-partition assertions
-#   5  rw_role_device_path
+#   8  rw_card_partitions (3 roles, "exactly three") + 4 forbidden-partition assertions
+#   4  rw_role_device_path
+#   8  rw_offline_path
+#   7  rw_offline_base_ok
 #   3  rw_check_card_mounts
-# = 33.  rw_host_root_disk's 3 are skippable (they need a working lsblk), and the
-# two real card images are gitignored, so neither is counted.  The 4 synthetic
+# = 47.   rw_host_root_disk's 3 are skippable (they need a working lsblk), and the
+# two real card images are gitignored, so neither is counted.  The 5 synthetic
 # rw_is_card_disk cases need sfdisk, so on a host without it the floor drops to
-# 44 -- otherwise fixing the skip above just trades a red FAIL for a red harness
+# 42 -- otherwise fixing the skip above just trades a red FAIL for a red harness
 # error, which is the same defect wearing a different label.
-MIN_CASES=48
-[ "$HAVE_SFDISK" = no ] && MIN_CASES=44
+MIN_CASES=47
+[ "$HAVE_SFDISK" = no ] && MIN_CASES=42
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then
     echo -e "  ${RED}HARNESS ERROR${NC}: only $TOTAL cases ran, expected at least $MIN_CASES."
     echo "  Cases were skipped that cannot be skipped, or the file was truncated."

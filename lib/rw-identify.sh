@@ -7,57 +7,42 @@
 # ── Why this is not a UUID ──────────────────────────────────────────────────
 #
 # A filesystem UUID is generated at mkfs time, so it identifies ONE CARD, not a
-# model. Units are mkfs'd independently at the factory: two RoomWizards running
-# the identical firmware build (/etc/version 20180309123456) share no UUID at
-# all — not p6, not p2, p3 or p5. Matching a hardcoded UUID therefore recognises
-# exactly the one unit whose card the constant was copied from, and rejects every
-# other RoomWizard on earth. It also cannot be repaired by assigning the constant
-# to the new card: two cards with one UUID is a worse bug than the one it hides.
+# model. Two cards built from the same image share none, and a hardcoded UUID
+# recognises exactly the one card the constant was copied from. It also cannot
+# be repaired by assigning the constant to the new card: two cards with one UUID
+# is a worse bug than the one it hides.
 #
 # What is actually invariant, and what each function below uses:
 #
-#   rw_is_rootfs      CONTENT. The vendor firmware's own files.
+#   rw_is_rootfs      CONTENT. The marker file our own root filesystem (rootfs/)
+#                     carries. A vendor tree has none, and is not recognised.
 #   rw_is_card_disk   LAYOUT. The partition table, which the vendor's own
-#                     partitioning produces identically on every unit and which
+#                     partitioning produced identically on every unit and which
 #                     U-Boot depends on — `root=/dev/mmcblk0p6` is compiled into
 #                     u-boot.bin with no saveenv, so p6 IS the rootfs by
 #                     position and cannot be renumbered. See
 #                     SYSTEM_ANALYSIS.md#42-partitions.
 #   rw_card_partitions
-#                     POSITION. Which partition holds which of the four trees the
-#                     device assembles into one filesystem. Also by position, for
-#                     the same reason: /etc/fstab names /dev/mmcblk0p{2,3,5,7}
-#                     literally. Nothing on the device consumes a UUID at all.
+#                     POSITION. Which partition holds which of the three trees
+#                     that are mounted. Also by position, for the same reason:
+#                     /etc/fstab names /dev/mmcblk0p{2,3,7} literally. Nothing on
+#                     the device consumes a UUID at all.
 #
 # Both are readable without mounting anything new and without writing anything.
 
 # ── Content markers ─────────────────────────────────────────────────────────
 #
-# Split in two deliberately.
+# RW_ROOTFS_OURS is the identity of OUR OWN root filesystem (rootfs/), and the only
+# one: rootfs/board/roomwizard/post-build.sh writes it. Nothing in this repo prepares
+# or cleans a vendor root any more, so installing into one would leave the vendor
+# stack running beside ours — a tree without the marker is not a rootfs here, whatever
+# else it carries (/opt/pv02, /opt/roomwizard, the RW20 banner in /etc/issue).
 #
-# RW_ROOTFS_REQUIRED are the files a caller EDITS. Their absence means the
-# caller would fail partway through, so it is not merely an identity question.
-#
-# RW_ROOTFS_VENDOR is identity, and it is an OR because our own tooling deletes
-# some of these. /opt/sbin/watchdog USED to be the first of them and is no longer
-# a marker at all: the software watchdog is its own `delete base` record in
-# device-files/clean-rules.conf, so it is gone under every flag including
-# --keep-vendorscripts, and a marker no state preserves is worse than none. The
-# rest of /opt/sbin goes by default too (group `vendorscripts`), and
-# /opt/roomwizard exists only once our own Phase 2 has run —
-# yet pulling the card of a unit already in service to reset its password or
-# rename it is a normal thing to do, and must still be recognised. What no clean
-# touches is /opt/pv02, which is a `keep` there and asserted to survive by
-# tests/rw_clean_test.sh, and /etc/issue, which no rule in either rules file
-# names — so at least one of the three survives every state a card can be in.
-#
-# RW_ROOTFS_OURS is the identity of OUR OWN root filesystem (rootfs/), which carries
-# none of the vendor's files: rootfs/board/roomwizard/post-build.sh writes it, and
-# without it that tree passed only on /opt/roomwizard, an empty mount point.
+# RW_ROOTFS_REQUIRED is not identity. It is the set of files every complete root of
+# ours has (account, name resolution, sshd policy, network config), so a half-built or
+# half-copied tree that carries the marker is refused rather than installed into.
 RW_ROOTFS_REQUIRED="etc/shadow etc/hosts etc/ssh/sshd_config etc/network/interfaces"
 RW_ROOTFS_OURS="etc/roomwizard-rootfs"
-RW_ROOTFS_VENDOR="opt/pv02 opt/roomwizard"
-RW_ISSUE_RE='RW20 Embedded Platform'
 
 # ── Layout fingerprint ──────────────────────────────────────────────────────
 #
@@ -66,13 +51,13 @@ RW_ISSUE_RE='RW20 Embedded Platform'
 # (swap) are NOT pinned: they absorb the difference in physical card size, and
 # two cards of the same nominal 4 GB differ there (6586650 vs 6891885 sectors of
 # p4). Pinning them would reject a genuine RoomWizard for being a slightly
-# different card.
+# different card. p5 stays in the table, unused, so the table still matches.
 RW_LAYOUT="1:63,144522 2:144585,514080 3:658665,498015 5:1156743,2939832 6:4096638,2008062"
 
 # ---------------------------------------------------------------------------
 # rw_is_rootfs DIR
 #
-# 0 if DIR is the root of a RoomWizard rootfs. Silent; sets nothing.
+# 0 if DIR is the root of our own RoomWizard rootfs. Silent; sets nothing.
 # DIR may be "" or "/" for the live root — both mean the same tree.
 # ---------------------------------------------------------------------------
 rw_is_rootfs() {
@@ -82,38 +67,12 @@ rw_is_rootfs() {
         */) d="${d%/}" ;;
     esac
 
+    [ -e "$d/$RW_ROOTFS_OURS" ] || return 1
+
     for m in $RW_ROOTFS_REQUIRED; do
         [ -f "$d/$m" ] || return 1
     done
-
-    for m in $RW_ROOTFS_OURS $RW_ROOTFS_VENDOR; do
-        [ -e "$d/$m" ] && return 0
-    done
-
-    # Last resort, and the only marker that survives an arbitrarily aggressive
-    # clean: the vendor's login banner. grep -q on a file that may not exist is
-    # guarded rather than swallowed, so a caller running under `set -e` is safe.
-    [ -f "$d/etc/issue" ] && grep -q "$RW_ISSUE_RE" "$d/etc/issue" 2>/dev/null && return 0
-
-    return 1
-}
-
-# ---------------------------------------------------------------------------
-# rw_rootfs_firmware DIR
-#
-# Echo a one-line human description of the firmware on DIR, for the operator to
-# eyeball. Never used as a gate — a build string is not identity, and gating on
-# it would reject a unit with different vendor firmware for no reason.
-# ---------------------------------------------------------------------------
-rw_rootfs_firmware() {
-    local d="${1:-}" issue="" version=""
-    case "$d" in
-        /) d="" ;;
-        */) d="${d%/}" ;;
-    esac
-    [ -f "$d/etc/issue" ]   && issue=$(head -1 "$d/etc/issue" | sed 's/[ \t]*\\[nl].*$//')
-    [ -f "$d/etc/version" ] && version=$(head -1 "$d/etc/version" | tr -d ' \011\015\012')
-    echo "${issue:-unknown firmware}${version:+ (build $version)}"
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -261,29 +220,24 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# The four mounts, by POSITION
+# The three mounts, by POSITION
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# A booted RoomWizard assembles four partitions into one tree. Offline — a card
-# in a reader — they are four separate mounts, and an offline tool that mounts
-# only p6 sees /home/root/{data,log,backup} as three EMPTY directories, because
-# they are mount points. That is not a subtle failure: the vendor's network
-# config (websign/, which the boot-time regenerator reads — SYSTEM_ANALYSIS.md
-# #35-network-and-power) is on p2, its logs are on p3 and the 472 MB upgrade
-# payload is on p5. A clean that ran against p6 alone would report success having
-# deleted none of them.
+# A booted RoomWizard assembles three partitions into one tree (p7 is swap). Offline —
+# a card in a reader — they are three separate mounts, and an offline tool that mounts
+# only p6 sees /home/root/{data,log} as EMPTY directories, because they are mount
+# points: the per-unit state is on p2 and the logs on p3. p5 stays in the partition
+# table, unused: nothing mounts it, so it has no role here.
 #
 # ⚠️ ROLE IS BY POSITION, NEVER BY UUID OR BY CONTENT.
 #
-#   * Not UUID, for the reason at the top of this file: all four differ per unit.
-#   * Not content either, for p2/p3/p5. p6 has vendor files to recognise;
-#     the other three do not have anything reliable. A stock p2 holds websign/
-#     and cron/, a --deep-cleaned one holds almost nothing, and a p3 that has
-#     been rotated is indistinguishable from a p5 whose factory/ was deleted.
-#     Guessing from content would mis-mount a cleaned unit's partitions and the
-#     clean would then run against the wrong tree.
+#   * Not UUID, for the reason at the top of this file: all of them differ per unit.
+#   * Not content either, for p2/p3. p6 has a marker to recognise; the other two
+#     do not have anything reliable, and a p3 that has been rotated is
+#     indistinguishable from an empty p2. Guessing from content would mis-mount a
+#     unit's partitions and the install would then run against the wrong tree.
 #   * Position is what the device itself uses: /etc/fstab names
-#     /dev/mmcblk0p{2,3,5,7} literally and U-Boot passes root=/dev/mmcblk0p6
+#     /dev/mmcblk0p{2,3,7} literally and U-Boot passes root=/dev/mmcblk0p6
 #     compiled in, with no saveenv to change it. So position is not merely
 #     convenient here, it is the device's own definition.
 #
@@ -291,14 +245,14 @@ EOF
 # ctrlblock.bin and uImage-system; leaving it untouched is what keeps a power
 # cycle a free undo (SYSTEM_ANALYSIS.md#47-recovery). A caller cannot reach p1
 # through these functions, which is a stronger guarantee than remembering not to.
-# p4 (extended container) and p7 (swap) are absent for the same reason: nothing
-# to mount.
-RW_PART_ROLES="6:root 2:data 3:log 5:backup"
+# p4 (extended container), p5 (unused) and p7 (swap) are absent for the same
+# reason: nothing to mount.
+RW_PART_ROLES="6:root 2:data 3:log"
 
 # Where each role is mounted on a RUNNING device. Used to translate a
-# device-absolute path (which is how the cleanup rules are written) into a path
+# device-absolute path (which is how the install rules are written) into a path
 # under the right offline mount.
-RW_ROLE_DEVICE_PATH="root:/ data:/home/root/data log:/home/root/log backup:/home/root/backup"
+RW_ROLE_DEVICE_PATH="root:/ data:/home/root/data log:/home/root/log"
 
 # ---------------------------------------------------------------------------
 # rw_part_dev DISK N
@@ -322,7 +276,7 @@ rw_part_dev() {
 # ---------------------------------------------------------------------------
 # rw_card_partitions DISK
 #
-# Echo "<role> <partition-device>" for each of the four, one per line, root
+# Echo "<role> <partition-device>" for each of the three, one per line, root
 # first. Pure name arithmetic over RW_PART_ROLES — it does not check that the
 # nodes exist, because a caller may be working on an image file where they do
 # not, and rw_is_card_disk has already established the layout.
@@ -354,7 +308,7 @@ rw_role_device_path() {
 # ---------------------------------------------------------------------------
 # rw_offline_path BASE DEVPATH
 #
-# Map a device-absolute path onto the right one of the four offline mounts.
+# Map a device-absolute path onto the right one of the three offline mounts.
 #
 # LONGEST prefix wins, and it must match on a component boundary.  Both matter:
 # role "root" has device path "/", which prefixes everything, and /home/rootless
@@ -469,17 +423,16 @@ rw_is_host_root_disk() {
 # ---------------------------------------------------------------------------
 # rw_mount_card DISK BASE
 #
-# Mount all four of DISK's trees read-write under BASE/{root,data,log,backup}
+# Mount all three of DISK's trees read-write under BASE/{root,data,log}
 # and echo "<role> <mountpoint>" per line. Needs root.
 #
 # Refuses the host's own disk before mounting anything, rather than after: a
 # read-write mount of the dev host's root is already a bad outcome even if
 # nothing is written to it.
 #
-# Partial failure unwinds. A caller that got three of four mounts and proceeded
-# would clean three trees and silently leave the fourth — which for p2 means
-# leaving websign/ in place, i.e. the exact defect this whole flow exists to
-# remove.
+# Partial failure unwinds. A caller that got two of three mounts and proceeded
+# would install into two trees and silently miss the third — a bundle path under
+# /home/root/data landing in p6's empty mount point instead of on p2.
 # ---------------------------------------------------------------------------
 rw_mount_card() {
     local disk="$1" base="$2" role part mp
@@ -524,7 +477,7 @@ rw_umount_card() {
         role="${entry#*:}"
         mountpoint -q "$base/$role" 2>/dev/null && umount "$base/$role" 2>/dev/null
     done
-    # root last is not required — they are four independent filesystems, not
+    # root last is not required — they are independent filesystems, not
     # nested mounts — but sync is, before the operator pulls the card.
     sync
     return 0
@@ -533,19 +486,19 @@ rw_umount_card() {
 # ---------------------------------------------------------------------------
 # rw_check_card_mounts BASE
 #
-# Sanity-check a mounted card: p6 must look like a rootfs, and the other three
+# Sanity-check a mounted card: p6 must look like our rootfs, and the other two
 # must NOT. Echoes each problem; returns 1 if there were any.
 #
 # The negative half is the half that earns its keep. Getting the partition order
 # wrong — mounting p2 where p6 was expected — is the one mistake that makes every
 # later path resolve under the wrong tree, and it would otherwise be invisible
-# until the clean reported deleting nothing.
+# until the install landed in the wrong place.
 # ---------------------------------------------------------------------------
 rw_check_card_mounts() {
     local base="$1" entry role bad=0
 
     if ! rw_is_rootfs "$base/root"; then
-        echo "  $base/root does not look like a RoomWizard rootfs"
+        echo "  $base/root does not look like our RoomWizard rootfs (no /$RW_ROOTFS_OURS, or a required file missing)"
         bad=$((bad + 1))
     fi
 

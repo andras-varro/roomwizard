@@ -16,7 +16,7 @@
 #   --bundle <path>     A release tarball from `./release.sh --stage-only`, or a staged
 #                       bundle directory. THE source of binaries: this host has no
 #                       toolchain to fall back on.
-#   --base <dir>        REQUIRED. The card, already mounted as <dir>/{root,data,log,backup}.
+#   --base <dir>        REQUIRED. The card, already mounted as <dir>/{root,data,log}.
 #   --dry-run           Print every resolved absolute path and change nothing.
 #   --no-<group>        Skip one group of the provision plan (see --help).
 #   --arm-check=skip    Proceed with UNVERIFIED binaries when the ARM objdump is
@@ -94,7 +94,7 @@ The image step of rootfs/make-card-image.sh --bundle. Asks nothing, mounts nothi
 needs no network. A unit in service is updated with commissioning/provision.sh.
 
   --bundle <path>    Release tarball or staged bundle directory (REQUIRED)
-  --base <dir>       The card, already mounted as <dir>/{root,data,log,backup}
+  --base <dir>       The card, already mounted as <dir>/{root,data,log}
                      (REQUIRED). p6 must carry our root's marker, etc/roomwizard-rootfs.
   --dry-run          Resolve and print everything, change nothing.
   --no-<group>       Skip one group of the provision plan. Groups:
@@ -172,13 +172,13 @@ BASE="${BASE%/}"
 # path below resolve under the wrong tree.
 if ! CHECK="$(rw_check_card_mounts "$BASE")"; then
     echo "$CHECK"
-    err "the four mounts do not look right"
+    err "the three mounts do not look right"
 fi
-# Our own root only. rw_is_rootfs still accepts a vendor tree, and installing into one
-# with no clean would leave its software running beside ours.
+# Our own root only (rw_is_rootfs requires the marker too; this names it in the refusal). A vendor tree
+# would have its software left running beside ours, since nothing cleans one any more.
 [[ -f "$BASE/root/$RW_ROOTFS_OURS" ]] \
     || err "$BASE/root has no /$RW_ROOTFS_OURS — this installs into OUR root filesystem (rootfs/) only"
-ok "p6 is our root ($(head -1 "$BASE/root/$RW_ROOTFS_OURS")); p2/p3/p5 are not rootfs trees"
+ok "p6 is our root ($(head -1 "$BASE/root/$RW_ROOTFS_OURS")); p2/p3 are not rootfs trees"
 rw_is_rootfs_writable "$BASE/root" || err "$BASE/root is mounted read-only"
 
 # ── 2. the bundle ───────────────────────────────────────────────────────────
@@ -379,7 +379,7 @@ fi
 # "what mode was declared" — the data file.
 if [[ -z "$DRY" ]]; then
     while IFS=$'\t' read -r pkind pmode ptarget psrc; do
-        case "$pkind" in install|touch) ;; *) continue ;; esac
+        case "$pkind" in install) ;; *) continue ;; esac
         pdest=$(rw_offline_path "$BASE" "$ptarget") || continue
         INSTALLED+=("$pmode|$ptarget|$pdest")
     done < "$PROV_PLAN"

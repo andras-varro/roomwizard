@@ -341,6 +341,25 @@ a first-boot init script for the host name (`commissioning/set-hostname.sh` has 
 first boot on p2); the banner in `native_apps/app_launcher/app_launcher.c`. **Done when** a card built with no unit state boots on a
 unit, shows the banner, refuses SSH until the panel's SSH page opens it, and the README's key procedure then works.
 
+### F141. A log viewer page in the Control Panel — open, operator request 2026-10-09, future
+
+**Read-only, beside the Monitor page** (`native_apps/control_panel/monitor_page.c` is the shape to copy). One tab each for
+`/home/root/log/messages` (syslog, p3), `/var/log/roomwizard/respawn.log` (which app exited, and how) and the kernel ring buffer;
+opens at the newest line, scrolls by pad, touch drag or keyboard, and has an "errors only" filter that makes a boot-console error
+visible at the panel. No export, no delete — longer reading stays with SSH or `commissioning/backup.sh`. Needs no login, no keyboard
+and no new dependency, so it works with only the Bluetooth pad. **Done when** each tab shows its log on `.188` and the filter hides
+non-error lines.
+
+### F142. A terminal app — open, operator request 2026-10-09, future
+
+The unit is a desk gaming device, not a meeting-room panel (operator, 2026-10-09), so a terminal is an ordinary feature. **It runs
+`/bin/login` in a pty, not a shell**: access is exactly what accounts grant, so with root's password locked nobody gets in, and the
+app carries no security logic of its own — that is F137's and F140's set-password. Its own launcher tile (`.app` manifest), also
+started from the Control Panel; leaving the shell returns to the launcher. Cross-build `libvterm` (one dependency, like alsa-lib)
+rather than write a VT parser; text through `framebuffer.c`, input through `gamepad.c` from a USB or Bluetooth keyboard, the
+on-screen keyboard plus a Ctrl/Tab/Esc/arrows row as fallback. `/dev/pts` on our root is inferred, not measured. Can be built in
+parallel with F137/F140; logging in needs one of them. **Done when** a login, `vi` and `top` work from the tile on `.188`.
+
 ### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
 
 The operator inherited many BeagleBone Black boards (photos: `beaglebone/image/beaglebone-black-board-{1,2}.jpg`). **Measured from the

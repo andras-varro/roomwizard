@@ -18,8 +18,7 @@
 #      in silence at boot), and a mode read off disk instead of declared.
 #   B  plan compilation and ORDER. Order is the interface: unlink must precede
 #      link or the glob eats the link just made; install must precede link or the
-#      link dangles on a card; dropline must come last because it edits files
-#      install may have just written.
+#      link dangles on a card.
 #   D  the offline executor against a synthetic card, plus the canary: nothing
 #      outside the base is touched.
 #   E  ⚠️ THE case this file exists for — both executors' --dry-run over the same
@@ -142,8 +141,6 @@ reject "$(R install base 0755 /etc/init.d/x does-not-exist-anywhere why)" \
     "A19 an install whose source is not in the repo is rejected"
 reject "$(R install base 0755 /etc/init.d/x /etc/passwd why)" \
     "A20 an absolute install source is rejected — sources are repo-relative"
-reject "$(R directive base - /etc/ssh/sshd_config PermitRootLogin why)" \
-    "A21 a directive with no = is rejected"
 reject "$(R unlink base - '/etc/rc*.d/S99roomwizard-app' - why)" \
     "A22 a glob outside the last component is rejected (it would silently match nothing)"
 
@@ -153,14 +150,25 @@ reject "$(R unlink base - /etc/rc6.d/K09sshd - why)" \
 reject "$(R link base - /etc/rc0.d/S20sendsigs ../init.d/x why)" \
     "A24 nor rc0.d"
 
+# The backup, directive, dropline and touch verbs are deleted: no rule uses them and
+# neither executor implements them, so a record naming one must not validate.
+reject "$(R backup base - /etc/x.orig /etc/x why)" \
+    "A24b the deleted verb backup is rejected"
+reject "$(R directive base - /etc/ssh/sshd_config PermitRootLogin=no why)" \
+    "A24c the deleted verb directive is rejected"
+reject "$(R dropline base - /etc/inittab '^4:' why)" \
+    "A24d the deleted verb dropline is rejected"
+reject "$(R touch base 0644 /var/x - why)" \
+    "A24e the deleted verb touch is rejected"
+
 # Comments, blanks, and a tab inside the reason.
 CMT="$TMP/comments.conf"
-printf '# c\n\n   \n%s\n' "$(R touch base 0644 /var/x - a reason)" > "$CMT"
+printf '# c\n\n   \n%s\n' "$(R install base 0644 /var/x - a reason)" > "$CMT"
 assert_eq "1" "$(rw_provision_parse "$CMT" | grep -c . || true)" \
     "A25 comments and blank lines are not records"
 TABBY="$TMP/tabby.conf"
-printf '%s\n' "$(printf 'touch\tbase\t0644\t/var/x\t-\ta reason\twith a tab')" > "$TABBY"
-assert_eq "touch	base	0644	/var/x	-" "$(rw_provision_parse "$TABBY")" \
+printf '%s\n' "$(printf 'install\tbase\t0644\t/var/x\t-\ta reason\twith a tab')" > "$TABBY"
+assert_eq "install	base	0644	/var/x	-" "$(rw_provision_parse "$TABBY")" \
     "A26 a tab inside the reason does not shift the first five fields"
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -250,8 +258,6 @@ for _p in /opt/roomwizard/disable-steelcase.sh /var/watchdog_test /etc/default/s
     expect "$(printf 'unlink\t-\t%s\t-' "$_p")" \
         "$PLAN_ALL" "B6 the stale vendor-era file $_p is unlinked"
 done
-absent "$(printf 'touch\t0644\t/var/watchdog_test\t-')" \
-    "$PLAN_ALL" "B6b the watchdog bypass is no longer CREATED"
 
 # ── avahi narrowed ───────────────────────────────────────────────────────────expect "$(printf 'install	0644	/etc/avahi/avahi-daemon.conf	device-files/avahi-daemon.conf')" \
 expect "$(printf 'install\t0644\t/etc/avahi/avahi-daemon.conf\tdevice-files/avahi-daemon.conf')" \
@@ -345,16 +351,6 @@ build_card
 rw_provision_apply_offline "$CARD" "$TMP/plan" "$REPO_DIR" > "$TMP/apply.out" 2>&1 \
     || bad "D3 rw_provision_apply_offline returned non-zero"
 
-# The backup and directive verbs have no rule in provision-rules.conf any more (sshd_config
-# is the root overlay's alone), but both executors still implement them. A SYNTHETIC plan
-# keeps them exercised: nothing here is read from the shipped rules.
-printf 'backup\t-\t/etc/ssh/sshd_config.orig\t/etc/ssh/sshd_config\n' > "$TMP/plan.dir"
-for kv in PermitEmptyPasswords=no MaxAuthTries=3 LoginGraceTime=30 MaxSessions=5; do
-    printf 'directive\t-\t/etc/ssh/sshd_config\t%s\n' "$kv" >> "$TMP/plan.dir"
-done
-rw_provision_apply_offline "$CARD" "$TMP/plan.dir" "$REPO_DIR" >> "$TMP/apply.out" 2>&1 \
-    || bad "D3b the synthetic backup+directive plan returned non-zero"
-
 exists "$CARD/root/etc/init.d/audio-enable"          "D4 audio-enable installed"
 exists "$CARD/root/etc/init.d/time-sync"             "D5 time-sync installed"
 exists "$CARD/root/etc/sysctl.conf"    "D6 sysctl.conf installed"
@@ -399,33 +395,6 @@ for pair in "etc/avahi/avahi-daemon.conf:avahi-daemon.conf"; do
     fi
     assert_eq "644" "$(stat -c %a "$CARD/root/$t" 2>/dev/null)" "D19c /$t is 0644"
 done
-
-# directive + backup verbs (synthetic plan above): the substitution AND the appends, and the backup taken once.
-if grep -q '^PermitEmptyPasswords no$' "$CARD/root/etc/ssh/sshd_config"; then
-    ok "D20 PermitEmptyPasswords is no"
-else
-    bad "D20 PermitEmptyPasswords is no — got: $(grep -i permitempty "$CARD/root/etc/ssh/sshd_config" | tr '\n' ' ')"
-fi
-assert_eq "1" "$(grep -c '^PermitEmptyPasswords' "$CARD/root/etc/ssh/sshd_config")" \
-    "D21 and exactly once — a directive is SET, not appended beside the old value"
-for d in MaxAuthTries LoginGraceTime MaxSessions; do
-    assert_eq "1" "$(grep -c "^$d " "$CARD/root/etc/ssh/sshd_config")" "D22.$d $d set once"
-done
-assert_eq "yes" "$(awk '/^PermitRootLogin/{print $2}' "$CARD/root/etc/ssh/sshd_config")" \
-    "D23 PermitRootLogin is left alone — root is the only account"
-exists "$CARD/root/etc/ssh/sshd_config.orig" "D24 the factory sshd_config is backed up"
-assert_eq "$(printf 'PermitRootLogin yes\nPermitEmptyPasswords yes\n' | md5sum)" \
-          "$(md5sum < "$CARD/root/etc/ssh/sshd_config.orig")" \
-    "D25 and the backup is the FACTORY bytes, not the hardened ones"
-
-# ── idempotence: a second run must be a no-op, not a doubling ────────────
-rw_provision_apply_offline "$CARD" "$TMP/plan" "$REPO_DIR" >/dev/null 2>&1
-rw_provision_apply_offline "$CARD" "$TMP/plan.dir" "$REPO_DIR" >/dev/null 2>&1
-assert_eq "1" "$(grep -c '^MaxAuthTries ' "$CARD/root/etc/ssh/sshd_config")" \
-    "D30 a second run does not append MaxAuthTries twice"
-assert_eq "$(printf 'PermitRootLogin yes\nPermitEmptyPasswords yes\n' | md5sum)" \
-          "$(md5sum < "$CARD/root/etc/ssh/sshd_config.orig")" \
-    "D31 and does not overwrite the backup with the already-hardened file"
 
 # ── link-opt on an image WITHOUT avahi: skip, do not dangle ──────────────
 build_card
@@ -710,9 +679,8 @@ assert_eq "" "$BT_NONE" "F12c control: an adapter with no storage reconnects not
 
 # ── F13-F14: the summary line accounts for every action ──────────────────────
 #
-# The old summary read "35 action(s) — 8 install, 9 link, 10 unlink", which accounts
-# for 27. backup, touch, the four directives and the two droplines were simply not
-# in the breakdown — the kind of arithmetic that hides a verb nobody is executing.
+# A hand-rolled summary once listed 27 of 35 actions; the breakdown must add up to the
+# total, or a verb nobody is executing hides in the arithmetic.
 SUM=$(rw_provision_plan_summary "$PPLAN")
 STOT=$(printf '%s' "$SUM" | sed 's/ action.*//')
 SADD=$(printf '%s' "$SUM" | sed 's/^.*— //' | tr ',' '\n' | awk '{s += $1} END {print s + 0}')

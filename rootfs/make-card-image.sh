@@ -20,7 +20,7 @@
 # EMPTY; p6 gets the rootfs, the per-unit state and the kernel modules.
 #
 # With --bundle <dir|tar> (a release.sh --stage-only bundle) it then mounts p6, p2,
-# p3 and p5 as <base>/{root,data,log,backup} and runs commissioning/commission-offline.sh
+# p3 as <base>/{root,data,log} and runs commissioning/commission-offline.sh
 # over them: the boot scripts, their links and every component's files go in, and that
 # script's own verify pass checks them. It asks nothing and cleans nothing: the tree is
 # ours, with no vendor stack, and the per-unit state is already in p6. p1 is not mounted
@@ -141,7 +141,7 @@ cleanup() {
     local rc=$?
     set +e
     if mountpoint -q "$MNT/p"; then umount "$MNT/p"; fi
-    for r in root data log backup; do
+    for r in root data log; do
         if mountpoint -q "$MNT/base/$r"; then umount "$MNT/base/$r"; fi
     done
     if [ -n "$LOOP" ]; then losetup -d "$LOOP"; fi
@@ -265,9 +265,9 @@ fill 6 "$ROOTTAR" "$PARTS/state.tar"
 if [ -n "$BUNDLE" ]; then
     echo "== installing bundle $BUNDLE_TAG"
     # The layout rw_check_card_mounts and rw_offline_path expect: p6 as root,
-    # p2/p3/p5 as data/log/backup — mounted, so a bundle path under /home/root/data
+    # p2/p3 as data/log — mounted, so a bundle path under /home/root/data
     # lands on p2 and not in p6's empty mount point. p1 is not mounted.
-    for rp in root:6 data:2 log:3 backup:5; do
+    for rp in root:6 data:2 log:3; do
         mkdir -p "$MNT/base/${rp%%:*}" || die "mkdir base"
         mount "$(rw_part_dev "$LOOP" "${rp#*:}")" "$MNT/base/${rp%%:*}" || die "mount p${rp#*:} as ${rp%%:*}"
     done
@@ -277,7 +277,7 @@ if [ -n "$BUNDLE" ]; then
         die "commission-offline.sh failed (above); the image is deleted, write nothing"
     fi
     sync
-    for r in root data log backup; do umount "$MNT/base/$r" || die "umount base/$r"; done
+    for r in root data log; do umount "$MNT/base/$r" || die "umount base/$r"; done
 fi
 
 echo "== fsck"

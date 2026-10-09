@@ -193,7 +193,7 @@ measure "3 no mkdir -p" "$STAGED" 'true # mkdir dropped' 3 "$(run_suite)"
 echo ""
 echo "  4. the plan summary truncated to install/link/unlink (the defect's own header)"
 stage
-sed -i 's|split("unlink install backup link link-opt touch directive dropline", o, " ")|split("unlink install link", o, " ")|' "$STAGED"
+sed -i 's|split("unlink install link link-opt", o, " ")|split("unlink install link", o, " ")|' "$STAGED"
 sed -i '/if (!(k in seen)) out = out/d' "$STAGED"
 measure "4 truncated summary" "$STAGED" 'split\("unlink install link"' 1 "$(run_suite)"
 
