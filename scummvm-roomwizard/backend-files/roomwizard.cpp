@@ -58,6 +58,7 @@
 
 #include "backends/mutex/null/null-mutex.h"
 #include <unistd.h>
+#include <errno.h>
 
 // Timer callbacks are pumped cooperatively from delayMillis() and pollEvent()
 // via DefaultTimerManager::checkTimers(10).  No background thread is used —
@@ -183,7 +184,18 @@ void OSystem_RoomWizard::initBackend() {
 	_timerManager = new DefaultTimerManager();
 	
 	// Create save file manager
-	_savefileManager = new DefaultSaveFileManager();
+	// Saves go to the p2 data partition (survives a p6 reflash, captured by
+	// backup.sh).  The constructor argument is upstream's idiom: it does
+	// ConfMan.registerDefault("savepath", ...), so an explicit savepath in
+	// scummvm.ini still wins.  Without it saves landed in the process cwd
+	// ("/" at boot, /home/root from SSH).
+	static const char *const kSavePath = "/home/root/data/scummvm-saves";
+	if (mkdir(kSavePath, 0755) != 0 && errno != EEXIST) {
+		if (_logFile)
+			fprintf(LOG_FP, "WARNING: cannot create savepath %s: errno %d\n", kSavePath, errno);
+		warning("RoomWizard: cannot create savepath %s (errno %d)", kSavePath, errno);
+	}
+	_savefileManager = new DefaultSaveFileManager(kSavePath);
 	
 	// Mixer over native_apps' audio_out — ALSA plughw:N,0 through libasound (TWL4030 or a USB DAC)
 	_mixerManager = new OssMixerManager();
