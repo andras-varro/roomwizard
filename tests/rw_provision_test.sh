@@ -687,6 +687,19 @@ SADD=$(printf '%s' "$SUM" | sed 's/^.*— //' | tr ',' '\n' | awk '{s += $1} END
 assert_eq "$(grep -c . "$PPLAN")" "$STOT" "F13 the summary's total equals the plan's line count"
 assert_eq "$STOT" "$SADD" "F14 the summary's per-type counts add up to its total"
 
+# F14 sees only the types the shipped plan happens to contain — link-opt lives in the
+# mdns group, so a summary that forgot it passed F14. One record of every known type,
+# plus one this library has never heard of, makes the subject independent of the rules.
+SYNPLAN="$FW/summary-every-type.plan"
+: > "$SYNPLAN"
+for t in $RW_PROVISION_TYPES frob; do printf '%s\t-\t/x/%s\t-\n' "$t" "$t" >> "$SYNPLAN"; done
+SYNSUM=$(rw_provision_plan_summary "$SYNPLAN")
+SYNMISS=""
+for t in $RW_PROVISION_TYPES frob; do
+    printf '%s' "$SYNSUM" | grep -qE "(— |, )1 $t(,|\$)" || SYNMISS="$SYNMISS $t"
+done
+assert_eq "" "$SYNMISS" "F15 the summary names every record type, including one it does not know"
+
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
 echo "G. sshd policy is not this library's: the --ssh-auth machinery is gone"

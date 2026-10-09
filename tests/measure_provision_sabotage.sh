@@ -36,38 +36,41 @@
 #   2  the missing-source check deleted      an install whose device-files/ source
 #                                            was renamed silently copies nothing and
 #                                            the executor blames the device
-#   3  the mkdir -p dropped                  /opt/roomwizard and /usr/local/bin do
-#                                            not exist on a vendor unit, so scp
-#                                            fails on every install under them
+#   3  the mkdir -p dropped                  an install whose target directory the
+#                                            image lacks fails at scp instead of
+#                                            creating it
 #   4  the summary truncated to three types  the defect's own header: "35 action(s) — 8
 #                                            install, 9 link, 10 unlink" accounted
-#                                            for 27, hiding four verbs
+#                                            for 27, hiding four verbs. It drops
+#                                            link-opt AND the unknown-type fallback
 #   5  the suite's stub ssh stops reading     a control on the HARNESS, not the lib:
 #      its stdin                              if the stub is unfaithful, F1 cannot
 #                                             reproduce the defect and all of F is vacuous
 #
-# ── Measured 2026-08-09, ~2 min for the whole run ────────────────────────────
+# ── Measured 2026-10-09, ~4 min for the whole run ────────────────────────────
 #
 # Counts are minimums, not equalities — a case added later may raise one. Which
 # assertions fail matters more than how many, so they are named.
 #
-#   baseline                                    109 passed,  0 failed
-#   1 the plan on stdin, not fd 3               102 passed,  7 failed
+#   baseline                                    112 passed,  0 failed
+#   1 the plan on stdin, not fd 3               105 passed,  7 failed
 #       F2 F3 F4 F5 F7 F8 F12 — 1 of 8 copied, so the function's own got-vs-want
 #                     guard returns 1, as F2 asserts, and every downstream count is short
-#   2 the missing-source refusal deleted        108 passed,  1 failed
+#   2 the missing-source refusal deleted        111 passed,  1 failed
 #       F10         — ⚠️ ONE case, and not the obvious one. "It returned non-zero"
 #                     still passes, because scp fails on a missing source anyway;
 #                     what changes is that a mkdir ran on the device first
-#   3 the mkdir -p dropped                      102 passed,  7 failed
+#   3 the mkdir -p dropped                      105 passed,  7 failed
 #       F2 F3 F4 F5 F7 F8 F12 — the same set as sabotage 1. Indistinguishable by
 #                     count AND by name, which is honest: both mean "the copy step
 #                     does not copy". F7/F8 are what separate the causes, by naming
 #                     the directories, and they are in both sets
-#   4 the summary truncated to 3 types          108 passed,  1 failed
-#       F14         — F13 still passes: the TOTAL was always right, it was the
-#                     breakdown that accounted for 27 of 35
-#   5 control: the stub ssh stops reading stdin 108 passed,  1 failed
+#   4 the summary truncated to 3 types          111 passed,  1 failed
+#       F15         — ⚠️ NOT F14. F14 adds up the shipped plan, which compiles
+#                     base+usb and holds no link-opt (the one link-opt rule is in
+#                     group mdns), so F14 passed this sabotage and the sweep went
+#                     red. F15 summarises a synthetic plan with every type in it
+#   5 control: the stub ssh stops reading stdin 111 passed,  1 failed
 #       F1 ONLY     — required to be exactly F1. An unfaithful stub must break the
 #                     one case whose job is to prove the stub, and nothing else
 #
@@ -184,7 +187,7 @@ measure "2 no missing-source check" "$STAGED" '!missing \$repo/\$src' 1 "$(run_s
 # ssh call itself both survive: a sabotage that only breaks the parse measures
 # nothing, and replacing the whole line would orphan the next one.
 echo ""
-echo "  3. the mkdir -p dropped (three target dirs do not exist on a vendor unit)"
+echo "  3. the mkdir -p dropped (an install target dir the image lacks)"
 stage
 sed -i "s|\"mkdir -p '\$dir'\"|\"true # mkdir dropped\"|" "$STAGED"
 measure "3 no mkdir -p" "$STAGED" 'true # mkdir dropped' 3 "$(run_suite)"
