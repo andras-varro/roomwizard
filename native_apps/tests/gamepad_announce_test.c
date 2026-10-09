@@ -23,7 +23,7 @@
  *       common/config.c common/touch_input.c -lm && ./build/gamepad_announce_test"
  *
  * Measured 2026-09-08: the whole gate under `wsl.exe -u root` does NOT reach
- * phase 2 on this host.  Phase 1's commission_prep_test.sh exits 2 as root, and
+ * phase 2 on this host.  a host suite exits 2 as root, and
  * phase 2 returns without a word while any harness error stands; phase 3 then
  * fails too, because git refuses a repo it sees as dubiously owned.  Both are
  * artefacts of the shell, not of the repo.

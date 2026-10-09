@@ -40,7 +40,7 @@
 # `Permission denied (publickey,password)`; that local sshd says
 # `Permission denied (publickey,keyboard-interactive)`, because the parenthetical is
 # the SERVER's method list. A classifier keyed on it would pass against a device
-# (where card-prep.sh sets PasswordAuthentication yes) and call every other server
+# (the pre-hardening vendor sshd said (publickey,password)) and call every other server
 # "down" — suppressing the offer rather than making a spurious one, so nothing would
 # look broken. Case A6 is that negative control.
 #
@@ -637,7 +637,7 @@ if [ -n "$SAVED_SUDO_USER" ]; then SUDO_USER="$SAVED_SUDO_USER"; else unset SUDO
 
 # The call site must pass the REAL euid. A function that is right and a call site
 # that hardcodes 0 is the shape F4/F5 cannot see — the same hole
-# tests/commission_prep_test.sh records for operator_home.
+# a call site that ignores rw_ssh_operator_home (F13-F16 test the function alone).
 if grep -qF 'rw_ssh_key_owner "$(id -u)"' "$REPO_DIR/lib/rw-ssh.sh"; then
     ok "F6 rw_ssh_keygen passes the real euid to rw_ssh_key_owner"
 else
@@ -677,6 +677,35 @@ else
     fi
 fi
 
+# ── rw_ssh_operator_home: whose ~/.ssh the key is looked for in ────────────
+# Under sudo $HOME is /root, so the lookup must follow $SUDO_USER. Run in THIS
+# shell with HOME/SUDO_USER restored after, so failures are counted.
+G_REAL_HOME="$HOME"
+G_REAL_SUDO="${SUDO_USER:-}"
+
+unset SUDO_USER
+HOME=/home/nobody-in-particular
+assert_eq "/home/nobody-in-particular" "$(rw_ssh_operator_home)" \
+    "F13 operator_home: no SUDO_USER uses \$HOME"
+SUDO_USER=root
+assert_eq "/home/nobody-in-particular" "$(rw_ssh_operator_home)" \
+    "F14 operator_home: SUDO_USER=root falls back to \$HOME"
+SUDO_USER="rw-no-such-user-$$"
+assert_eq "/home/nobody-in-particular" "$(rw_ssh_operator_home)" \
+    "F15 operator_home: unresolvable SUDO_USER falls back to \$HOME"
+# The case the bug was: a real invoking user while $HOME points at root's.
+G_ME="$(id -un 2>/dev/null)"
+G_MY_HOME="$(getent passwd "$G_ME" 2>/dev/null | cut -d: -f6)"
+if [ -n "$G_MY_HOME" ] && [ -d "$G_MY_HOME" ] && [ "$G_ME" != "root" ]; then
+    SUDO_USER="$G_ME"; HOME=/root
+    assert_eq "$G_MY_HOME" "$(rw_ssh_operator_home)" \
+        "F16 operator_home: under sudo, SUDO_USER's home wins over /root"
+else
+    skipped "F16 operator_home under sudo" "no non-root user with a resolvable home, or getent absent"
+fi
+HOME="$G_REAL_HOME"
+if [ -n "$G_REAL_SUDO" ]; then SUDO_USER="$G_REAL_SUDO"; else unset SUDO_USER; fi
+
 # ── the library parses, and under the right shell ─────────────────────────
 if bash -n "$REPO_DIR/lib/rw-ssh.sh" 2>/dev/null; then
     ok "F12 lib/rw-ssh.sh parses under bash"
@@ -689,10 +718,10 @@ TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $SKIP skipped"
 
 # A harness that runs nothing reports success. Non-skippable: A (11) + B1-B4 (4)
-# + C1-C3a (4) + E (7 files x 2 + 3) + F1-F3 (3) + F6 (1) + F12 (1) = 45.
+# + C1-C3a (4) + E (7 files x 2 + 3) + F1-F3 (3) + F6 (1) + F12 (1) + F13-F15 (3) = 48.
 # Skippable and deliberately uncounted: B5-B9 and C4-C8 and D1-D10 (need sshd,
-# and D needs `script`), F4-F5 (need a non-root user), F7-F11 (need ssh-keygen).
-MIN_CASES=45
+# and D needs `script`), F4-F5 and F16 (need a non-root user), F7-F11 (need ssh-keygen).
+MIN_CASES=48
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then
     echo -e "  ${RED}HARNESS ERROR${NC}: only $TOTAL cases ran, expected at least $MIN_CASES."
     echo "  Cases were skipped that cannot be skipped, or the file was truncated."

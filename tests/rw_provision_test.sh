@@ -7,8 +7,8 @@
 #
 #   wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && ./tests/rw_provision_test.sh"
 #
-# The delete half's suite is tests/rw_clean_test.sh; path mapping and the base
-# guard (rw_offline_path, rw_offline_base_ok) are tests/rw_identify_test.sh's.
+# Path mapping and the base guard (rw_offline_path, rw_offline_base_ok) are
+# tests/rw_identify_test.sh's.
 #
 # ── What each group of cases is for ────────────────────────────────────────
 #
@@ -20,9 +20,6 @@
 #      link or the glob eats the link just made; install must precede link or the
 #      link dangles on a card; dropline must come last because it edits files
 #      install may have just written.
-#   C  the cross-file invariant: every link this file creates must be named by a
-#      keep in clean-rules.conf, or the next --deep-clean deletes it. Both files
-#      parse, so this is checkable rather than a comment asking a human.
 #   D  the offline executor against a synthetic card, plus the canary: nothing
 #      outside the base is touched.
 #   E  ⚠️ THE case this file exists for — both executors' --dry-run over the same
@@ -54,8 +51,6 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # shellcheck source=../lib/rw-identify.sh
 . "$REPO_DIR/lib/rw-identify.sh"
-# shellcheck source=../lib/rw-clean.sh
-. "$REPO_DIR/lib/rw-clean.sh"
 # shellcheck source=../lib/rw-provision.sh
 # $RW_PROVISION_LIB points the suite at a staged copy of the library — the hook
 # tests/measure_provision_sabotage.sh drives, so a sabotage stages ONE file instead
@@ -63,7 +58,6 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "${RW_PROVISION_LIB:-$REPO_DIR/lib/rw-provision.sh}"
 
 RULES="$REPO_DIR/device-files/provision-rules.conf"
-CLEAN_RULES="$REPO_DIR/device-files/clean-rules.conf"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
 PASS=0; FAIL=0
@@ -153,7 +147,7 @@ reject "$(R directive base - /etc/ssh/sshd_config PermitRootLogin why)" \
 reject "$(R unlink base - '/etc/rc*.d/S99roomwizard-app' - why)" \
     "A22 a glob outside the last component is rejected (it would silently match nothing)"
 
-# rc0.d / rc6.d are shutdown. Unreachable by construction, as in clean-rules.conf.
+# rc0.d / rc6.d are shutdown. Unreachable by construction.
 reject "$(R unlink base - /etc/rc6.d/K09sshd - why)" \
     "A23 no rule may name rc6.d — shutdown, not startup"
 reject "$(R link base - /etc/rc0.d/S20sendsigs ../init.d/x why)" \
@@ -295,40 +289,6 @@ if [ -f "$AV" ]; then
     fi
 else
     bad "B25 device-files/avahi-daemon.conf exists — B25-B30 are vacuous without it"
-fi
-
-# ═══════════════════════════════════════════════════════════════════════════
-echo ""
-echo "C. the cross-file invariant: a link the whitelist does not name gets swept"
-# ═══════════════════════════════════════════════════════════════════════════
-
-if OUT=$(rw_provision_check_keeps "$RULES" "$CLEAN_RULES" 2>&1); then
-    ok "C1 every boot link in provision-rules.conf is kept by clean-rules.conf"
-else
-    bad "C1 every boot link in provision-rules.conf is kept by clean-rules.conf"
-    printf '%s\n' "$OUT" | sed 's/^/        /'
-fi
-
-# The negative control: a link nothing keeps must be caught.
-SAB="$TMP/sabotage.conf"
-{
-    cat "$RULES"
-    R link base - /etc/rc5.d/S77nothing-keeps-this ../init.d/roomwizard-app 'a link no keep names'
-    echo ""
-} > "$SAB"
-if rw_provision_check_keeps "$SAB" "$CLEAN_RULES" >/dev/null 2>&1; then
-    bad "C2 a link with no matching keep is CAUGHT"
-else
-    ok "C2 a link with no matching keep is CAUGHT"
-fi
-
-# And the other direction: a keep whose priority differs from the link's.
-SAB2="$TMP/sabotage2.conf"
-sed 's|/etc/rc5.d/S28time-sync|/etc/rc5.d/S27time-sync|' "$RULES" > "$SAB2"
-if rw_provision_check_keeps "$SAB2" "$CLEAN_RULES" >/dev/null 2>&1; then
-    bad "C3 changing a link's PRIORITY without changing the keep is caught"
-else
-    ok "C3 changing a link's PRIORITY without changing the keep is caught"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -89,10 +89,8 @@ note()    { printf '    %s\n' "$1"; }
 SUITE_ROWS=(
     "check_arm_safe_test.sh|deploy"
     "commission_offline_test.sh|deploy"
-    "commission_prep_test.sh|deploy"
     "provision_online_test.sh|deploy"
     "rw_bundle_ssh_test.sh|deploy"
-    "rw_clean_test.sh|deploy"
     "rw_identify_test.sh|deploy"
     "rw_provision_test.sh|deploy"
     "rw_release_test.sh|deploy"
@@ -246,7 +244,7 @@ if [ "$ONLY" = "selftest" ]; then
 
     mkdir -p "$T/failing"
     printf '#!/bin/bash\necho "3 passed, 1 failed"\nexit 1\n' > "$T/failing/rw_identify_test.sh"
-    for n in check_arm_safe commission_offline commission_prep rw_bundle_ssh rw_clean \
+    for n in check_arm_safe commission_offline rw_bundle_ssh rw_clean \
              rw_provision rw_release rw_ssh setup_build_env; do
         printf '#!/bin/bash\necho "1 passed, 0 failed"\n' > "$T/failing/${n}_test.sh"
     done
@@ -710,8 +708,8 @@ printf '  %s%d passed%s, %s%d failed%s, %s%d skipped%s, %s%d harness error%s\n' 
 
 if [ "$skip_n" -gt 0 ]; then
     printf '  %sskipped:%s %s\n' "$YEL" "$RST" "${SKIPPED_LIST[*]}"
-    # ⚠️ NOT "re-run this as root". Measured 2026-09-08: as root, phase 1's
-    # commission_prep_test.sh exits 2, phase 2 then returns without printing a
+    # ⚠️ NOT "re-run this as root". Measured 2026-09-08: as root, one suite exits 2,
+    # a later phase then returns without printing a
     # row, and phase 3 dies because git calls the repo dubiously owned — 11
     # passed, 2 harness errors, exit 2. Root reaches FEWER subjects, so point at
     # the one skipped subject instead of at the whole gate.

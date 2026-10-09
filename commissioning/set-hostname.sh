@@ -5,7 +5,7 @@
 #
 # ONE implementation, called from two places with different connection models:
 #
-#   card-prep.sh                offline, against a mounted card:
+#   rootfs/make-card-image.sh   offline, against a mounted card:
 #                                 sudo ./commissioning/set-hostname.sh NAME /mnt/rw
 #   provision.sh --hostname     over SSH, against the live root:
 #                                 ./commissioning/set-hostname.sh NAME
@@ -124,7 +124,7 @@ if ! awk -v new="$NAME" '
 fi
 
 # Negative control, same shape as the loopback-stanza guard in
-# commissioning/card-prep.sh: assert the thing the filter must never remove is
+# the old loopback-stanza guard: assert the thing the filter must never remove is
 # still there, rather than trusting the filter. Losing the localhost entry is
 # the one way this script could break a booting device.
 LOCALHOST_RE='(^|[ \t])localhost([ \t]|$)'

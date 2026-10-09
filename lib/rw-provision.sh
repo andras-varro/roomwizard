@@ -6,11 +6,7 @@
 #
 # SOURCED, not executed:   . "$REPO_ROOT/lib/rw-provision.sh"
 #                          (needs lib/rw-identify.sh sourced first — rw_offline_path does the
-#                          p2/p3/p5/p6 mapping and rw_offline_base_ok is the guard — and
-#                          lib/rw-clean.sh, whose keep rules rw_provision_check_keeps reads)
-#
-# The delete half is lib/rw-clean.sh; this is the install half
-# and it is deliberately the same shape.
+#                          p2/p3/p5/p6 mapping and rw_offline_base_ok is the guard)
 #
 # ── The decisions are not in this file ──────────────────────────────────────
 #
@@ -142,8 +138,7 @@ rw_provision_validate() {
             if (target == "/")     { printf "  line %d: target is \"/\"\n", NR; bad++ }
 
             # ⚠️ rc0.d and rc6.d are SHUTDOWN, not startup. Unreachable through this
-            # file by construction, the same guarantee as clean-rules.conf gives and
-            # as p1s absence from RW_PART_ROLES.
+            # file by construction, the same guarantee as p1s absence from RW_PART_ROLES.
             if (target ~ /\/rc[06]\.d(\/|$)/) {
                 printf "  line %d: rc0.d and rc6.d are shutdown, not startup — no rule may name them: %s\n", NR, target
                 bad++
@@ -224,48 +219,6 @@ rw_provision_validate() {
         return 1
     fi
     return 0
-}
-
-# ---------------------------------------------------------------------------
-# rw_provision_check_keeps PROVISION_RULES CLEAN_RULES
-#
-# ⚠️ The cross-file invariant. A boot link this file creates that
-# clean-rules.conf does not name with a `keep` is deleted by the next
-# --deep-clean, so the unit boots correctly once and loses the link on the
-# following clean.
-#
-# This used to be a comment in both files asking a human to remember. Both files
-# parse, so it is checkable.
-# ---------------------------------------------------------------------------
-rw_provision_check_keeps() {
-    local prules="$1" crules="$2" bad=0 kind group mode target src dir name
-
-    [ -f "$prules" ] || { echo "  no such file: $prules"; return 1; }
-    [ -f "$crules" ] || { echo "  no such file: $crules"; return 1; }
-
-    while IFS=$'\t' read -r kind group mode target src; do
-        case "$kind" in link|link-opt) ;; *) continue ;; esac
-        # Only rc*.d links are subject to a sweep; a link elsewhere is not swept
-        # because no scope covers its directory.
-        case "$target" in */rc[2-5S].d/*) ;; *) continue ;; esac
-        dir="${target%/*}"
-        name="${target##*/}"
-        if ! rw_clean_parse "$crules" | awk -F'\t' -v d="$dir" -v n="$name" '
-                $1 == "keep" {
-                    kd = $3; sub(/\/[^\/]*$/, "", kd)
-                    kn = $3; sub(/^.*\//, "", kn)
-                    if (kd == d && kn == n) { found = 1 }
-                }
-                END { exit(found ? 0 : 1) }'; then
-            echo "  $target is created by provision-rules.conf and NOT kept by clean-rules.conf"
-            echo "      the next --deep-clean will sweep it; add:  keep	base	$target	<reason>"
-            bad=1
-        fi
-    done <<EOF
-$(rw_provision_parse "$prules")
-EOF
-
-    [ "$bad" = 0 ]
 }
 
 # ---------------------------------------------------------------------------

@@ -261,21 +261,13 @@ fi
 ts "[4/7] Device scripts and boot links (provision-rules.conf, group usb)"
 # shellcheck source=../lib/rw-identify.sh
 . "$REPO_ROOT/lib/rw-identify.sh"
-# shellcheck source=../lib/rw-clean.sh
-. "$REPO_ROOT/lib/rw-clean.sh"
 # shellcheck source=../lib/rw-provision.sh
 . "$REPO_ROOT/lib/rw-provision.sh"
 
 PROV_RULES="$REPO_ROOT/device-files/provision-rules.conf"
-CLEAN_RULES="$REPO_ROOT/device-files/clean-rules.conf"
 [[ -f "$PROV_RULES" ]] || err "missing $PROV_RULES"
 if ! PCHECK="$(rw_provision_validate "$PROV_RULES" "$REPO_ROOT")"; then
     echo "$PCHECK"; err "provision-rules.conf does not validate"
-fi
-# A boot link the clean's whitelist does not name is deleted by the next
-# --deep-clean, so the unit boots right once and loses USB on the following clean.
-if ! KCHECK="$(rw_provision_check_keeps "$PROV_RULES" "$CLEAN_RULES")"; then
-    echo "$KCHECK"; err "a boot link in provision-rules.conf is not kept by clean-rules.conf"
 fi
 
 USB_PLAN=$(mktemp)

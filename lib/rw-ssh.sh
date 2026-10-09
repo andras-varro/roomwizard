@@ -15,8 +15,8 @@
 # the SSH key" / "Check: network connectivity, SSH key auth, device is powered on")
 # and which share one defect: `BatchMode=yes` disables password authentication, so
 # an operator with no key installed is told to check a key nothing ever offered to
-# create or install. The device accepts a password — commissioning/card-prep.sh
-# forces `PasswordAuthentication yes` — and the host had no way to use it.
+# create or install. The old vendor device accepted a password (it forced
+# `PasswordAuthentication yes`) — and the host had no way to use it.
 #
 # ⚠️ BatchMode STAYS. Only the probes set it; the ssh/scp calls behind them do not,
 # so dropping it "works" and then prompts for the password once per call, and
@@ -39,8 +39,8 @@
 # this host with no device present (tests/rw_ssh_test.sh does the same).
 #
 # ⚠️ Note what that measurement refutes: the parenthetical method list is
-# SERVER-dependent. A RoomWizard says `(publickey,password)` because card-prep.sh
-# sets PasswordAuthentication yes; that local sshd said
+# SERVER-dependent. A vendor-root RoomWizard said `(publickey,password)` because it
+# set PasswordAuthentication yes; that local sshd said
 # `(publickey,keyboard-interactive)`. So the classifier matches `Permission denied`
 # and never the parenthetical — keying on `(publickey,password)` would pass against
 # a device and misclassify every other server as "down", which is the direction that
@@ -129,8 +129,8 @@ rw_ssh_probe() {
 #
 # This script sudo's each individual write rather than requiring root, so run
 # standalone it has the operator's own $HOME and the key is where they expect.
-# But commissioning/commission-offline.sh runs as root and calls
-# commissioning/card-prep.sh, and under sudo $HOME is /root — where no operator's
+# But an offline flow that runs as root (the old card prep did) sees $HOME as
+# /root under sudo — where no operator's
 # SSH key lives. The key was therefore NEVER found in the offline flow: the prompt
 # fell through to "enter a path" on a host where a perfectly good
 # ~/.ssh/id_rsa.pub existed.
@@ -141,7 +141,7 @@ rw_ssh_probe() {
 # absent or the name resolves to nothing, this falls back to $HOME, which is the
 # pre-existing behaviour rather than a new failure.
 #
-# It lives here rather than in card-prep.sh because the key GENERATION below needs
+# It lives here rather than in a caller because the key GENERATION below needs
 # the same answer, and two copies of "whose home" is how the original bug got in.
 rw_ssh_operator_home() {
     local h

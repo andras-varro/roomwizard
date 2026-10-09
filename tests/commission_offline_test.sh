@@ -7,7 +7,7 @@
 #
 #   wsl.exe -u root -e bash -lc "cd /mnt/c/work/roomwizard && tests/commission_offline_test.sh"
 #
-# Needs root, kept from when card-prep.sh wrote through sudo and a plain `wsl.exe -e bash -lc`
+# Needs root, kept from when the offline installer wrote through sudo and a plain `wsl.exe -e bash -lc`
 # stalled on `sudo: a password is required`; nothing in this path asks for sudo now, but the
 # gate counts a non-root run as a skip, so `-u root` above stays the one way to run it.
 # Needs a staged bundle: ./release.sh --stage-only [--component
@@ -66,11 +66,11 @@ trap 'rm -rf "$TMP"' EXIT INT TERM
 # A copy of only what commissioning/commission-offline.sh reads. `cp -a` on device-files/ so the
 # init scripts keep their bytes — that copy is also what brings roomwizard-app and the
 # other files the provision plan installs from there; nothing here needs the 4 GB card
-# images. lib/rw-clean.sh is here because rw_provision_check_keeps still reads through it.
+# images.
 REPO="$TMP/repo"
 mkdir -p "$REPO/native_apps" "$REPO/commissioning" "$REPO/lib"
 for f in commissioning/commission-offline.sh \
-         lib/rw-identify.sh lib/rw-clean.sh lib/rw-provision.sh lib/rw-bundle.sh; do
+         lib/rw-identify.sh lib/rw-provision.sh lib/rw-bundle.sh; do
     cp "$REPO_DIR/$f" "$REPO/$f"
 done
 cp -a "$REPO_DIR/device-files" "$REPO/device-files"
@@ -149,8 +149,8 @@ SRC_LINES=$(grep -hoE '\.[[:space:]]+"[^"]*/lib/[^"]+"' \
 SRC_N=$(printf '%s\n' "$SRC_LINES" | grep -c . )
 # Ask which part of the count is the harness: a grep whose pattern has rotted
 # matches nothing and every per-file case below then passes over an empty list.
-if [ "$SRC_N" -ge 4 ]; then
-    ok "0a the source-line grep found $SRC_N libraries (>= 4)"
+if [ "$SRC_N" -ge 3 ]; then
+    ok "0a the source-line grep found $SRC_N libraries (>= 3)"
 else
     bad "0a the source-line grep found only $SRC_N libraries — the pattern has rotted"
 fi

@@ -53,10 +53,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # ships to the device.
 # shellcheck source=../lib/rw-identify.sh
 . "$REPO_ROOT/lib/rw-identify.sh"
-# rw-clean.sh is sourced ONLY for rw_provision_check_keeps, which still reads
-# clean-rules.conf; both go when that check does.
-# shellcheck source=../lib/rw-clean.sh
-. "$REPO_ROOT/lib/rw-clean.sh"
 # shellcheck source=../lib/rw-provision.sh
 . "$REPO_ROOT/lib/rw-provision.sh"
 # shellcheck source=../lib/rw-ssh.sh
@@ -100,8 +96,6 @@ INIT_SCRIPT="/etc/init.d/roomwizard-app"
 # two copies of an init script is two things to keep in step, and the one that
 # drifts is discovered on a device that boots to a black screen.
 DEVICE_FILES="$REPO_ROOT/device-files"
-# Read ONLY by rw_provision_check_keeps below; goes with that check.
-CLEAN_RULES="$DEVICE_FILES/clean-rules.conf"
 
 # ── colour helpers ──────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -283,9 +277,8 @@ apply_plan() {
 # ── hostname-only mode ──────────────────────────────────────────────────────
 # Targeted and reboot-free, so it can be run against an already-commissioned
 # unit — including one that is a live display and must not be rebooted, which is
-# the case this flag exists for. The work itself is commissioning/set-hostname.sh, the same
-# script commissioning/card-prep.sh runs offline; it is staged to /tmp rather than
-# installed, because it is a one-shot and nothing on the device calls it again
+# the case this flag exists for. The work itself is commissioning/set-hostname.sh, staged
+# to /tmp rather than installed: a one-shot that nothing on the device calls again
 # (so it stays out of report_script_versions' drift list).
 if [[ "$FLAG" == "--hostname" ]]; then
     echo ""
@@ -363,12 +356,6 @@ PROV_RULES="$DEVICE_FILES/provision-rules.conf"
 if ! PCHECK="$(rw_provision_validate "$PROV_RULES" "$REPO_ROOT")"; then
     echo "$PCHECK"
     err "device-files/provision-rules.conf does not validate — refusing to provision"
-fi
-# Still read from clean-rules.conf until that check is retired: every boot link the
-# plan makes must be named there, or a deep clean of an older image would drop it.
-if ! KCHECK="$(rw_provision_check_keeps "$PROV_RULES" "$CLEAN_RULES")"; then
-    echo "$KCHECK"
-    err "a boot link in provision-rules.conf is not kept by clean-rules.conf"
 fi
 
 PROV_GROUPS="base"

@@ -251,18 +251,12 @@ fi
 ts "[4/6] Init script, boot link, dbus policies, main.conf, input.conf (provision-rules.conf, group bluetooth)"
 # shellcheck source=../lib/rw-identify.sh
 . "$REPO_ROOT/lib/rw-identify.sh"
-# shellcheck source=../lib/rw-clean.sh
-. "$REPO_ROOT/lib/rw-clean.sh"
 # shellcheck source=../lib/rw-provision.sh
 . "$REPO_ROOT/lib/rw-provision.sh"
 
 PROV_RULES="$REPO_ROOT/device-files/provision-rules.conf"
-CLEAN_RULES="$REPO_ROOT/device-files/clean-rules.conf"
 if ! PCHECK="$(rw_provision_validate "$PROV_RULES" "$REPO_ROOT")"; then
     echo "$PCHECK"; err "provision-rules.conf does not validate"
-fi
-if ! KCHECK="$(rw_provision_check_keeps "$PROV_RULES" "$CLEAN_RULES")"; then
-    echo "$KCHECK"; err "a boot link in provision-rules.conf is not kept by clean-rules.conf"
 fi
 
 BT_PLAN=$(mktemp)

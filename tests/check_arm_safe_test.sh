@@ -20,7 +20,7 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 # RW_GATE lets measure_arm_gate_sabotage.sh aim this same suite at a deliberately
 # broken copy of the gate. The assertions must never be restated over there — a
 # harness that re-implements what it is checking can repair the sabotage it was
-# written to catch (see tests/commission_prep_test.sh's recorded trap).
+# written to catch (a harness that restates the check can repair the sabotage).
 GATE="${RW_GATE:-$REPO/native_apps/check-arm-safe.sh}"
 
 CC=arm-linux-gnueabihf-gcc

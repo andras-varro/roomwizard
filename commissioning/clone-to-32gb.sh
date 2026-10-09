@@ -49,7 +49,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Layout fingerprint and the rest of "is this a RoomWizard card".  Sourced
-# rather than reimplemented: commissioning/card-prep.sh asks the same question of
+# rather than reimplemented: rootfs/make-card-image.sh asks the same question of
 # the same cards.
 #
 # ⚠️ Do not gate this script on a rootfs UUID.  A filesystem UUID is generated at
@@ -776,7 +776,7 @@ do_final_verify() {
     #
     # Nothing on the device consumes a UUID at all: U-Boot passes
     # root=/dev/mmcblk0p6 and /etc/fstab names /dev/mmcblk0p{2,3,5,7}, both by
-    # position.  Neither does our tooling any more — commissioning/card-prep.sh
+    # position.  Neither does our tooling any more — the card tooling
     # finds the rootfs by content.  So a changed UUID is a curiosity, not a
     # breakage — and never "fix" one with `tune2fs -U` to match another card.
     echo ""
@@ -846,9 +846,8 @@ do_final_verify() {
 
     echo -e "  ${GREEN}Next steps:${NC}"
     echo -e "    1. Insert card into RoomWizard"
-    echo -e "    2. Run: ${BOLD}./commissioning/card-prep.sh${NC}"
-    echo -e "    3. Run: ${BOLD}./commissioning/provision.sh <device-ip> --remove${NC}"
-    echo -e "    4. Run: ${BOLD}./deploy-all.sh <device-ip>${NC}"
+    echo -e "    2. Boot it, then update: ${BOLD}./commissioning/provision.sh <device-ip>${NC}"
+    echo -e "    3. Run: ${BOLD}./deploy-all.sh <device-ip>${NC}"
     echo ""
 }
 

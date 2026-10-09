@@ -6,9 +6,8 @@
 # existing script with arguments, so anything that works today keeps working
 # exactly as it did, and those scripts stay non-interactive when called directly:
 #
-#   commissioning/card-prep.sh           Phase 1, offline, needs a mounted card + sudo
-#   commissioning/provision.sh           Phase 2, over SSH, ends in a reboot
-#   deploy-all.sh                        Phase 3, over SSH, per-component
+#   commissioning/provision.sh           update a running unit, over SSH, ends in a reboot
+#   deploy-all.sh                        over SSH, per-component
 #   rootfs/make-card-image.sh            a whole card image, offline (runs commission-offline.sh)
 #
 # Why a composition layer and not one merged script: the three phases have
@@ -61,10 +60,9 @@ Interactive front door for RoomWizard bring-up. Menu-driven; it takes no
 arguments of its own beyond --help, and reimplements none of the flags of the
 scripts it calls. To script a step, call that script directly:
 
-  ./commissioning/card-prep.sh                          Phase 1 of 3 (offline, sudo)
-  ./commissioning/provision.sh <target> [flags]         Phase 2 of 3 (ssh, reboots)
+  ./commissioning/provision.sh <target> [flags]         update a unit (ssh, reboots)
   ./commissioning/provision.sh <target> --hostname NAME name only, no reboot
-  ./deploy-all.sh <target> [component]                  Phase 3 of 3 (ssh)
+  ./deploy-all.sh <target> [component]                  deploy (ssh)
   ./rootfs/make-card-image.sh --bundle <b> <parts> <rootfs.tar> <out.img>   card image
   ./setup-build-env.sh [--install-deps] [--scummvm]     host build prerequisites
 
@@ -140,36 +138,6 @@ confirm() {
     case "$reply" in [yY]|[yY][eE][sS]) return 0 ;; *) return 1 ;; esac
 }
 
-# ── Phase 1 ─────────────────────────────────────────────────────────────────
-do_commission() {
-    hdr "1. Prepare the card — PHASE 1 of 3 (offline)"
-    # Guard rather than letting the child script fail from the inside: it needs a
-    # mounted card and sudo, and neither is something this menu can arrange.
-    cat <<'PRE'
-  This is ONE PHASE, not the whole job. It writes credentials and network
-  settings to the card; the vendor software stays, and the unit still boots as
-  a RoomWizard until phase 2 has run over ssh.
-
-  If you want a finished unit from one pass, that is item 6.
-
-  Before continuing:
-
-    - the card must be out of the RoomWizard and in this host's reader
-    - its rootfs must be mounted. The script finds it by content, so any mount
-      point works; if it cannot, it names the disk it found and prints the
-      mount command. You can also `export ROOTFS=/mnt/rw`.
-    - you will be asked for sudo
-
-  It sets the root password, the host name, SSH access and DHCP — and then asks
-  whether to disable the vendor's boot-time network regenerator, which would
-  otherwise undo the last two ~7 s into the first boot.
-PRE
-    echo ""
-    confirm "Card mounted and ready?" || { warn "Skipped."; return 0; }
-    echo ""
-    bash "$SCRIPT_DIR/commissioning/card-prep.sh" || err "Commissioning failed."
-}
-
 # ── Image a card ────────────────────────────────────────────────────────────
 # A composition like everything else here: it execs rootfs/make-card-image.sh, which builds
 # the whole image file and itself runs commissioning/commission-offline.sh over the
@@ -215,7 +183,7 @@ PRE
         || err "Building the image failed."
 }
 
-# ── Phase 2 ─────────────────────────────────────────────────────────────────
+# ── Update a booted device ─────────────────────────────────────────────────────────────────
 do_setup_menu() {
     while true; do
         hdr "2. Set up a booted device (ssh)"
@@ -256,7 +224,7 @@ MENU
     done
 }
 
-# ── Phase 3 ─────────────────────────────────────────────────────────────────
+# ── Deploy ─────────────────────────────────────────────────────────────────
 # Three sources of binaries, and the default is the one that changes no meaning
 # for anyone who was already pressing Enter here: build from source. The other
 # two are pure delegation — deploy-all.sh already accepts a local bundle and a
@@ -328,28 +296,24 @@ do_status() {
     bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" --status || err "Status failed."
 }
 
-# ── Full bring-up ───────────────────────────────────────────────────────────
-# The ONLY item that chains, and the only reason wait_for_ssh exists: the two
-# gaps it closes are (1) card -> first boot, and (2) commissioning/provision.sh's reboot,
-# after which the operator otherwise guesses when to start deploying.
+# ── First boot of an imaged card ────────────────────────────────────────────
+# The only item that waits, and the reason wait_for_ssh exists: the gap between
+# writing a card image (item 6) and the unit answering on the network.
 do_full() {
-    hdr "5. Full bring-up: commission -> set up -> deploy"
+    hdr "5. First boot of an imaged card: boot -> wait -> deploy"
     cat <<'PRE'
-  Runs all three phases in order, waiting for the device between them.
-  You will be prompted at each transition; nothing destructive happens
-  without its own confirmation.
+  For a card written from item 6's image. The image already carries our root and
+  the release bundle, so there is no setup phase; this waits for the unit to
+  answer ssh, then offers to deploy components on top.
 PRE
     echo ""
-    confirm "Start full bring-up?" || { warn "Cancelled."; return 0; }
-
-    do_commission || return 1
+    confirm "Start?" || { warn "Cancelled."; return 0; }
 
     hdr "Boot the device"
     cat <<'PRE'
   Now:
-    1. sync && sudo umount <mountpoint>
-    2. put the card back in the RoomWizard
-    3. connect Ethernet and power it on
+    1. put the written card in the RoomWizard
+    2. connect Ethernet and power it on
 PRE
     echo ""
     read -r -p "Press Enter once the device is powered on... " _
@@ -357,25 +321,13 @@ PRE
     ask_target || return 1
     wait_for_ssh "$TARGET" 300 || return 1
 
-    hdr "Phase 2: system setup"
-    info "Update: backs the unit up first, then installs the plan and reboots."
-    confirm "Run setup on $TARGET now?" || { warn "Stopping after Phase 1."; return 0; }
-    bash "$SCRIPT_DIR/commissioning/provision.sh" "$TARGET" || { err "Setup failed."; return 1; }
-
-    # commissioning/provision.sh ends in a reboot, so the device is going away right now.
-    hdr "Waiting out the reboot"
-    info "commissioning/provision.sh rebooted the device; waiting for it to come back."
-    sleep 10
-    wait_for_ssh "$TARGET" 300 || return 1
-
-    hdr "Phase 3: deploy"
+    hdr "Deploy"
     confirm "Build and deploy all components to $TARGET?" \
-        || { warn "Stopping after Phase 2."; return 0; }
+        || { warn "Stopping before deploy."; return 0; }
     bash "$SCRIPT_DIR/deploy-all.sh" "$TARGET" || { err "Deploy failed."; return 1; }
 
     hdr "Done"
-    ok "Commissioned, set up and deployed: $TARGET"
-    info "The launcher is the default boot app. 'ssh root@$TARGET reboot' to see it."
+    ok "Booted and deployed: $TARGET"
 }
 
 # ── this host, not a device ─────────────────────────────────────────────────
@@ -395,10 +347,9 @@ while true; do
     hdr "RoomWizard"
     [ -n "$TARGET" ] && info "Target: $TARGET"
     cat <<'MENU'
-  1) Prepare the card            PHASE 1 of 3   offline; then 2 and 3, over ssh
-  2) Set up a booted device      PHASE 2 of 3   ssh; backup, update, reboot
-  3) Deploy apps                 PHASE 3 of 3   ssh; source, bundle or release
-  5) All three, in sequence      1 -> 2 -> 3    ssh between; you boot the unit
+  2) Update a booted device      ssh; backup, update, reboot
+  3) Deploy apps                 ssh; source, bundle or release
+  5) First boot of an imaged card boot, wait for ssh, deploy
 
   6) Build a card image          offline; our root + bundle, one boot (deliver a unit)
 
@@ -409,7 +360,6 @@ MENU
     echo ""
     read -r -p "Choice: " CHOICE || { echo ""; exit 0; }
     case "$CHOICE" in
-        1) do_commission; pause ;;
         2) do_setup_menu ;;
         3) do_deploy; pause ;;
         4) do_status; pause ;;

@@ -53,17 +53,12 @@ cd "$REPO_ROOT"
 
 # shellcheck source=../lib/rw-identify.sh
 . "$REPO_ROOT/lib/rw-identify.sh"
-# rw-clean.sh is sourced for ONE reason: rw_provision_check_keeps below still reads
-# device-files/clean-rules.conf through it. Both go when that check does.
-# shellcheck source=../lib/rw-clean.sh
-. "$REPO_ROOT/lib/rw-clean.sh"
 # shellcheck source=../lib/rw-provision.sh
 . "$REPO_ROOT/lib/rw-provision.sh"
 # shellcheck source=../lib/rw-bundle.sh
 . "$REPO_ROOT/lib/rw-bundle.sh"
 
 DEVICE_FILES="$REPO_ROOT/device-files"
-CLEAN_RULES="$DEVICE_FILES/clean-rules.conf"   # read only by rw_provision_check_keeps
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}  ✓ $*${NC}"; }
@@ -358,13 +353,6 @@ PROV_RULES="$DEVICE_FILES/provision-rules.conf"
 if ! PCHECK="$(rw_provision_validate "$PROV_RULES" "$REPO_ROOT")"; then
     echo "$PCHECK"
     err "device-files/provision-rules.conf does not validate — refusing to install"
-fi
-# The cross-file invariant, still read from device-files/clean-rules.conf: a boot link
-# that file does not `keep` is deleted by the next deep clean. Retired together with
-# clean-rules.conf and lib/rw-clean.sh; until then this is the one reason they are used here.
-if ! KCHECK="$(rw_provision_check_keeps "$PROV_RULES" "$CLEAN_RULES")"; then
-    echo "$KCHECK"
-    err "a boot link in provision-rules.conf is not kept by clean-rules.conf"
 fi
 
 PROV_GROUPS="base"

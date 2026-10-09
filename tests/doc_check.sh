@@ -364,8 +364,6 @@ RFC-1918	COMMISSIONING.md	IMPROVEMENT_PLAN.md
 22,317	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 button_check_tap	native_apps/CLAUDE.md	-
 rw_provision_push_installs	lib/CLAUDE.md	-
-rw_provision_check_keeps	device-files/CLAUDE.md	-
-rw_clean_validate	device-files/CLAUDE.md	SYSTEM_ANALYSIS.md
 TouchCalibSweep	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 clamp_to_hw	native_apps/CLAUDE.md	SYSTEM_ANALYSIS.md
 11.4 MB/s	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
@@ -417,7 +415,6 @@ three full wraps	native_apps/common/audio_wav.h	IMPROVEMENT_PLAN.md
 filter: unspecified	.gitattributes	IMPROVEMENT_PLAN.md
 averages rather than sums	LICENSE.md	IMPROVEMENT_PLAN.md
 18.7 M	native_apps/common/audio.h	IMPROVEMENT_PLAN.md
-931 MB	device-files/clean-rules.conf	IMPROVEMENT_PLAN.md
 DURING playback	native_apps/common/audio.c	IMPROVEMENT_PLAN.md
 1179	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 0d8c:0014	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
