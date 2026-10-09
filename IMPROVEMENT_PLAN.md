@@ -297,7 +297,7 @@ rootfs is soft-float EABI, loader `/lib/ld-linux.so.3`, glibc 2.31; our dynamic 
 `vnc_client` and `devmem_write` are static hard-float and need nothing. So a new rootfs must be **EABI
 (not EABIHF), glibc >= 2.31**, or every dynamic binary is rebuilt with it.
 
-**Build system — default chosen, for overrule:** Buildroot 2025.02 LTS (supported to 2028-03), as a
+**Build system:** Buildroot 2025.02 LTS (supported to 2028-03), as a
 `BR2_EXTERNAL` tree in the repo, built out of tree in WSL's native fs (`~/`, not DrvFs; this host has 32
 cores and 939 GB free there, measured). `BR2_cortex_a8` + `BR2_ARM_EABI` + NEON, internal glibc with C++,
 `BR2_LINUX_KERNEL` off, custom 4.14 headers, BusyBox init with SysV-style `/etc/init.d/S??*`. Debian
@@ -314,8 +314,8 @@ tree with `native_apps/check-arm-safe.sh`.
 `start-stop-daemon`, `pidof -x`, `killall`, `/usr/share/zoneinfo`, DHCP on eth0 sending the host name,
 `reboot`/`shutdown`. Not needed: cron (only vendor jobs use it), `S40ctrlblk` (`/opt/sbin/ctrlblk` is gone
 after the clean and nothing of ours reads the block), `update-rc.d`, `/var/watchdog_test`, all of
-`disable-steelcase.sh` and `clean-rules.conf`. Whether BlueZ/bluealsa come from Buildroot packages or stay
-our own builds is open — one implementation either way.
+`disable-steelcase.sh` and `clean-rules.conf`. BlueZ/bluealsa come from
+our own `bluetooth/build-bluez.sh` and `build-bluealsa.sh` (ruling below).
 
 **Per-unit state on p6 today, measured on `.188`** — a new p6 must carry these over or lose them:
 `/etc/touch_calibration.conf` (+ `.bak*`), `/etc/input_config.conf` if present, `/opt/games/rw_config.conf`
@@ -328,13 +328,15 @@ not relocate that file. **The host keys are NOT per-unit today** — identical o
 ([§5.2](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode)); our rootfs generates them on first boot instead.
 
 **Steps:** (1) the external tree + defconfig, built to a `rootfs.tar`, ARM gate green. (2) Our init
-scripts and rules as the only rc links; first-boot host keys. (3) An offline installer that writes p6 and
-carries the per-unit list from the old p6. (4) A spare card on `.188`: boot, `deploy-all.sh`, panel check.
-(5) `LICENSE.md` overhaul — operator ruling 2026-09-29: our GPL kernel and modules ship (source-offer duty),
-the glibc row names only `gnueabihf`, the obligation column is unreviewed; Buildroot's `legal-info` gives
-the package manifest. **Still open:** what p5 (1.5 GB) becomes; whether an install over SSH is wanted at
-all (p6 cannot be rewritten while mounted). **Done when** a unit boots our p6, every component runs and
-the panel check passes.
+scripts and rules as the only rc links; first-boot host keys. (3) An installer that edits a **card-image
+file**, never a block device: the operator reads the card to `card.img` and writes it back from Windows
+(the USB reader does not reach WSL); WSL2 attaches it with `losetup -P` (present, measured), rewrites p6
+and carries the per-unit list from the old p6. (4) A spare card on `.188`: boot, `deploy-all.sh`, panel
+check. (5) `LICENSE.md` overhaul — operator ruling 2026-09-29: our GPL kernel and modules ship (source-offer
+duty), the glibc row names only `gnueabihf`, the obligation column is unreviewed; Buildroot's `legal-info`
+gives the package manifest. Operator rulings 2026-10-08: Buildroot; BlueZ/bluealsa stay our own builds;
+card-image install only, no over-SSH install; **p5 becomes data** (game data, saves). **Done when** a unit
+boots our p6, every component runs and the panel check passes.
 
 ### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
 
