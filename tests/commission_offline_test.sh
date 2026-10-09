@@ -23,8 +23,9 @@
 #
 # Section 4 is the one exception and is the mirror image: the --no-usb skip must
 # exit ZERO and still say which flag skipped it, so it uses expect_says rather
-# than expect_fires. Section 0 is neither — it is the structural check on the
-# fixture tree itself.
+# than expect_fires; so is section 5's --unattended success case, beside its three
+# refusals. Section 0 is neither — it is the structural check on the fixture tree
+# itself.
 #
 # The sabotages run against COPIES — a copy of the bundle, and a copy of just the
 # scripts commissioning/commission-offline.sh reads (not the repo, which carries 4 GB of card
@@ -389,6 +390,51 @@ if [ -n "$_bl" ] && ! printf '%s\n' "$_bl" | grep -q 'S89'; then
 else
     bad "4c --no-usb drops S89/S90 from the boot-link check instead of failing on them"
     printf '%s\n' "$OUT" | grep -E 'boot link' | sed 's/^/        /' | head -5
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+echo ""
+echo "5. --unattended, the mode rootfs/make-card-image.sh --bundle drives"
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# It skips the two interactive steps, so each of the three flags that make that
+# safe is refused when absent — above all --no-clean: an unattended run that
+# skipped the clean on its own and reported success is the defect named in
+# commissioning/CLAUDE.md. The refusals use run(), whose piped "yes" would answer
+# the backup question, so a refusal here is the guard's and not an EOF's.
+
+run "$BUNDLE" "$REPO" --unattended --no-sshd
+expect_fires 'unattended refused: .*--no-clean' "5a --unattended without --no-clean is refused, naming it"
+run "$BUNDLE" "$REPO" --unattended --no-clean
+expect_fires 'unattended refused: .*--no-sshd' "5b --unattended without --no-sshd is refused, naming it"
+set +e
+OUT=$(bash "$REPO/commissioning/commission-offline.sh" --bundle "$BUNDLE" \
+          --unattended --no-clean --no-sshd < /dev/null 2>&1); ST=$?
+set -e
+expect_fires 'unattended refused: .*--base' "5c --unattended without --base is refused before any disk scan"
+
+# The success case, under </dev/null as its caller runs it: no prompt may be
+# reached, and the verify pass must still run every check (all but the
+# regenerator's, which is conditional on a clean). The fixture's /etc/shadow is the
+# witness that card-prep.sh did not run — it rewrites the root password there.
+bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null
+_shadow0=$(md5sum < "$TMP/card/root/etc/shadow")
+set +e
+OUT=$(bash "$REPO/commissioning/commission-offline.sh" --bundle "$BUNDLE" --base "$TMP/card" \
+          --unattended --no-clean --no-sshd < /dev/null 2>&1); ST=$?
+set -e
+expect_says 'skipping commissioning/card-prep.sh' "5d --unattended under </dev/null succeeds and says card-prep.sh was skipped"
+for want in 'md5: all' '\+x: all' '\.app: all' 'default-app:' 'n: all .* /bin/sh' 'boot links resolve'; do
+    if [ "$ST" -eq 0 ] && printf '%s\n' "$OUT" | grep -qE "$want"; then
+        ok "5e the unattended verify pass ran: /$want/"
+    else
+        bad "5e the unattended verify pass ran: /$want/ (exit $ST)"
+    fi
+done
+if [ "$ST" -eq 0 ] && [ "$(md5sum < "$TMP/card/root/etc/shadow")" = "$_shadow0" ]; then
+    ok "5f --unattended left /etc/shadow untouched (card-prep.sh did not run)"
+else
+    bad "5f --unattended left /etc/shadow untouched (exit $ST)"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════

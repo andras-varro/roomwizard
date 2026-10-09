@@ -544,7 +544,9 @@ static void execute_power_action(Launcher *l, int action) {
     draw_power_screen(&l->fb, action, false);
 
     sync();
-    int rc = (action == PWR_SHUTDOWN) ? system("shutdown -h now") : system("reboot");
+    /* poweroff, not `shutdown -h now`: BusyBox on our own root has no shutdown
+     * applet (measured), and the vendor's sysvinit has poweroff too. */
+    int rc = (action == PWR_SHUTDOWN) ? system("poweroff") : system("reboot");
     if (rc == 0) {
         /* Wait to be killed, never exit: the respawn wrapper would start a fresh
          * launcher whose grid replaces this screen for the rest of the shutdown.

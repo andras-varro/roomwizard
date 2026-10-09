@@ -87,6 +87,11 @@ for t in ed25519 rsa; do
     ln -s "/home/root/data/ssh/ssh_host_${t}_key.pub" "$TARGET/etc/ssh/ssh_host_${t}_key.pub"
 done
 
+# Identity marker: lib/rw-identify.sh's rw_is_rootfs recognises this tree by it, since
+# none of the vendor's marker files are here.
+printf 'RoomWizard root filesystem, built from rootfs/ (Buildroot)\n' > "$TARGET/etc/roomwizard-rootfs"
+chmod 0644 "$TARGET/etc/roomwizard-rootfs"
+
 # Root: home on the card's tree, password locked (key-only login).
 sed -i 's|^root:\([^:]*\):0:0:root:/root:|root:\1:0:0:root:/home/root:|' "$TARGET/etc/passwd"
 sed -i 's|^root:[^:]*:|root:*:|' "$TARGET/etc/shadow"

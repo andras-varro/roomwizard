@@ -151,6 +151,15 @@ expect_rootfs no "$I" "vendor tree missing /etc/shadow is rejected"
 mkdir -p "$TMP/empty"
 expect_rootfs no "$TMP/empty" "empty directory is rejected"
 
+# 8. Our own root filesystem (rootfs/): no vendor file at all, and no /opt/roomwizard
+#    either, so the marker post-build.sh writes is the only thing that identifies it.
+#    Case 4 is its negative control: the same tree without the marker.
+O="$TMP/ours"
+make_required "$O"
+echo 'Welcome to Buildroot' > "$O/etc/issue"
+: > "$O/etc/roomwizard-rootfs"
+expect_rootfs yes "$O" "our own rootfs identified by etc/roomwizard-rootfs alone"
+
 # ── firmware description ────────────────────────────────────────────────────
 
 echo ""
@@ -381,20 +390,20 @@ TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed, $SKIP skipped"
 
 # A harness that runs nothing reports success.  The non-skippable cases are:
-#   7  rw_is_rootfs
+#   8  rw_is_rootfs
 #   1  rw_rootfs_firmware
 #   4  rw_is_card_disk (synthetic)
 #   4  rw_part_dev
 #   5  rw_card_partitions + 3 forbidden-partition assertions
 #   5  rw_role_device_path
 #   3  rw_check_card_mounts
-# = 32.  rw_host_root_disk's 3 are skippable (they need a working lsblk), and the
+# = 33.  rw_host_root_disk's 3 are skippable (they need a working lsblk), and the
 # two real card images are gitignored, so neither is counted.  The 4 synthetic
 # rw_is_card_disk cases need sfdisk, so on a host without it the floor drops to
-# 28 -- otherwise fixing the skip above just trades a red FAIL for a red harness
+# 29 -- otherwise fixing the skip above just trades a red FAIL for a red harness
 # error, which is the same defect wearing a different label.
-MIN_CASES=32
-[ "$HAVE_SFDISK" = no ] && MIN_CASES=28
+MIN_CASES=33
+[ "$HAVE_SFDISK" = no ] && MIN_CASES=29
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then
     echo -e "  ${RED}HARNESS ERROR${NC}: only $TOTAL cases ran, expected at least $MIN_CASES."
     echo "  Cases were skipped that cannot be skipped, or the file was truncated."

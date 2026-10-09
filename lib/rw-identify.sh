@@ -50,7 +50,12 @@
 # touches is /opt/pv02, which is a `keep` there and asserted to survive by
 # tests/rw_clean_test.sh, and /etc/issue, which no rule in either rules file
 # names — so at least one of the three survives every state a card can be in.
+#
+# RW_ROOTFS_OURS is the identity of OUR OWN root filesystem (rootfs/), which carries
+# none of the vendor's files: rootfs/board/roomwizard/post-build.sh writes it, and
+# without it that tree passed only on /opt/roomwizard, an empty mount point.
 RW_ROOTFS_REQUIRED="etc/shadow etc/hosts etc/ssh/sshd_config etc/network/interfaces"
+RW_ROOTFS_OURS="etc/roomwizard-rootfs"
 RW_ROOTFS_VENDOR="opt/pv02 opt/roomwizard"
 RW_ISSUE_RE='RW20 Embedded Platform'
 
@@ -81,7 +86,7 @@ rw_is_rootfs() {
         [ -f "$d/$m" ] || return 1
     done
 
-    for m in $RW_ROOTFS_VENDOR; do
+    for m in $RW_ROOTFS_OURS $RW_ROOTFS_VENDOR; do
         [ -e "$d/$m" ] && return 0
     done
 

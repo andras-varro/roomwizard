@@ -39,6 +39,11 @@
 #                       card-prep.sh installs authorized_keys in this same run;
 #                       the written sshd_config is then checked against the
 #                       card's own sshd and restored if it fails.
+#   --unattended        For a caller that builds a card IMAGE (rootfs/make-card-image.sh
+#                       --bundle): no backup question, no card-prep.sh, stdin
+#                       read from /dev/null. Refused unless --base, --no-clean
+#                       and --no-sshd are all given, so nothing is skipped that
+#                       the command line does not name. Verification runs in full.
 #
 # ── Why offline, and why one pass ───────────────────────────────────────────
 #
@@ -126,6 +131,7 @@ ARM_CHECK="require"
 # summary reports it as a caveat rather than under a green tick.
 ARM_TRUSTED=0
 DO_CLEAN=1
+UNATTENDED=0
 SSH_AUTH="$RW_PROVISION_SSH_AUTH_DEFAULT"
 
 # State the cleanup trap needs.  Set before any mount so an early failure still
@@ -190,6 +196,10 @@ Usage: sudo $0 --bundle <file.tar.gz|dir> [options]
                      written sshd_config is checked against the card's own
                      /usr/sbin/sshd and the previous one restored on failure.
                      Either mode also drops SHA-1 MACs and ssh-rsa signatures.
+  --unattended       No backup question and no card-prep.sh (password, host
+                     name); stdin is /dev/null. For rootfs/make-card-image.sh,
+                     whose p6 already carries that state. REFUSED unless
+                     --base, --no-clean and --no-sshd are all given.
   --help
 
 The card is identified by CONTENT and by PARTITION POSITION, never by UUID.
@@ -207,6 +217,7 @@ while [[ $# -gt 0 ]]; do
         --base)           BASE="${2:-}";   [[ -n "$BASE" ]]   || { echo "--base needs a value"; usage; };   shift 2 ;;
         --dry-run)        DRY=1; shift ;;
         --no-clean)       DO_CLEAN=0; shift ;;
+        --unattended)     UNATTENDED=1; shift ;;
         --delete-factory) DEL_FACTORY=1; shift ;;   # a no-op since 2026-08-06; see below
         --arm-check=skip) ARM_CHECK="skip"; shift ;;
         --ssh-auth=*)
@@ -266,6 +277,27 @@ case " $NO_PROV_GROUPS " in
         fi ;;
 esac
 
+# --unattended skips the two interactive steps, and nothing else that the command
+# line does not name. Each of the three is required rather than implied:
+#   --no-clean  the only caller is an image of OUR root, whose rcS.d links
+#               device-files/clean-rules.conf does not keep, so a clean would
+#               delete them — and skipping it silently and reporting success is
+#               the one thing this script must never do.
+#   --no-sshd   card-prep.sh is skipped, so the sshd_config is whatever the
+#               caller's tree carries; the sshd records are not applied over it.
+#   --base      the caller has mounted the four trees itself; no disk scan.
+if [[ "$UNATTENDED" -eq 1 ]]; then
+    UNMET=""
+    [[ -n "$BASE" ]] || UNMET="$UNMET --base"
+    [[ "$DO_CLEAN" -eq 0 ]] || UNMET="$UNMET --no-clean"
+    [[ " $NO_PROV_GROUPS " == *" sshd "* ]] || UNMET="$UNMET --no-sshd"
+    if [[ -n "$UNMET" ]]; then
+        echo "--unattended refused: it also needs$UNMET (it skips the backup question and card-prep.sh, and runs no clean)."
+        exit 1
+    fi
+    exec </dev/null
+fi
+
 echo ""
 echo "════════════════════════════════════════"
 echo " RoomWizard offline commissioning"
@@ -277,7 +309,12 @@ echo "════════════════════════�
 # device has no serial console, and a failed boot yields no diagnostics at all —
 # the only post-mortem is mounting p3 offline and reading `messages`, which only
 # helps if it got as far as syslog (SYSTEM_ANALYSIS.md#312-serial-ports).
-if [[ -z "$DRY" ]]; then
+if [[ -n "$DRY" ]]; then
+    warn "DRY RUN — every path is resolved and printed; nothing is written."
+elif [[ "$UNATTENDED" -eq 1 ]]; then
+    warn "--unattended: no backup question. The caller is building a card image;"
+    warn "the card it came from is not written."
+else
     echo ""
     warn "This rewrites the card: root password, host name, network, and a"
     warn "whitelist cleanup that deletes every vendor service it does not"
@@ -293,8 +330,6 @@ if [[ -z "$DRY" ]]; then
     warn "this card. Recovery from a bad boot means dd-ing it back."
     read -r -p "  Do you have that backup? (yes/no): " have_backup
     [[ "$have_backup" == "yes" ]] || { echo "  Make one first: sudo dd if=/dev/sdX of=card.img bs=4M status=progress"; exit 1; }
-else
-    warn "DRY RUN — every path is resolved and printed; nothing is written."
 fi
 
 # ── 1. find and mount the card ──────────────────────────────────────────────
@@ -544,6 +579,10 @@ echo "────────────────────────�
 if [[ -n "$DRY" ]]; then
     warn "Dry run: skipping commissioning/card-prep.sh (it prompts and writes)"
     [[ "$SSH_AUTH" == key ]] && warn "--ssh-auth=key: a real run REFUSES unless card-prep.sh installs authorized_keys"
+elif [[ "$UNATTENDED" -eq 1 ]]; then
+    # --no-sshd is guaranteed above, so SSH_AUTH is the default and no key proof is owed.
+    warn "--unattended: skipping commissioning/card-prep.sh — password, host name, sshd"
+    warn "and DHCP are left exactly as $BASE/root carries them."
 else
     # --ssh-auth=key needs a key the operator holds. A marker taken now, compared
     # with authorized_keys' mtime afterwards, is what tells "card-prep.sh wrote it

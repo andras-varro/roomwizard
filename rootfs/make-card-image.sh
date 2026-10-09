@@ -18,26 +18,42 @@
 # p1 is copied byte for byte (the FAT geometry must not change), then everything
 # on it except the five boot-chain files is deleted. p2/p3/p5 are made fresh and
 # EMPTY; p6 gets the rootfs, the per-unit state and the kernel modules.
+#
+# With --bundle <dir|tar> (a release.sh --stage-only bundle) it then mounts p6, p2,
+# p3 and p5 as <base>/{root,data,log,backup} and runs commissioning/commission-offline.sh
+# --unattended --no-clean --no-sshd over them: the boot scripts, their links and every
+# component's files go in, and that script's own verify pass checks them. No clean,
+# because device-files/clean-rules.conf keeps only the vendor's rcS.d names; no sshd
+# records and no card-prep.sh, because the per-unit state already carries them. p1
+# is not mounted by that step.
 set -u
 
 die() { echo "FAIL: $*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-Usage: make-card-image.sh [--modules <dir>] <partsdir> <rootfs.tar> <out.img>
+Usage: make-card-image.sh [--modules <dir>] [--bundle <dir|tar>] <partsdir> <rootfs.tar> <out.img>
 
   --modules <dir>  directory of kernel modules (*.ko) copied to p6
                    /lib/modules/4.14.52/extra/ (default: ~/rw-kmods of the
                    invoking user, $SUDO_USER under sudo). cy8ctmg120_ts.ko is required.
+  --bundle <b>     a release.sh --stage-only bundle (directory or .tar.gz),
+                   installed with commissioning/commission-offline.sh --unattended
+                   --no-clean --no-sshd, so the card boots with every component
+                   and no provision.sh or deploy-all.sh afterwards. Needs
+                   arm-linux-gnueabihf-objdump (that script's ARM check).
   -h, --help       this text
 USAGE
 }
 MODDIR=""
+BUNDLE=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
         --modules) [ $# -ge 2 ] || { usage >&2; exit 2; }; MODDIR="$2"; shift 2 ;;
         --modules=*) MODDIR="${1#--modules=}"; shift ;;
+        --bundle) [ $# -ge 2 ] || { usage >&2; exit 2; }; BUNDLE="$2"; shift 2 ;;
+        --bundle=*) BUNDLE="${1#--bundle=}"; shift ;;
         --) shift; break ;;
         -*) usage >&2; exit 2 ;;
         *) break ;;
@@ -70,6 +86,23 @@ done
 for t in sfdisk losetup mke2fs mkswap e2fsck truncate; do
     command -v "$t" > /dev/null || die "$t not installed"
 done
+BUNDLE_TAG=""
+if [ -n "$BUNDLE" ]; then
+    # Absolute, because commission-offline.sh runs from the repo root. Checked here,
+    # before any image exists, rather than after p6 is filled.
+    [ -e "$BUNDLE" ] || die "no bundle $BUNDLE"
+    BUNDLE=$(realpath -- "$BUNDLE") || die "realpath $BUNDLE"
+    command -v "${OBJDUMP:-arm-linux-gnueabihf-objdump}" > /dev/null \
+        || die "${OBJDUMP:-arm-linux-gnueabihf-objdump} not installed; commission-offline.sh refuses unverified ARM binaries"
+    if [ -d "$BUNDLE" ]; then
+        INFO=$(cat "$BUNDLE/manifest.d/bundle.info" 2>/dev/null) || INFO=""
+    else
+        INFO=$(tar -xzOf "$BUNDLE" --wildcards '*manifest.d/bundle.info' 2>/dev/null) || INFO=""
+    fi
+    BUNDLE_TAG=$(printf '%s\n' "$INFO" | awk -F= '$1=="tag"{t=$2} $1=="commit"{c=$2} $1=="built"{b=$2}
+        END{ if (t != "") printf "%s (commit %s, built %s)", t, c, b }')
+    [ -n "$BUNDLE_TAG" ] || BUNDLE_TAG="untagged (no manifest.d/bundle.info)"
+fi
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck disable=SC1090,SC1091
@@ -92,6 +125,9 @@ cleanup() {
     local rc=$?
     set +e
     if mountpoint -q "$MNT/p"; then umount "$MNT/p"; fi
+    for r in root data log backup; do
+        if mountpoint -q "$MNT/base/$r"; then umount "$MNT/base/$r"; fi
+    done
     if [ -n "$LOOP" ]; then losetup -d "$LOOP"; fi
     rm -rf "$MNT"
     exit $rc
@@ -171,12 +207,16 @@ echo "p1 final listing:"
 ls -la "$MNT/p"
 umount "$MNT/p" || die "umount p1"
 
-fill() {   # fill <partnum> <tar>...
-    local n="$1"; shift
+fill() {   # fill <partnum> <rootfs tar> [<state tar>]
+    local n="$1"
     mount "$(rw_part_dev "$LOOP" "$n")" "$MNT/p" || die "mount p$n"
-    for t in "$@"; do
-        tar --numeric-owner -xpf "$t" -C "$MNT/p" || die "extract $t into p$n"
-    done
+    # The rootfs keeps its owners (dbus, avahi and the like are real users there).
+    tar --numeric-owner -xpf "$2" -C "$MNT/p" || die "extract $2 into p$n"
+    # The per-unit state does not: it is files captured from a unit, and the owner an
+    # entry can carry (default-app was 1000/1000 in one) names no user on p6.
+    if [ $# -ge 3 ]; then
+        tar --no-same-owner -xpf "$3" -C "$MNT/p" || die "extract $3 into p$n"
+    fi
     if [ "$n" = 6 ]; then
         # The data partitions mount here; the mount points stay empty (p5 is not mounted).
         mkdir -p "$MNT/p/home/root/data" "$MNT/p/home/root/log" "$MNT/p/home/root/backup"
@@ -198,6 +238,24 @@ fill() {   # fill <partnum> <tar>...
 }
 echo "== filling p6 (p2, p3, p5 stay empty)"
 fill 6 "$ROOTTAR" "$PARTS/state.tar"
+
+if [ -n "$BUNDLE" ]; then
+    echo "== installing bundle $BUNDLE_TAG"
+    # The layout rw_check_card_mounts and rw_clean_offline_path expect: p6 as root,
+    # p2/p3/p5 as data/log/backup — mounted, so a bundle path under /home/root/data
+    # lands on p2 and not in p6's empty mount point. p1 is not mounted.
+    for rp in root:6 data:2 log:3 backup:5; do
+        mkdir -p "$MNT/base/${rp%%:*}" || die "mkdir base"
+        mount "$(rw_part_dev "$LOOP" "${rp#*:}")" "$MNT/base/${rp%%:*}" || die "mount p${rp#*:} as ${rp%%:*}"
+    done
+    if ! bash "$SCRIPT_DIR/../commissioning/commission-offline.sh" --bundle "$BUNDLE" \
+            --base "$MNT/base" --no-clean --no-sshd --unattended < /dev/null; then
+        rm -f "$OUTABS"
+        die "commission-offline.sh failed (above); the image is deleted, write nothing"
+    fi
+    sync
+    for r in root data log backup; do umount "$MNT/base/$r" || die "umount base/$r"; done
+fi
 
 echo "== fsck"
 FSCK_BAD=0
@@ -228,6 +286,7 @@ echo "rootfs tar:      $ROOTTAR ($(stat -c %y "$ROOTTAR"))"
 echo "head match:      $MATCH (sectors 0..$((P1START - 1)) vs head.bin)"
 echo "fsck:            $([ "$FSCK_BAD" -eq 0 ] && echo 'all four clean' || echo 'PROBLEMS, see above')"
 echo "state carried:   $STATE_N non-directory entries from the old p6"
+echo "bundle:          ${BUNDLE_TAG:-none (no --bundle: run provision.sh and deploy-all.sh after the first boot)}"
 echo
 echo "Next, on Windows: copy the image out of WSL, e.g."
 printf '  copy \\\\wsl$\\<distro>%s C:\\work\\rw-scratch-s0930\\s1000\\card.img\n' "$OUTABS"

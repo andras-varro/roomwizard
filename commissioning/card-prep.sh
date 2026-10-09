@@ -82,7 +82,7 @@ if [ -n "${ROOTFS:-}" ]; then
     else
         warning "$ROOTFS does not look like a RoomWizard rootfs."
         warning "Expected all of: $RW_ROOTFS_REQUIRED"
-        warning "plus one of: $RW_ROOTFS_VENDOR (or '$RW_ISSUE_RE' in etc/issue)"
+        warning "plus one of: $RW_ROOTFS_OURS $RW_ROOTFS_VENDOR (or '$RW_ISSUE_RE' in etc/issue)"
         echo ""
         warning "Continuing will edit /etc/shadow, /etc/hosts, /etc/hostname,"
         warning "/etc/ssh/sshd_config and /etc/network/interfaces UNDER THIS PATH."
