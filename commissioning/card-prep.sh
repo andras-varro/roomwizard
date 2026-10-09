@@ -335,15 +335,7 @@ echo "  SSH Key Setup (Optional)"
 echo "================================================"
 echo ""
 
-# RW_SSH_KEY_REQUIRED is set by commission-offline.sh --ssh-auth=key: the key is
-# then not optional, so the question is not asked and a missing key file is an
-# error rather than a warning. commission-offline.sh checks the result itself too.
-if [ -n "${RW_SSH_KEY_REQUIRED:-}" ]; then
-    info "--ssh-auth=key: an SSH key is REQUIRED — the card will accept no password."
-    SETUP_SSH_KEYS=y
-else
-    read -r -p "Do you want to set up SSH key authentication? (y/n): " SETUP_SSH_KEYS
-fi
+read -r -p "Do you want to set up SSH key authentication? (y/n): " SETUP_SSH_KEYS
 
 if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
     # Both key types, and the lookup lives in lib/rw-ssh.sh so that this script and
@@ -392,10 +384,7 @@ if [[ "$SETUP_SSH_KEYS" =~ ^[Yy]$ ]]; then
         fi
     fi
 
-    if [ ! -f "$SSH_KEY_PATH" ] && [ -n "${RW_SSH_KEY_REQUIRED:-}" ]; then
-        error "SSH key file not found: $SSH_KEY_PATH — and --ssh-auth=key needs one."
-        exit 1
-    elif [ ! -f "$SSH_KEY_PATH" ]; then
+    if [ ! -f "$SSH_KEY_PATH" ]; then
         error "SSH key file not found: $SSH_KEY_PATH"
         warning "This card is being written WITHOUT authorized_keys."
         warning "Password login still works (this script enables it), and"

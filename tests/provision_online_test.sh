@@ -21,7 +21,7 @@
 #   C  negative control: the backup fails (the fake lister exits 1) -> provision
 #      aborts non-zero before any write, and never reboots.
 #   D  --status is read-only: no backup, no write, no reboot.
-#   E  the clean vocabulary is gone: each removed option is refused, with no
+#   E  the clean and sshd-policy vocabulary is gone (sshd_config is the root overlay's alone): each removed option is refused, with no
 #      remote call at all.
 #   F  harness witness: the fakes were reached.
 #
@@ -159,9 +159,9 @@ run stat 192.168.50.99 --status
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "E. the clean vocabulary is gone"
+echo "E. the clean vocabulary and the sshd-policy vocabulary are gone"
 # ═══════════════════════════════════════════════════════════════════════════
-for opt in --no-clean --keep-factory --keep-sweeps --remove --deep-clean; do
+for opt in --no-clean --keep-factory --keep-sweeps --remove --deep-clean --ssh-auth=key --ssh-auth=password --sshd-only --no-sshd; do
     run "gone$opt" 192.168.50.99 $opt
     [ "$RC" -ne 0 ]; chk "E $opt is refused"
     [ ! -s "$TMP/gone$opt.log" ]; chk "E $opt reached the device not at all"
@@ -173,10 +173,10 @@ echo "F. harness witness"
 # ═══════════════════════════════════════════════════════════════════════════
 grep -q "^SSH" "$TMP/full.log" && grep -q "^SCP" "$TMP/full.log"; chk "F1 the full run reached the fake ssh and scp"
 
-# 9 (A) + 6 (B) + 4 (C) + 4 (D) + 10 (E) + 1 (F) = 34. A suite that runs nothing
+# 9 (A) + 6 (B) + 4 (C) + 4 (D) + 18 (E) + 1 (F) = 42. A suite that runs nothing
 # reports success.
 TOTAL=$((PASS + FAIL))
-MIN_CASES=35
+MIN_CASES=43
 echo ""
 echo "  $PASS passed, $FAIL failed"
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then

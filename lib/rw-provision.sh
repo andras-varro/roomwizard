@@ -57,38 +57,12 @@
 # p2/p3/p5/p6 is the offline executor's job.
 
 RW_PROVISION_TYPES="install link link-opt unlink touch backup directive dropline"
-RW_PROVISION_GROUPS_ALL="base mdns sshd sshd-password sshd-key usb bluetooth"
-RW_PROVISION_GROUPS_DEFAULT="base mdns sshd usb bluetooth"
-RW_PROVISION_GROUPS_OPTIONAL="mdns sshd usb bluetooth"
+RW_PROVISION_GROUPS_ALL="base mdns usb bluetooth"
+RW_PROVISION_GROUPS_DEFAULT="base mdns usb bluetooth"
+RW_PROVISION_GROUPS_OPTIONAL="mdns usb bluetooth"
 
 rw_provision_default_groups()  { echo "$RW_PROVISION_GROUPS_DEFAULT"; }
 rw_provision_optional_groups() { echo "$RW_PROVISION_GROUPS_OPTIONAL"; }
-
-# ---------------------------------------------------------------------------
-# The SSH authentication mode: --ssh-auth=password|key on both bring-up paths.
-#
-# Each mode is a GROUP of directive records in provision-rules.conf, so the
-# bytes it writes come from the same two executors as everything else and the
-# two paths cannot drift. The auth groups are on neither list above on purpose:
-# they are not switched off with --no-<group>, they are CHOSEN, exactly one per
-# run, and rw_provision_plan refuses both at once — two groups setting
-# PasswordAuthentication would leave whichever ran last.
-#
-# password is the default because a fresh unit may have no authorized key at
-# all, and key-only on such a unit is a lockout with no serial console to undo
-# it. key must be asked for, and each path refuses it without proof of a key.
-# ---------------------------------------------------------------------------
-RW_PROVISION_SSH_AUTH_MODES="password key"
-RW_PROVISION_SSH_AUTH_DEFAULT="password"
-rw_provision_ssh_auth_default() { echo "$RW_PROVISION_SSH_AUTH_DEFAULT"; }
-
-rw_provision_ssh_auth_group() {
-    case "$1" in
-        password|key) echo "sshd-$1" ;;
-        *) echo "rw_provision_ssh_auth_group: '$1' is not an SSH auth mode ($RW_PROVISION_SSH_AUTH_MODES)" >&2
-           return 1 ;;
-    esac
-}
 
 # ---------------------------------------------------------------------------
 # rw_provision_rules_file
@@ -318,15 +292,6 @@ rw_provision_plan() {
         case " $RW_PROVISION_GROUPS_ALL " in *" $g "*) found=1 ;; esac
         [ "$found" = 1 ] || { echo "rw_provision_plan: unknown group '$g'" >&2; return 1; }
     done
-    # Two separate tests, not one `*" a "*" b "*` glob: adjacent words share the
-    # space between them, so that glob misses exactly the "sshd-key sshd-password"
-    # spelling (measured).
-    case " $groups " in *" sshd-password "*)
-        case " $groups " in *" sshd-key "*)
-            echo "rw_provision_plan: sshd-password and sshd-key are alternatives — pick one" >&2
-            return 1 ;;
-        esac ;;
-    esac
 
     if ! rw_provision_validate "$file" >/dev/null; then
         echo "rw_provision_plan: $file does not validate:" >&2
@@ -374,27 +339,6 @@ rw_provision_plan_component() {
     fi
 
     _rw_provision_emit "$file" "$group"
-}
-
-# ---------------------------------------------------------------------------
-# rw_provision_plan_sshd FILE MODE
-#
-# Compile ONLY the sshd records: the `sshd` group plus the one auth group MODE
-# names. For `commissioning/provision.sh <target> --sshd-only`, which changes the
-# SSH configuration of a commissioned unit with no clean, no p1 write and no
-# reboot. A separate entry point for the reason rw_provision_plan_component is
-# one: a base-less plan is reachable only by a name that says what it is.
-# ---------------------------------------------------------------------------
-rw_provision_plan_sshd() {
-    local file="$1" mode="$2" ag
-    [ -f "$file" ] || { echo "rw_provision_plan_sshd: no such file: $file" >&2; return 1; }
-    ag=$(rw_provision_ssh_auth_group "$mode") || return 1
-    if ! rw_provision_validate "$file" >/dev/null; then
-        echo "rw_provision_plan_sshd: $file does not validate:" >&2
-        rw_provision_validate "$file" >&2
-        return 1
-    fi
-    _rw_provision_emit "$file" "sshd $ag"
 }
 
 # ---------------------------------------------------------------------------

@@ -75,7 +75,7 @@ REPO="$TMP/repo"
 mkdir -p "$REPO/native_apps" "$REPO/commissioning" "$REPO/lib"
 for f in commissioning/commission-offline.sh commissioning/card-prep.sh commissioning/set-hostname.sh \
          lib/rw-identify.sh lib/rw-clean.sh lib/rw-provision.sh lib/rw-bundle.sh \
-         lib/rw-release.sh lib/rw-ssh.sh lib/rw-sshd.sh \
+         lib/rw-release.sh lib/rw-ssh.sh \
          COMMISSIONING.md; do
     cp "$REPO_DIR/$f" "$REPO/$f"
 done
@@ -397,19 +397,19 @@ echo ""
 echo "5. --unattended, the mode rootfs/make-card-image.sh --bundle drives"
 # ═══════════════════════════════════════════════════════════════════════════
 #
-# It skips the two interactive steps, so each of the three flags that make that
+# It skips the two interactive steps, so each of the two flags that make that
 # safe is refused when absent — above all --no-clean: an unattended run that
 # skipped the clean on its own and reported success is the defect named in
 # commissioning/CLAUDE.md. The refusals use run(), whose piped "yes" would answer
 # the backup question, so a refusal here is the guard's and not an EOF's.
 
-run "$BUNDLE" "$REPO" --unattended --no-sshd
+run "$BUNDLE" "$REPO" --unattended
 expect_fires 'unattended refused: .*--no-clean' "5a --unattended without --no-clean is refused, naming it"
-run "$BUNDLE" "$REPO" --unattended --no-clean
-expect_fires 'unattended refused: .*--no-sshd' "5b --unattended without --no-sshd is refused, naming it"
+run "$BUNDLE" "$REPO" --unattended --no-clean --ssh-auth=key
+expect_fires 'ssh-auth=key: removed' "5b --ssh-auth=key is refused: sshd_config is the root overlay's alone"
 set +e
 OUT=$(bash "$REPO/commissioning/commission-offline.sh" --bundle "$BUNDLE" \
-          --unattended --no-clean --no-sshd < /dev/null 2>&1); ST=$?
+          --unattended --no-clean < /dev/null 2>&1); ST=$?
 set -e
 expect_fires 'unattended refused: .*--base' "5c --unattended without --base is refused before any disk scan"
 
@@ -421,7 +421,7 @@ bash "$SCRIPT_DIR/make-fake-card.sh" "$TMP/card" >/dev/null
 _shadow0=$(md5sum < "$TMP/card/root/etc/shadow")
 set +e
 OUT=$(bash "$REPO/commissioning/commission-offline.sh" --bundle "$BUNDLE" --base "$TMP/card" \
-          --unattended --no-clean --no-sshd < /dev/null 2>&1); ST=$?
+          --unattended --no-clean < /dev/null 2>&1); ST=$?
 set -e
 expect_says 'skipping commissioning/card-prep.sh' "5d --unattended under </dev/null succeeds and says card-prep.sh was skipped"
 for want in 'md5: all' '\+x: all' '\.app: all' 'default-app:' 'n: all .* /bin/sh' 'boot links resolve'; do

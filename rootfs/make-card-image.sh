@@ -21,10 +21,10 @@
 #
 # With --bundle <dir|tar> (a release.sh --stage-only bundle) it then mounts p6, p2,
 # p3 and p5 as <base>/{root,data,log,backup} and runs commissioning/commission-offline.sh
-# --unattended --no-clean --no-sshd over them: the boot scripts, their links and every
+# --unattended --no-clean over them: the boot scripts, their links and every
 # component's files go in, and that script's own verify pass checks them. No clean,
-# because device-files/clean-rules.conf keeps only the vendor's rcS.d names; no sshd
-# records and no card-prep.sh, because the per-unit state already carries them. p1
+# because device-files/clean-rules.conf keeps only the vendor's rcS.d names; no
+# card-prep.sh, because the per-unit state already carries it. p1
 # is not mounted by that step.
 set -u
 
@@ -39,7 +39,7 @@ Usage: make-card-image.sh [--modules <dir>] [--bundle <dir|tar>] <partsdir> <roo
                    invoking user, $SUDO_USER under sudo). cy8ctmg120_ts.ko is required.
   --bundle <b>     a release.sh --stage-only bundle (directory or .tar.gz),
                    installed with commissioning/commission-offline.sh --unattended
-                   --no-clean --no-sshd, so the card boots with every component
+                   --no-clean, so the card boots with every component
                    and no provision.sh or deploy-all.sh afterwards. Needs
                    arm-linux-gnueabihf-objdump (that script's ARM check).
   -h, --help       this text
@@ -273,7 +273,7 @@ if [ -n "$BUNDLE" ]; then
         mount "$(rw_part_dev "$LOOP" "${rp#*:}")" "$MNT/base/${rp%%:*}" || die "mount p${rp#*:} as ${rp%%:*}"
     done
     if ! bash "$SCRIPT_DIR/../commissioning/commission-offline.sh" --bundle "$BUNDLE" \
-            --base "$MNT/base" --no-clean --no-sshd --unattended < /dev/null; then
+            --base "$MNT/base" --no-clean --unattended < /dev/null; then
         rm -f "$OUTABS"
         die "commission-offline.sh failed (above); the image is deleted, write nothing"
     fi

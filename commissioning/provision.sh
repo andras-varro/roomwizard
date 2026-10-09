@@ -4,7 +4,7 @@
 #
 # Re-runnable. It installs the files and links device-files/provision-rules.conf
 # declares (boot scripts, the app launcher's init service, audio + time-sync, mDNS,
-# USB host mode, Bluetooth, sshd hardening, sysctl), applies the sysctl settings,
+# USB host mode, Bluetooth, sysctl), applies the sysctl settings,
 # and reboots. It deletes no software: the unit's root is ours, not the vendor's.
 #
 # Usage:
@@ -12,7 +12,6 @@
 #   ./commissioning/provision.sh <target> --dry-run       # print the provision plan; change nothing
 #   ./commissioning/provision.sh <target> --status        # show device status only (read-only)
 #   ./commissioning/provision.sh <target> --hostname rw09 # set the host name only, no reboot
-#   ./commissioning/provision.sh <target> --sshd-only --ssh-auth=key  # SSH config only, no reboot
 #
 # <target> is an IPv4 address or a host name — `rw09.local` works once mDNS is
 # enabled (this script does that) and the unit has a unique name (--hostname).
@@ -27,10 +26,8 @@
 #      /etc/init.d/roomwizard-app, the audio-enable + time-sync boot scripts, avahi
 #      (mDNS), the USB host-mode scripts and their boot links (--no-usb skips), the
 #      Bluetooth boot script and dbus policy (--no-bluetooth skips)
-#   2. Hardens SSH (PermitEmptyPasswords=no, brute-force limits, no SHA-1) and
-#      sets the auth mode: --ssh-auth=password (default) or --ssh-auth=key
-#   3. Applies kernel/sysctl security settings (ASLR, no ip_forward, etc.)
-#   4. Reboots the device
+#   2. Applies kernel/sysctl security settings (ASLR, no ip_forward, etc.)
+#   3. Reboots the device
 #
 # NOTE: No iptables firewall — the kernel has CONFIG_NETFILTER=y but no ip_tables
 # module was built, and there is no package manager to add one.
@@ -64,8 +61,6 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$REPO_ROOT/lib/rw-provision.sh"
 # shellcheck source=../lib/rw-ssh.sh
 . "$REPO_ROOT/lib/rw-ssh.sh"
-# shellcheck source=../lib/rw-sshd.sh
-. "$REPO_ROOT/lib/rw-sshd.sh"
 
 # ── the non-positional flags are extracted before positional parsing ────────
 #
@@ -75,14 +70,13 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # sitting in $3 would otherwise be rejected as an unknown option.
 NO_PROV_GROUPS=""
 DRY_RUN=""
-SSH_AUTH="$RW_PROVISION_SSH_AUTH_DEFAULT"
 _ARGS=()
 for _a in "$@"; do
     case "$_a" in
         --dry-run)      DRY_RUN="--dry-run" ;;
-        --ssh-auth=*)
-            SSH_AUTH="${_a#--ssh-auth=}"
-            rw_provision_ssh_auth_group "$SSH_AUTH" >/dev/null || exit 1 ;;
+        --ssh-auth=*|--sshd-only)
+            echo "$_a: removed. sshd_config is the root image's overlay alone (key-only); this script never edits it."
+            exit 1 ;;
         --no-*)
             _g="${_a#--no-}"
             case " $(rw_provision_optional_groups) " in
@@ -96,16 +90,6 @@ for _a in "$@"; do
     esac
 done
 set -- "${_ARGS[@]}"
-
-# --no-sshd leaves sshd_config alone entirely, so an auth mode beside it is a
-# contradiction rather than something to pick a winner for.
-case " $NO_PROV_GROUPS " in
-    *" sshd "*)
-        if [[ "$SSH_AUTH" != "$RW_PROVISION_SSH_AUTH_DEFAULT" ]]; then
-            echo "--no-sshd and --ssh-auth=$SSH_AUTH contradict each other — --no-sshd leaves sshd_config alone."
-            exit 1
-        fi ;;
-esac
 
 DEVICE_IP="${1:-}"
 FLAG="${2:-}"
@@ -128,8 +112,7 @@ err()  { echo -e "${RED}  ✗ $*${NC}"; exit 1; }
 
 # ── usage ───────────────────────────────────────────────────────────────────
 usage() {
-    echo "Usage: $0 <target> [--status] [--dry-run] [--no-<group>] [--ssh-auth=password|key]"
-    echo "       $0 <target> --sshd-only [--ssh-auth=password|key] [--dry-run]"
+    echo "Usage: $0 <target> [--status] [--dry-run] [--no-<group>]"
     echo "       $0 <target> --hostname NAME"
     echo ""
     echo "  With no flags this UPDATES a unit that runs our own root: it backs the"
@@ -143,19 +126,10 @@ usage() {
     echo "                    nothing, take no backup, do not reboot."
     echo "  --no-<group>      Skip one group of the provision plan. Groups:"
     echo "                    $(rw_provision_optional_groups)"
-    echo "                    --no-mdns leaves <name>.local unresolvable; --no-sshd"
-    echo "                    skips the sshd hardening; --no-usb installs no USB host"
+    echo "                    --no-mdns leaves <name>.local unresolvable;"
+    echo "                    --no-usb installs no USB host"
     echo "                    mode; --no-bluetooth installs no BT boot script or dbus"
     echo "                    policy."
-    echo "  --ssh-auth=MODE   password (default): root may log in by password or key."
-    echo "                    key: key only — PasswordAuthentication and keyboard-"
-    echo "                    interactive off, PermitRootLogin prohibit-password."
-    echo "                    REFUSED unless a BatchMode key login works first, then"
-    echo "                    sshd -t, a reload and a fresh key login must pass or the"
-    echo "                    previous sshd_config comes back by itself. Either mode"
-    echo "                    also drops SHA-1 MACs and ssh-rsa signatures."
-    echo "  --sshd-only       Apply only the sshd part (with --ssh-auth), and exit."
-    echo "                    No backup, no reboot."
     echo "  --hostname NAME   Set the device host name only, and exit. No backup, no"
     echo "                    reboot."
     echo "                    NAME is a single label — 'rw09', not 'rw09.local'."
@@ -230,12 +204,9 @@ report_script_versions() {
 
 # Reject unknown flags rather than silently falling through to a full setup+reboot
 case "$FLAG" in
-    ""|--status|--hostname|--sshd-only) ;;
+    ""|--status|--hostname) ;;
     *) echo "Unknown option: $FLAG"; echo ""; usage ;;
 esac
-if [[ "$FLAG" == "--sshd-only" ]] && [[ " $NO_PROV_GROUPS " == *" sshd "* ]]; then
-    echo "--sshd-only with --no-sshd would do nothing."; echo ""; usage
-fi
 
 # --dry-run previews the provision plan, and these two modes install nothing — so the
 # combination is a mistake rather than a no-op, and is refused out loud.
@@ -296,69 +267,18 @@ info "Testing SSH connection to $DEVICE_IP..."
 rw_ssh_gate "$DEVICE" || err "Cannot continue without SSH to $DEVICE"
 ok "SSH OK"
 
-# ── key-only is refused without a PROVEN key, before anything is written ─────
+# apply_plan PLANFILE
 #
-# rw_ssh_gate passing already implies a BatchMode login, but asked again here with
-# publickey as the ONLY method, so that what is proven is exactly what key-only
-# will leave. Before the consent question and before the first write: a refusal
-# here leaves the unit untouched.
-if [[ "$SSH_AUTH" == key && "$FLAG" != "--status" && "$FLAG" != "--hostname" ]]; then
-    if ! rw_sshd_key_login_ok "$DEVICE"; then
-        echo "${RW_SSH_LAST_STDERR:-}" >&2
-        err "--ssh-auth=key refused: a publickey-only login to $DEVICE failed, so key-only would lock you out. Install a key first (ssh-copy-id $DEVICE) and re-run."
-    fi
-    ok "A publickey-only login works, so key-only is safe to apply"
-fi
-
-# apply_plan_guarded PLANFILE WITH_SSHD
-#
-# Ship PLANFILE and run it through the online executor. WITH_SSHD=1 wraps it in
-# lib/rw-sshd.sh's guard: snapshot sshd_config first, restore it if the plan
-# fails, and after it succeeds run sshd -t, reload under the dead-man timer and
-# re-prove the key login on a fresh connection (rw_sshd_commit_ssh). The full run
-# and --sshd-only both come through here, so there is one sequence.
-apply_plan_guarded() {
-    local plan="$1" with_sshd="$2"
-    if [[ "$with_sshd" == 1 ]]; then
-        rw_sshd_guard_script | ssh "$DEVICE" "cat > /tmp/rw-sshd-guard.sh" \
-            || err "could not copy the sshd guard to the device"
-        ssh "$DEVICE" "sh /tmp/rw-sshd-guard.sh snapshot" \
-            || err "could not snapshot sshd_config — refusing to edit it without a way back"
-    fi
+# Ship PLANFILE and run it through the online executor. sshd_config is not part of
+# any plan: the root's overlay carries the only sshd policy (key-only), so nothing
+# here edits it, snapshots it or reloads sshd.
+apply_plan() {
+    local plan="$1"
     ssh "$DEVICE" "cat > /tmp/rw-provision-plan" < "$plan"
     rw_provision_online_script | ssh "$DEVICE" "cat > /tmp/rw-provision.sh"
-    if ! ssh "$DEVICE" "sh /tmp/rw-provision.sh /tmp/rw-provision-plan; rc=\$?; rm -f /tmp/rw-provision.sh /tmp/rw-provision-plan; exit \$rc"; then
-        if [[ "$with_sshd" == 1 ]]; then ssh "$DEVICE" "sh /tmp/rw-sshd-guard.sh restore" || true; fi
-        err "the provision step failed on the device"
-    fi
-    if [[ "$with_sshd" == 1 ]]; then
-        info "Checking the new sshd_config (sshd -t, reload, fresh key login)..."
-        rw_sshd_commit_ssh "$DEVICE" "$SSH_AUTH" \
-            || err "the new sshd_config did not pass — the previous one is (or is about to be) back"
-        ok "sshd: ${SSH_AUTH} mode, checked and live"
-    fi
+    ssh "$DEVICE" "sh /tmp/rw-provision.sh /tmp/rw-provision-plan; rc=\$?; rm -f /tmp/rw-provision.sh /tmp/rw-provision-plan; exit \$rc" \
+        || err "the provision step failed on the device"
 }
-
-# ── sshd-only mode ──────────────────────────────────────────────────────────
-# The sshd records alone — crypto, limits, and the --ssh-auth mode — on a unit that
-# is already commissioned. No backup (nothing here is irreversible: the guard keeps
-# the previous file), and no reboot: the reload in
-# rw_sshd_commit_ssh is what makes it live.
-if [[ "$FLAG" == "--sshd-only" ]]; then
-    SSHD_PLAN=$(mktemp)
-    rw_provision_plan_sshd "$DEVICE_FILES/provision-rules.conf" "$SSH_AUTH" > "$SSHD_PLAN" \
-        || { rm -f "$SSHD_PLAN"; err "could not compile the sshd plan"; }
-    if [[ "$DRY_RUN" == "--dry-run" ]]; then
-        info "Dry run — the sshd records that --ssh-auth=$SSH_AUTH would apply:"
-        sed 's/^/    /' "$SSHD_PLAN"
-        rm -f "$SSHD_PLAN"
-        exit 0
-    fi
-    info "Applying the sshd records (--ssh-auth=$SSH_AUTH)..."
-    apply_plan_guarded "$SSHD_PLAN" 1
-    rm -f "$SSHD_PLAN"
-    exit 0
-fi
 
 # ── hostname-only mode ──────────────────────────────────────────────────────
 # Targeted and reboot-free, so it can be run against an already-commissioned
@@ -418,7 +338,7 @@ REMOTE
     exit 0
 fi
 
-# ── 1. Provision: the boot scripts, the links, sshd, the config fix-ups ─────
+# ── 1. Provision: the boot scripts, the links, the config fix-ups ─────
 echo ""
 echo "════════════════════════════════════════"
 echo " 1. Provision"
@@ -459,12 +379,6 @@ for _g in $(rw_provision_optional_groups); do
     esac
 done
 [[ -n "$NO_PROV_GROUPS" ]] && info "Skipping:$NO_PROV_GROUPS"
-WITH_SSHD=0
-if [[ " $PROV_GROUPS " == *" sshd "* ]]; then
-    PROV_GROUPS="$PROV_GROUPS $(rw_provision_ssh_auth_group "$SSH_AUTH")"
-    WITH_SSHD=1
-    info "SSH authentication: $SSH_AUTH"
-fi
 
 PROV_PLAN=$(mktemp)
 rw_provision_plan "$PROV_RULES" "$PROV_GROUPS" > "$PROV_PLAN" \
@@ -511,9 +425,9 @@ ok "Backup taken"
 rw_provision_push_installs "$PROV_PLAN" "$REPO_ROOT" "$DEVICE" \
     || { rm -f "$PROV_PLAN"; err "could not copy the provision sources to the device"; }
 
-apply_plan_guarded "$PROV_PLAN" "$WITH_SSHD"
+apply_plan "$PROV_PLAN"
 rm -f "$PROV_PLAN"
-ok "Boot scripts, boot links, sshd, sysctl and the config fix-ups done"
+ok "Boot scripts, boot links, sysctl and the config fix-ups done"
 
 # ── 2. Apply the sysctl settings now ───────────────────────────────────────
 #

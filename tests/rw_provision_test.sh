@@ -148,7 +148,7 @@ reject "$(R install base 0755 /etc/init.d/x does-not-exist-anywhere why)" \
     "A19 an install whose source is not in the repo is rejected"
 reject "$(R install base 0755 /etc/init.d/x /etc/passwd why)" \
     "A20 an absolute install source is rejected — sources are repo-relative"
-reject "$(R directive sshd - /etc/ssh/sshd_config PermitRootLogin why)" \
+reject "$(R directive base - /etc/ssh/sshd_config PermitRootLogin why)" \
     "A21 a directive with no = is rejected"
 reject "$(R unlink base - '/etc/rc*.d/S99roomwizard-app' - why)" \
     "A22 a glob outside the last component is rejected (it would silently match nothing)"
@@ -193,8 +193,11 @@ expect "$(printf 'install\t0755\t/etc/init.d/roomwizard-app\tdevice-files/roomwi
     "$PLAN_ALL" "B3 the init script is installed under a different name from its source"
 expect "$(printf 'link\t-\t/etc/rc5.d/S99roomwizard-app\t../init.d/roomwizard-app')" \
     "$PLAN_ALL" "B4 the rc5.d app link"
-expect "$(printf 'directive\t-\t/etc/ssh/sshd_config\tPermitEmptyPasswords=no')" \
-    "$PLAN_ALL" "B7 the sshd directive that the factory default requires"
+if printf '%s\n' "$PLAN_ALL" | grep -q 'sshd_config'; then
+    bad "B7 no default-group record touches sshd_config — the overlay owns it"
+else
+    ok "B7 no default-group record touches sshd_config — the overlay owns it"
+fi
 expect "$(printf 'link-opt\t-\t/etc/rc5.d/S30avahi-daemon\t../init.d/avahi-daemon')" \
     "$PLAN_ALL" "B9 the avahi link is optional, not mandatory"
 
@@ -224,18 +227,18 @@ else
 fi
 
 # ── Groups ────────────────────────────────────────────────────────────────
-PLAN_NOMDNS=$(rw_provision_plan "$RULES" "base sshd")
+PLAN_NOMDNS=$(rw_provision_plan "$RULES" "base usb bluetooth")
 absent "$(printf 'link-opt\t-\t/etc/rc5.d/S30avahi-daemon\t../init.d/avahi-daemon')" \
     "$PLAN_NOMDNS" "B14 --no-mdns drops the avahi link"
 expect "$(printf 'link\t-\t/etc/rc5.d/S28time-sync\t../init.d/time-sync')" \
     "$PLAN_NOMDNS" "B15 and nothing else"
-PLAN_NOSSHD=$(rw_provision_plan "$RULES" "base mdns")
-if printf '%s\n' "$PLAN_NOSSHD" | grep -q 'sshd_config'; then
-    bad "B16 --no-harden-sshd drops every sshd record"
+# The sshd groups are gone: sshd_config is the root overlay's alone.
+if rw_provision_plan "$RULES" "base sshd" >/dev/null 2>&1 || rw_provision_plan "$RULES" "base sshd-key" >/dev/null 2>&1; then
+    bad "B16 the sshd groups no longer exist — a plan naming one is refused"
 else
-    ok "B16 --no-harden-sshd drops every sshd record"
+    ok "B16 the sshd groups no longer exist — a plan naming one is refused"
 fi
-if rw_provision_plan "$RULES" "mdns sshd" >/dev/null 2>&1; then
+if rw_provision_plan "$RULES" "mdns usb" >/dev/null 2>&1; then
     bad "B17 a group list without 'base' is refused"
 else
     ok "B17 a group list without 'base' is refused"
@@ -382,6 +385,16 @@ build_card
 rw_provision_apply_offline "$CARD" "$TMP/plan" "$REPO_DIR" > "$TMP/apply.out" 2>&1 \
     || bad "D3 rw_provision_apply_offline returned non-zero"
 
+# The backup and directive verbs have no rule in provision-rules.conf any more (sshd_config
+# is the root overlay's alone), but both executors still implement them. A SYNTHETIC plan
+# keeps them exercised: nothing here is read from the shipped rules.
+printf 'backup\t-\t/etc/ssh/sshd_config.orig\t/etc/ssh/sshd_config\n' > "$TMP/plan.dir"
+for kv in PermitEmptyPasswords=no MaxAuthTries=3 LoginGraceTime=30 MaxSessions=5; do
+    printf 'directive\t-\t/etc/ssh/sshd_config\t%s\n' "$kv" >> "$TMP/plan.dir"
+done
+rw_provision_apply_offline "$CARD" "$TMP/plan.dir" "$REPO_DIR" >> "$TMP/apply.out" 2>&1 \
+    || bad "D3b the synthetic backup+directive plan returned non-zero"
+
 exists "$CARD/root/etc/init.d/audio-enable"          "D4 audio-enable installed"
 exists "$CARD/root/etc/init.d/time-sync"             "D5 time-sync installed"
 exists "$CARD/root/etc/sysctl.conf"    "D6 sysctl.conf installed"
@@ -427,7 +440,7 @@ for pair in "etc/avahi/avahi-daemon.conf:avahi-daemon.conf"; do
     assert_eq "644" "$(stat -c %a "$CARD/root/$t" 2>/dev/null)" "D19c /$t is 0644"
 done
 
-# sshd: the substitution AND the appends, and the backup taken once.
+# directive + backup verbs (synthetic plan above): the substitution AND the appends, and the backup taken once.
 if grep -q '^PermitEmptyPasswords no$' "$CARD/root/etc/ssh/sshd_config"; then
     ok "D20 PermitEmptyPasswords is no"
 else
@@ -447,6 +460,7 @@ assert_eq "$(printf 'PermitRootLogin yes\nPermitEmptyPasswords yes\n' | md5sum)"
 
 # ── idempotence: a second run must be a no-op, not a doubling ────────────
 rw_provision_apply_offline "$CARD" "$TMP/plan" "$REPO_DIR" >/dev/null 2>&1
+rw_provision_apply_offline "$CARD" "$TMP/plan.dir" "$REPO_DIR" >/dev/null 2>&1
 assert_eq "1" "$(grep -c '^MaxAuthTries ' "$CARD/root/etc/ssh/sshd_config")" \
     "D30 a second run does not append MaxAuthTries twice"
 assert_eq "$(printf 'PermitRootLogin yes\nPermitEmptyPasswords yes\n' | md5sum)" \
@@ -747,180 +761,14 @@ assert_eq "$STOT" "$SADD" "F14 the summary's per-type counts add up to its total
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-echo "G. --ssh-auth: the two modes, their preconditions, and the undo"
+echo "G. sshd policy is not this library's: the --ssh-auth machinery is gone"
 # ═══════════════════════════════════════════════════════════════════════════
-# shellcheck source=../lib/rw-sshd.sh
-. "$REPO_DIR/lib/rw-sshd.sh"
-GW="$TMP/g"; mkdir -p "$GW/etc/ssh" "$GW/etc/init.d"
-
-PW=$(rw_provision_plan_sshd "$RULES" password)
-KY=$(rw_provision_plan_sshd "$RULES" key)
-has() { case "$1" in *"$2"*) ok "$3" ;; *) bad "$3" ;; esac; }
-hasnt() { case "$1" in *"$2"*) bad "$3" ;; *) ok "$3" ;; esac; }
-has   "$PW" "PasswordAuthentication=yes" "G1 password mode keeps PasswordAuthentication yes"
-has   "$PW" "PermitRootLogin=yes"        "G1b and PermitRootLogin yes"
-hasnt "$PW" "PasswordAuthentication=no"  "G1c and never writes PasswordAuthentication no"
-has   "$KY" "PasswordAuthentication=no"  "G2 key mode turns PasswordAuthentication off"
-has   "$KY" "KbdInteractiveAuthentication=no" "G2b and keyboard-interactive"
-has   "$KY" "PermitRootLogin=prohibit-password" "G2c and lets root in by key only"
-hasnt "$KY" "PasswordAuthentication=yes" "G2d and never writes PasswordAuthentication yes"
-for P in "$PW" "$KY"; do
-    hasnt "$P" "hmac-sha1" "G3 no SHA-1 MAC in either mode"
-    hasnt "$P" "umac-64"   "G3b no 64-bit-tag MAC in either mode"
-    hasnt "$P" "ssh-rsa,"  "G3c no ssh-rsa signature in either mode"
+for fn in rw_provision_plan_sshd rw_provision_ssh_auth_group rw_provision_ssh_auth_default rw_sshd_guard_script; do
+    if declare -F "$fn" >/dev/null; then bad "G1 $fn no longer exists"; else ok "G1 $fn no longer exists"; fi
 done
-if rw_provision_plan "$RULES" "base sshd sshd-key sshd-password" >/dev/null 2>&1; then
-    bad "G4 both auth groups at once are refused"
-else
-    ok "G4 both auth groups at once are refused"
-fi
-if rw_provision_plan "$RULES" "base sshd sshd-key" >/dev/null 2>&1; then
-    ok "G4b control: one auth group compiles"
-else
-    bad "G4b control: one auth group compiles"
-fi
-if rw_provision_ssh_auth_group nonsense >/dev/null 2>&1; then
-    bad "G4c an unknown --ssh-auth value is refused"
-else
-    ok "G4c an unknown --ssh-auth value is refused"
-fi
+if [ -e "$REPO_DIR/lib/rw-sshd.sh" ]; then bad "G2 lib/rw-sshd.sh is deleted"; else ok "G2 lib/rw-sshd.sh is deleted"; fi
+if grep -qE '^[a-z-]+[[:space:]]+sshd' "$RULES"; then bad "G3 no record in provision-rules.conf names an sshd group"; else ok "G3 no record in provision-rules.conf names an sshd group"; fi
 
-# The vendor file's shape, from the card capture: prose comments that START with
-# a keyword ("# Ciphers and keying"), commented-out settings, and one live Ciphers.
-vendor_cfg() {
-    printf '%s\n' '# Ciphers and keying' '#LoginGraceTime 2m' 'PermitRootLogin yes' \
-        '#PubkeyAuthentication yes' '#PasswordAuthentication yes' 'PermitEmptyPasswords yes' \
-        'ChallengeResponseAuthentication no' 'UsePAM yes' '#Match User anoncvs' \
-        '# Ciphers and keying' 'Ciphers aes128-ctr,aes192-ctr,aes256-ctr'
-}
-mkcard_ssh() { rm -rf "$1"; mkdir -p "$1"/root/etc/ssh "$1"/data "$1"/log "$1"/backup
-               vendor_cfg > "$1/root/etc/ssh/sshd_config"; }
-printf '%s\n' "$KY" > "$GW/key.plan"
-mkcard_ssh "$GW/off"
-rw_provision_apply_offline "$GW/off" "$GW/key.plan" "$REPO_DIR" >/dev/null 2>&1 \
-    || bad "G5 the key plan applies offline"
-C="$GW/off/root/etc/ssh/sshd_config"
-assert_eq "2" "$(grep -c '^# Ciphers and keying$' "$C")" \
-    "G5 a prose comment starting with a keyword is left alone (it used to become a 2nd/3rd Ciphers line)"
-for k in Ciphers MACs KexAlgorithms PasswordAuthentication PermitRootLogin PubkeyAuthentication; do
-    assert_eq "1" "$(grep -c "^$k " "$C")" "G5.$k set exactly once"
-done
-
-# Same bytes from both executors, not just the same dry run (group E's limit).
-mkdir -p "$GW/on/etc/ssh"; vendor_cfg > "$GW/on/etc/ssh/sshd_config"
-rw_provision_online_script > "$GW/online.sh"
-RW_PROVISION_ROOT="$GW/on" sh "$GW/online.sh" "$GW/key.plan" >/dev/null 2>&1 \
-    || bad "G6 the key plan applies through the online executor"
-assert_eq "$(md5sum < "$C")" "$(md5sum < "$GW/on/etc/ssh/sshd_config")" \
-    "G6 both executors write byte-identical sshd_config"
-
-# rw_sshd_check_offline against make-fake-card.sh's sshd strings.
-bash "$REPO_DIR/tests/make-fake-card.sh" "$GW/fc" >/dev/null 2>&1
-FSSHD="$GW/fc/root/usr/sbin/sshd"
-if rw_sshd_check_offline "$C" "$FSSHD" "$GW/key.plan" >/dev/null; then
-    ok "G7 control: the written config passes the offline check"
-else
-    bad "G7 control: the written config passes the offline check"
-    rw_sshd_check_offline "$C" "$FSSHD" "$GW/key.plan" | sed 's/^/        /'
-fi
-grep -v 'pubkeyacceptedkeytypes' "$FSSHD" > "$GW/old-sshd"
-if rw_sshd_check_offline "$C" "$GW/old-sshd" "$GW/key.plan" >/dev/null; then
-    bad "G7b a keyword the card's sshd does not know is refused"
-else
-    ok "G7b a keyword the card's sshd does not know is refused"
-fi
-sed 's/hmac-sha2-256-etm@openssh.com,//' "$FSSHD" > "$GW/old-sshd2"
-if rw_sshd_check_offline "$C" "$GW/old-sshd2" "$GW/key.plan" >/dev/null; then
-    bad "G7c an algorithm the card's sshd does not know is refused"
-else
-    ok "G7c an algorithm the card's sshd does not know is refused"
-fi
-cp "$C" "$GW/dup.cfg"; echo 'passwordauthentication yes' >> "$GW/dup.cfg"
-if rw_sshd_check_offline "$GW/dup.cfg" "$FSSHD" "$GW/key.plan" >/dev/null; then
-    bad "G7d a second spelling of a key (case-insensitive) is refused"
-else
-    ok "G7d a second spelling of a key (case-insensitive) is refused"
-fi
-cp "$C" "$GW/match.cfg"; echo 'Match User x' >> "$GW/match.cfg"
-if rw_sshd_check_offline "$GW/match.cfg" "$FSSHD" "$GW/key.plan" >/dev/null; then
-    bad "G7e an active Match block is refused"
-else
-    ok "G7e an active Match block is refused"
-fi
-
-# rw_sshd_key_installed: key-only offline needs a key written by THIS run.
-AK="$GW/ak"; MK="$GW/mark"
-rm -f "$AK"; : > "$MK"
-if rw_sshd_key_installed "$AK" "$MK" 2>/dev/null; then bad "G8 no authorized_keys: refused"; else ok "G8 no authorized_keys: refused"; fi
-echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB operator@host' > "$AK"
-touch -d '2000-01-01' "$AK"
-if rw_sshd_key_installed "$AK" "$MK" 2>/dev/null; then bad "G8b a key older than this run: refused"; else ok "G8b a key older than this run: refused"; fi
-echo 'ssh-dss AAAAB3NzaC1kc3MAAACB operator@host' > "$AK"; touch -d '2099-01-01' "$AK"
-if rw_sshd_key_installed "$AK" "$MK" 2>/dev/null; then bad "G8c a DSA-only key (refused by the hardened config): refused"; else ok "G8c a DSA-only key (refused by the hardened config): refused"; fi
-echo 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB operator@host' > "$AK"; touch -d '2099-01-01' "$AK"
-if rw_sshd_key_installed "$AK" "$MK" 2>/dev/null; then ok "G8d control: a fresh ed25519 key is accepted"; else bad "G8d control: a fresh ed25519 key is accepted"; fi
-
-# The device-side guard, run as the device would run it, against a stub sshd.
-rw_sshd_guard_script > "$GW/guard.sh"
-printf '#!/bin/sh\nexit 0\n' > "$GW/sshd-ok"; printf '#!/bin/sh\necho "Bad configuration option: X"\nexit 255\n' > "$GW/sshd-bad"
-printf '#!/bin/sh\necho reload >> "%s/reloads"\n' "$GW" > "$GW/etc/init.d/sshd"
-chmod +x "$GW/sshd-ok" "$GW/sshd-bad" "$GW/etc/init.d/sshd"
-guard() { RW_SSHD_ROOT="$GW" RW_SSHD_BIN="$GW/$1" sh "$GW/guard.sh" "${@:2}"; }
-echo 'OLD' > "$GW/etc/ssh/sshd_config"
-guard sshd-ok snapshot >/dev/null
-echo 'NEW' > "$GW/etc/ssh/sshd_config"
-if guard sshd-bad check >/dev/null 2>&1; then bad "G9 sshd -t failing makes check fail"; else ok "G9 sshd -t failing makes check fail"; fi
-assert_eq "OLD" "$(cat "$GW/etc/ssh/sshd_config")" "G9b and the previous sshd_config is restored"
-echo 'NEW' > "$GW/etc/ssh/sshd_config"
-if guard sshd-ok check >/dev/null 2>&1; then ok "G9c control: sshd -t passing keeps the new file"; else bad "G9c control: sshd -t passing keeps the new file"; fi
-assert_eq "NEW" "$(cat "$GW/etc/ssh/sshd_config")" "G9d (still NEW)"
-guard sshd-ok arm 1 >/dev/null 2>&1
-n=0; while [ "$(cat "$GW/etc/ssh/sshd_config")" != OLD ] && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
-assert_eq "OLD" "$(cat "$GW/etc/ssh/sshd_config")" "G9e an unconfirmed reload is undone by the dead-man timer"
-echo 'NEW' > "$GW/etc/ssh/sshd_config"
-guard sshd-ok arm 1 >/dev/null 2>&1; guard sshd-ok confirm >/dev/null
-sleep 1.5
-assert_eq "NEW" "$(cat "$GW/etc/ssh/sshd_config")" "G9f control: a confirmed reload is kept"
-
-# rw_sshd_commit_ssh's re-proof, against a scripted probe. The reload is SIGHUP and
-# sshd refuses connections while it re-execs (~0.76 s measured), so the first probe
-# can say `down` for a config a key login accepts. SCRIPT is the probe's answers in
-# order, the last one repeating; ssh itself (check/arm/confirm) is stubbed to pass.
-commit_with() {   # SCRIPT -> prints "rc tries", stderr to $GW/commit.err
-    (
-        echo "$1" | tr ' ' '\n' > "$GW/probe.script"; : > "$GW/probe.n"
-        ssh() { return 0; }
-        sleep() { :; }
-        rw_ssh_probe() {
-            local a; for a in "$@"; do
-                if [ "$a" = PubkeyAuthentication=no ]; then
-                    RW_SSH_LAST_STATE=auth; RW_SSH_LAST_STDERR="root@x: Permission denied (publickey)."; return 1
-                fi
-            done
-            echo x >> "$GW/probe.n"
-            RW_SSH_LAST_STATE=$(sed -n "$(wc -l < "$GW/probe.n")p" "$GW/probe.script")
-            [ -n "$RW_SSH_LAST_STATE" ] || RW_SSH_LAST_STATE=$(tail -1 "$GW/probe.script")
-            case "$RW_SSH_LAST_STATE" in
-                ok)   RW_SSH_LAST_STDERR=""; return 0 ;;
-                down) RW_SSH_LAST_STDERR="ssh: connect to host x port 22: Connection refused" ;;
-                *)    RW_SSH_LAST_STDERR="root@x: Permission denied (publickey)." ;;
-            esac
-            return 1
-        }
-        rc=0; rw_sshd_commit_ssh root@x key >/dev/null 2>"$GW/commit.err" || rc=$?
-        echo "$rc $(wc -l < "$GW/probe.n")"
-    )
-}
-RW_SSHD_SETTLE_SECS=30
-assert_eq "0 3" "$(commit_with 'down down ok')" "G10 refused twice during the reload, then a key login: committed"
-assert_eq "1 1" "$(commit_with 'auth')" "G10b control: a refused key is not retried and fails"
-if grep -q 'ssh: root@x: Permission denied (publickey)' "$GW/commit.err" && grep -q "'auth' after 1 attempt" "$GW/commit.err"; then
-    ok "G10c the failure prints the probe state and ssh's own stderr"
-else bad "G10c the failure prints the probe state and ssh's own stderr"; sed 's/^/        /' "$GW/commit.err"; fi
-RW_SSHD_SETTLE_SECS=0
-assert_eq "1 1" "$(commit_with 'down')" "G10d a server that stays down fails once the settle time is spent"
-if grep -q 'Connection refused' "$GW/commit.err"; then ok "G10e and says Connection refused"; else bad "G10e and says Connection refused"; fi
-RW_SSHD_SETTLE_SECS=30
 
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""

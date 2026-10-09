@@ -35,14 +35,10 @@
 #   --arm-check=skip    Proceed with UNVERIFIED binaries when the ARM objdump is
 #                       absent. Read what it prints before you use it.
 #   --no-clean          Install only; run no cleanup at all.
-#   --ssh-auth=MODE     password (default) or key. key is refused unless
-#                       card-prep.sh installs authorized_keys in this same run;
-#                       the written sshd_config is then checked against the
-#                       card's own sshd and restored if it fails.
 #   --unattended        For a caller that builds a card IMAGE (rootfs/make-card-image.sh
 #                       --bundle): no backup question, no card-prep.sh, stdin
-#                       read from /dev/null. Refused unless --base, --no-clean
-#                       and --no-sshd are all given, so nothing is skipped that
+#                       read from /dev/null. Refused unless --base and --no-clean
+#                       are both given, so nothing is skipped that
 #                       the command line does not name. Verification runs in full.
 #
 # ── Why offline, and why one pass ───────────────────────────────────────────
@@ -76,7 +72,7 @@
 #                              commissioning/provision.sh --remove/--deep-clean so the two
 #                              cannot drift.
 #   what to install            device-files/provision-rules.conf — the boot scripts,
-#                              the rc*.d links, the sshd directives and the config
+#                              the rc*.d links and the config
 #                              fix-ups, shared with commissioning/provision.sh for the same
 #                              reason. Modes are DECLARED there, never read off disk.
 #   which binaries             the bundle's own manifest (lib/rw-bundle.sh). Modes are
@@ -106,8 +102,6 @@ cd "$REPO_ROOT"
 . "$REPO_ROOT/lib/rw-bundle.sh"
 # shellcheck source=../lib/rw-release.sh
 . "$REPO_ROOT/lib/rw-release.sh"
-# shellcheck source=../lib/rw-sshd.sh
-. "$REPO_ROOT/lib/rw-sshd.sh"
 
 DEVICE_FILES="$REPO_ROOT/device-files"
 CLEAN_RULES="$DEVICE_FILES/clean-rules.conf"
@@ -132,7 +126,6 @@ ARM_CHECK="require"
 ARM_TRUSTED=0
 DO_CLEAN=1
 UNATTENDED=0
-SSH_AUTH="$RW_PROVISION_SSH_AUTH_DEFAULT"
 
 # State the cleanup trap needs.  Set before any mount so an early failure still
 # unwinds, and used by err() above — which is why they are declared up here even
@@ -183,23 +176,13 @@ Usage: sudo $0 --bundle <file.tar.gz|dir> [options]
   --delete-factory   Accepted and now redundant: that is the default.
   --no-<group>       Skip one group of the provision plan. Groups:
                      $(rw_provision_optional_groups)
-                     --no-mdns leaves <name>.local unresolvable; --no-sshd leaves
-                     PermitEmptyPasswords at the factory "yes". Both are in
-                     device-files/provision-rules.conf with their reasons.
+--no-mdns leaves <name>.local unresolvable. It is in                     device-files/provision-rules.conf with its reason.
   --arm-check=skip   Install binaries this host cannot verify. Say why to
                      yourself first; the message it replaces explains the risk.
-  --ssh-auth=MODE    password (default): root may log in by password or key.
-                     key: key only — PasswordAuthentication and keyboard-
-                     interactive off, PermitRootLogin prohibit-password.
-                     REFUSED unless card-prep.sh installs authorized_keys in
-                     this same run (it then asks for the key, not y/n). The
-                     written sshd_config is checked against the card's own
-                     /usr/sbin/sshd and the previous one restored on failure.
-                     Either mode also drops SHA-1 MACs and ssh-rsa signatures.
   --unattended       No backup question and no card-prep.sh (password, host
                      name); stdin is /dev/null. For rootfs/make-card-image.sh,
                      whose p6 already carries that state. REFUSED unless
-                     --base, --no-clean and --no-sshd are all given.
+                     --base and --no-clean are both given.
   --help
 
 The card is identified by CONTENT and by PARTITION POSITION, never by UUID.
@@ -220,10 +203,9 @@ while [[ $# -gt 0 ]]; do
         --unattended)     UNATTENDED=1; shift ;;
         --delete-factory) DEL_FACTORY=1; shift ;;   # a no-op since 2026-08-06; see below
         --arm-check=skip) ARM_CHECK="skip"; shift ;;
-        --ssh-auth=*)
-            SSH_AUTH="${1#--ssh-auth=}"
-            rw_provision_ssh_auth_group "$SSH_AUTH" >/dev/null || exit 1
-            shift ;;
+        --ssh-auth=*|--sshd-only)
+            echo "$1: removed. sshd_config is the root image's overlay alone (key-only); this script never edits it."
+            exit 1 ;;
         --no-*)
             g="${1#--no-}"
             case " $(rw_provision_optional_groups) " in
@@ -267,30 +249,17 @@ fi
 [[ -n "$DISK" && -n "$BASE" ]] && { echo "--disk and --base are mutually exclusive."; exit 1; }
 [[ -f "$CLEAN_RULES" ]] || { echo "Missing $CLEAN_RULES"; exit 1; }
 
-# --no-sshd leaves sshd_config alone entirely, so an auth mode beside it is a
-# contradiction. Same rule as commissioning/provision.sh.
-case " $NO_PROV_GROUPS " in
-    *" sshd "*)
-        if [[ "$SSH_AUTH" != "$RW_PROVISION_SSH_AUTH_DEFAULT" ]]; then
-            echo "--no-sshd and --ssh-auth=$SSH_AUTH contradict each other — --no-sshd leaves sshd_config alone."
-            exit 1
-        fi ;;
-esac
-
 # --unattended skips the two interactive steps, and nothing else that the command
-# line does not name. Each of the three is required rather than implied:
+# line does not name. Each of the two is required rather than implied:
 #   --no-clean  the only caller is an image of OUR root, whose rcS.d links
 #               device-files/clean-rules.conf does not keep, so a clean would
 #               delete them — and skipping it silently and reporting success is
 #               the one thing this script must never do.
-#   --no-sshd   card-prep.sh is skipped, so the sshd_config is whatever the
-#               caller's tree carries; the sshd records are not applied over it.
 #   --base      the caller has mounted the four trees itself; no disk scan.
 if [[ "$UNATTENDED" -eq 1 ]]; then
     UNMET=""
     [[ -n "$BASE" ]] || UNMET="$UNMET --base"
     [[ "$DO_CLEAN" -eq 0 ]] || UNMET="$UNMET --no-clean"
-    [[ " $NO_PROV_GROUPS " == *" sshd "* ]] || UNMET="$UNMET --no-sshd"
     if [[ -n "$UNMET" ]]; then
         echo "--unattended refused: it also needs$UNMET (it skips the backup question and card-prep.sh, and runs no clean)."
         exit 1
@@ -578,25 +547,11 @@ echo "────────────────────────�
 
 if [[ -n "$DRY" ]]; then
     warn "Dry run: skipping commissioning/card-prep.sh (it prompts and writes)"
-    [[ "$SSH_AUTH" == key ]] && warn "--ssh-auth=key: a real run REFUSES unless card-prep.sh installs authorized_keys"
 elif [[ "$UNATTENDED" -eq 1 ]]; then
-    # --no-sshd is guaranteed above, so SSH_AUTH is the default and no key proof is owed.
+    # card-prep.sh is skipped: password, host name and DHCP stay as the caller's tree has them.
     warn "--unattended: skipping commissioning/card-prep.sh — password, host name, sshd"
     warn "and DHCP are left exactly as $BASE/root carries them."
 else
-    # --ssh-auth=key needs a key the operator holds. A marker taken now, compared
-    # with authorized_keys' mtime afterwards, is what tells "card-prep.sh wrote it
-    # in this run" from "somebody's key was already on the card". RW_SSH_KEY_REQUIRED
-    # makes card-prep.sh ask for the key rather than ask whether to.
-    KEY_MARK=""
-    if [[ "$SSH_AUTH" == key ]]; then
-        [[ -n "$TMPROOT" ]] || TMPROOT=$(mktemp -d /tmp/rw-bundle.XXXXXX)
-        KEY_MARK="$TMPROOT/key.mark"
-        : > "$KEY_MARK"
-        # mtime granularity: a key written in the same second as the marker would
-        # not be -nt it. One second costs nothing next to the prompts that follow.
-        sleep 1
-    fi
     # ROOTFS is its documented escape hatch, and passing it skips its own
     # detection — which is what makes this an orchestration rather than a second
     # implementation of the two prompts. `bash <script>`, never ./<script>: a
@@ -611,16 +566,10 @@ else
     # that operator does still need the next steps.
     info "Handing over to commissioning/card-prep.sh for the two questions..."
     echo ""
-    RW_SSH_KEY_REQUIRED="$([[ "$SSH_AUTH" == key ]] && echo 1 || true)" \
     ROOTFS="$BASE/root" RW_COMMISSION_ORCHESTRATED=1 \
         bash "$SCRIPT_DIR/card-prep.sh" \
         || err "commissioning/card-prep.sh failed — the card is half-written; fix it before booting"
     ok "Password, host name, /etc/hosts, /etc/dhclient.conf, sshd and DHCP done"
-    if [[ "$SSH_AUTH" == key ]]; then
-        rw_sshd_key_installed "$BASE/root/home/root/.ssh/authorized_keys" "$KEY_MARK" \
-            || err "--ssh-auth=key refused: no key was installed by this run, so key-only would lock the unit. Nothing key-only has been written; re-run and give card-prep.sh a public key, or use --ssh-auth=password"
-        ok "authorized_keys was written by this run, so key-only is safe to apply"
-    fi
 fi
 
 # ── 4. clean ────────────────────────────────────────────────────────────────
@@ -727,12 +676,6 @@ for g in $(rw_provision_optional_groups); do
     esac
 done
 [[ -n "$NO_PROV_GROUPS" ]] && info "Skipping:$NO_PROV_GROUPS"
-WITH_SSHD=0
-if [[ " $PROV_GROUPS " == *" sshd "* ]]; then
-    PROV_GROUPS="$PROV_GROUPS $(rw_provision_ssh_auth_group "$SSH_AUTH")"
-    WITH_SSHD=1
-    info "SSH authentication: $SSH_AUTH"
-fi
 
 PROV_PLAN="$TMPROOT/provision.plan"
 [[ -n "$TMPROOT" ]] || { TMPROOT=$(mktemp -d /tmp/rw-bundle.XXXXXX); PROV_PLAN="$TMPROOT/provision.plan"; }
@@ -740,26 +683,8 @@ rw_provision_plan "$PROV_RULES" "$PROV_GROUPS" > "$PROV_PLAN" \
     || err "could not compile the provision plan"
 info "Provision plan: $(rw_provision_plan_summary "$PROV_PLAN")"
 
-# sshd_config gets a snapshot first and a check after, because offline there is no
-# sshd -t: lib/rw-sshd.sh's rw_sshd_check_offline holds the result against the
-# card's OWN /usr/sbin/sshd, and a failure puts the snapshot back. A unit whose sshd
-# will not start has no console to recover through.
-SSHD_CFG="$BASE/root/etc/ssh/sshd_config"
-SSHD_PREV="$TMPROOT/sshd_config.prev"
-if [[ "$WITH_SSHD" == 1 && -z "$DRY" ]]; then
-    cp "$SSHD_CFG" "$SSHD_PREV" || err "could not snapshot $SSHD_CFG — refusing to edit it without a way back"
-fi
 if ! RW_PROVISION_DRY="$DRY" rw_provision_apply_offline "$BASE" "$PROV_PLAN" "$REPO_ROOT"; then
-    [[ -f "$SSHD_PREV" ]] && cat "$SSHD_PREV" > "$SSHD_CFG"
     err "the provision step failed"
-fi
-if [[ "$WITH_SSHD" == 1 && -z "$DRY" ]]; then
-    if ! SCHECK="$(rw_sshd_check_offline "$SSHD_CFG" "$BASE/root/usr/sbin/sshd" "$PROV_PLAN")"; then
-        echo "$SCHECK"
-        cat "$SSHD_PREV" > "$SSHD_CFG"
-        err "the new sshd_config failed its check — the previous one is restored; the rest of the plan is applied"
-    fi
-    ok "sshd_config: $SSH_AUTH mode, checked against the card's own sshd"
 fi
 
 # Feed the plan's declared modes into the +x measurement below. Reading them from
@@ -772,7 +697,7 @@ if [[ -z "$DRY" ]]; then
         INSTALLED+=("$pmode|$ptarget|$pdest")
     done < "$PROV_PLAN"
 fi
-ok "Boot scripts, boot links, sshd and the config fix-ups done"
+ok "Boot scripts, boot links and the config fix-ups done"
 
 # ── 5d. the bundle ─────────────────────────────────────────────────────────
 info "Bundle: $BUNDLE_FILES file(s)"
