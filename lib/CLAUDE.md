@@ -5,18 +5,16 @@ The sourced-not-executed shell libraries. Loaded when you work in `lib/`.
 These live at the top level rather than under `commissioning/` because the component build scripts
 source `rw-bundle.sh` on the *write* side while the commissioner reads it, and every SSH-using script sources
 `rw-ssh.sh`. Device facts are in `SYSTEM_ANALYSIS.md`; open work in
-`IMPROVEMENT_PLAN.md`; how to author the two rules files these libraries parse is in
+`IMPROVEMENT_PLAN.md`; how to author the rules file these libraries parse is in
 `device-files/CLAUDE.md`.
 
 | file | job |
 |---|---|
-| `rw-identify.sh` | which disk is a card, which partition holds which tree |
-| `rw-clean.sh` | compile `clean-rules.conf` to a delete plan |
+| `rw-identify.sh` | which disk is a card, which partition holds which tree, and the offline path guards (`rw_offline_path`, `rw_offline_base_ok`) |
 | `rw-provision.sh` | compile `provision-rules.conf` to an install plan, and generate the online executor |
 | `rw-bundle.sh` | the release-bundle layout |
 | `rw-release.sh` | fetch a published release — **the one library here that opens a socket** |
 | `rw-ssh.sh` | the one answer to "can I reach this device" |
-| `rw-sshd.sh` | the guard around an `sshd_config` change: key proof, offline check, `sshd -t`, self-undoing reload |
 | `rw-state.sh` | the per-unit state lists: what a card image may carry (allowlist plus hard deny) and the BACKUP set; `rootfs/` and `commissioning/backup.sh`/`restore.sh` source it, `tests/rw_state_test.sh` covers it |
 
 ## One SSH gate, and BatchMode stays on it
@@ -33,9 +31,9 @@ probe. There used to be eight, already drifted into three wordings of one messag
   to get a key installed once.
 - **"Down" and "up but refusing us" are different answers, and only the second has a remedy.**
   `rw_ssh_classify` decides, and it matches `Permission denied` — ⚠️ **never the parenthetical method
-  list.** That list is the *server's*: a RoomWizard says `(publickey,password)` because
-  `card-prep.sh` sets `PasswordAuthentication yes`, and a plain `sshd` says
-  `(publickey,keyboard-interactive)`. Keying on `(publickey,password)` passes against a device and
+  list.** That list is the *server's*: our key-only root says `(publickey)`,
+  and a plain `sshd` says
+  `(publickey,keyboard-interactive)`. Keying on one server's list passes against that device and
   calls every other server "down" — which *suppresses* the offer, so nothing looks broken. An
   unrecognised error classifies as `down` on purpose.
 - ⚠️ **`rw_ssh_probe` reports the state twice — printed AND in `RW_SSH_LAST_STATE`/`_LAST_STDERR` —
@@ -51,8 +49,8 @@ probe. There used to be eight, already drifted into three wordings of one messag
   already refuses to publish config precisely because one shipped file carries a plaintext password —
   a second one moves toward the thing that check guards. (`sshpass` *is* installed in this WSL,
   measured 2026-08-07; it is rejected on the merits, not for absence.)
-- ⚠️ **A key generated under `sudo` must be chowned back.** `card-prep.sh` is called as root by
-  `commission-offline.sh`, and `ssh-keygen` as root writes the key root-owned *inside the operator's
+- ⚠️ **A key generated under `sudo` must be chowned back.** A script run as root (for example under
+  `sudo`) that calls `ssh-keygen` writes the key root-owned *inside the operator's
   home* — where `ssh` then needs `sudo` forever. `rw_ssh_key_owner` takes the euid as an **argument**
   so both branches are reachable from a non-root test.
 
@@ -65,20 +63,20 @@ probe. There used to be eight, already drifted into three wordings of one messag
 
 `rw-identify.sh` is the one implementation: **content** for a mounted rootfs (`rw_is_rootfs`), the
 **partition table** for a disk (`rw_is_card_disk`), and **position** for which partition holds which
-tree (`rw_card_partitions` → `RW_PART_ROLES` = p6 root, p2 data, p3 log, p5 backup). It excludes `/`
+tree (`rw_card_partitions` → `RW_PART_ROLES` = p6 root, p2 data, p3 log). It requires our marker
+(`/etc/roomwizard-rootfs`) of a rootfs; no other tree counts. It excludes `/`
 from its scan on purpose — a content scan that selected the dev host's root would rewrite this host's
 `/etc/shadow`; `rw_host_root_disk` / `rw_is_host_root_disk` are the resolved veto for the disk-level
 equivalent.
 
 ⚠️ **p1 is deliberately absent from `RW_PART_ROLES`, and a test asserts its absence.** Nothing can
 reach `mlo`, `u-boot.bin` or `ctrlblock.bin` through those functions — a stronger guarantee than every
-caller remembering not to. p4 (extended container) and p7 (swap) are absent for the same reason:
-nothing to mount. No function in this directory mounts p1 at all.
+caller remembering not to. p4 (extended container), p5 (kept in the partition table, unused) and p7
+(swap) are absent for the same reason: nothing to mount. No function in this directory mounts p1 at all.
 
-⚠️ **A rootfs mounted offline shows `/home/root/{data,log,backup}` as three EMPTY directories** — they
-are mount points for p2/p3/p5. An offline tool that mounts only p6 sees no `websign/` (the network
-regenerator's input, p2), no logs (p3) and no 472 MB upgrade payload (p5), and would report success
-having touched none of them. Use `rw_mount_card` / `rw_check_card_mounts`; the latter's negative half —
+⚠️ **A rootfs mounted offline shows `/home/root/{data,log}` as EMPTY directories** — they are mount
+points for p2/p3. An offline tool that mounts only p6 sees none of the per-unit state (p2) or logs
+(p3), and would report success having touched neither. Use `rw_mount_card` / `rw_check_card_mounts`; the latter's negative half —
 "a rootfs where `data` was expected means the partitions are in the wrong order" — is the half that
 catches the mistake that makes every later path resolve under the wrong tree.
 
@@ -98,32 +96,18 @@ installing it is a manual operator step (`kernel/README.md`), preceded by a veri
 *running* image. The vendor-kernel byte patch that used to be this file's one writer is deleted; tag
 `last-vendor-kernel` is the last tree that carried it.
 
-- ⚠️ **The default clean still means a power cycle is not a free undo**, and the remedy is a card
-  reflash from the image commissioning takes — which is why it takes one. A taken decision: do not
-  relitigate it, and do not re-raise card access as a risk.
-
 Observe all of the above and JTAG never comes up. Detail and recovery procedure:
 `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`.
 
-## The two plan compilers
+## The plan compiler
 
-`rw-clean.sh` (delete half) and `rw-provision.sh` (install half) are the same shape: parse a
-tab-separated rules file, compile it to a plan, and let each consumer keep its own **executor** —
-because `/` is the correct prefix on a device and a refused one offline.
+`rw-provision.sh` parses the tab-separated `provision-rules.conf`, compiles it to a plan, and lets each
+consumer keep its own **executor** — because `/` is the correct prefix on a device and a refused one
+offline.
 
-- ⚠️ **`rw_clean_del` refuses an empty or `/` base before it looks at anything else.** Unprefixed,
-  those rules resolve to *this host's* `/etc`, `/opt` and `/usr/lib`. Every deletion goes through it,
-  including the ones a `scope` sweep decides on.
-- **Order is emitted by the compiler, not read from the file**: unlink → install → backup → link →
-  touch → directive → dropline. Unlink before link (a glob would eat the link just made), install
-  before link (a link to a not-yet-written file dangles on a card), dropline last (it edits files
-  install may have just placed).
-- ⚠️ **`dropline` uses `awk`, not `sed "/$ere/d"`.** These EREs contain slashes —
-  `^4:12345:respawn:/sbin/getty 38400 tty4` closes sed's address at `respawn:` and the remainder is
-  read as a command. The symptom was a passing install and an unedited `/etc/inittab`.
-- **`directive` sets a key, never appends beside it** — substituted if present (`#Key value` counts),
-  appended if absent, so re-runs are idempotent. The `sed` it replaced matched one exact string and skipped
-  `#PermitEmptyPasswords yes`; ⚠️ the `#` must *touch* the key, or the vendor's prose `# Ciphers and keying` becomes two more `Ciphers` lines.
+- **Order is emitted by the compiler, not read from the file**: unlink → install → link. Unlink before
+  link (a glob would eat the link just made), install before link (a link to a not-yet-written file
+  dangles on a card).
 - ⚠️ **The online executor is generated, not written twice.** `rw_provision_online_script` emits a
   POSIX `sh` interpreter that `commissioning/provision.sh` pipes to the device; `install` is the one
   verb it cannot do alone, because the source bytes are on the host, so the caller `scp`s them first
@@ -141,9 +125,8 @@ because `/` is the correct prefix on a device and a refused one offline.
   because indirection is what makes the copy step reachable from a test with no device. **Never inline
   it again.**
 - **A plan-summary line is computed, never hand-rolled.** `rw_provision_plan_summary` counts every
-  record type present, including one its ordered list does not know about. The three callers' own
-  arithmetic said `35 action(s) — 8 install, 9 link, 10 unlink` — 27 of 35, with backup, touch, the
-  four directives and the two droplines simply missing from the breakdown.
+  record type present, including one its ordered list does not know about. Hand-rolled arithmetic in
+  the callers left whole record types out of the breakdown.
 - ⚠️ **`usb` is a provision group, and a component script compiles it through
   `rw_provision_plan_component`, not through its own `scp`/`ln -sf`.** `rw_provision_plan_component
   FILE GROUP` compiles one optional group's records for `usb_host/build-and-deploy.sh` (`usb`) and `bluetooth/build-and-deploy.sh` (`bluetooth`) — a separate
@@ -165,8 +148,8 @@ layout lives in **`rw-bundle.sh`** and nowhere else: `<dir>/root/<device-path>` 
   will ever `chmod`.
 - **`release.sh` greps the staged manifest and refuses to publish config** (`*.conf`, `/etc/hosts`,
   `/etc/hostname`, `rw_config`, `touch_calibration`, `input_config`). Not a rule each component is
-  trusted to remember — the negative control for the one that forgets. Device config carries the
-  `/etc/hosts` mapping that names the device's own host at an unreachable external address, and
+  trusted to remember — the negative control for the one that forgets. Device config carries
+  the per-unit host name and
   `vnc_client`'s plaintext VNC password.
 - ⚠️ **And it refuses to publish vendor firmware** — any entry whose basename is `uImage*`, `mlo`,
   `u-boot*` or `ctrlblock*`. Matched on the basename, not a path, because p1 is not a bundle path at
@@ -228,6 +211,6 @@ over a path. It installs nothing and never touches a device. `rw-bundle.sh` stay
 ## Regressions
 
 Host-only, no device, no root: `tests/rw_ssh_test.sh`, `tests/rw_provision_test.sh`,
-`tests/rw_clean_test.sh`, `tests/rw_identify_test.sh`, `tests/rw_state_test.sh`, plus the
+`tests/provision_online_test.sh`, `tests/rw_identify_test.sh`, `tests/rw_state_test.sh`, plus the
 `tests/measure_*_sabotage.sh` harnesses that re-measure them. What each one can and cannot see, and
 the traps in extending them, are in `tests/CLAUDE.md`.

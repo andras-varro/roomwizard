@@ -11,9 +11,8 @@ See [CLAUDE.md](CLAUDE.md) for how to write code here, and [../IMPROVEMENT_PLAN.
 3. [Build & Deploy](#build--deploy-cross-compile-from-wsl)
 4. [App Launcher](#app-launcher)
 5. [App Manifests](#app-manifests)
-6. [System Optimization](#system-optimization)
-7. [Permanent App Mode](#permanent-app-mode-boot)
-8. [Resources](#resources)
+6. [Permanent App Mode](#permanent-app-mode-boot)
+7. [Resources](#resources)
 
 ---
 
@@ -242,27 +241,6 @@ The script cross-compiles all binaries, uploads them to `/opt/games/`, and sets 
 To rebuild a single app, run `./build-and-deploy.sh` — it is fast and always links the
 correct object set. Hand-rolled single-file compile lines go stale as `common/` grows
 and will fail to link.
-
----
-
-## System Optimization
-
-The vendor firmware ships a software watchdog that reboots the device roughly every 70 minutes
-in game mode, plus ~178 MB of bloatware (Jetty, OpenJRE, HSQLDB, X11, CJK fonts) and a further
-~560 MB that can be reclaimed on top of that.
-
-None of this is handled here — it is owned by `../commissioning/provision.sh`:
-
-```bash
-../commissioning/provision.sh <ip>                        # disable the SW watchdog + services
-../commissioning/provision.sh <ip> --remove               # + delete vendor bloatware (~178 MB)
-../commissioning/provision.sh <ip> --deep-clean           # + extended cleanup (~560 MB more)
-../commissioning/provision.sh <ip> --deep-clean --dry-run # preview, deletes nothing
-../commissioning/provision.sh <ip> --status               # report current state
-```
-
-Which services are disabled and why it is safe is documented in
-[`../SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode`](../SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode).
 
 ---
 

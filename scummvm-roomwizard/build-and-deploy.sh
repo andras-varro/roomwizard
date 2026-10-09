@@ -641,7 +641,7 @@ deploy_to_device() {
         || log_warning "could not clear /opt/roomwizard/bundle.info — it may still name an older release"
 
     # Verify system setup has been done
-    if ! ssh "$DEVICE" "[ -f /opt/roomwizard/disable-steelcase.sh ]" 2>/dev/null; then
+    if ! ssh "$DEVICE" "[ -x /etc/init.d/roomwizard-app ]" 2>/dev/null; then
         log_warning "System setup not detected on device."
         log_warning "Run commissioning/provision.sh first:  ../commissioning/provision.sh $DEVICE_IP"
         echo ""

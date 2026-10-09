@@ -179,10 +179,9 @@ publishing a prebuilt one is not an available shortcut.
 
 The MIT text above disclaims warranty, and that disclaimer is meant literally here. Two specifics:
 
-- **The clean is destructive by default.** `commissioning/provision.sh` and
-  `commissioning/commission-offline.sh` delete the vendor stack, and **there is no in-place rollback**.
-  Recovery is reflashing the card from the image commissioning takes, which is why it takes one.
-  `--no-clean` opts out. Neither script writes the boot partition.
+- **Imaging a card replaces everything on it, and there is no in-place rollback.** Keep the card
+  image you wrote; `commissioning/provision.sh` takes a `commissioning/backup.sh` archive before it
+  changes a running unit. Neither writes the boot partition.
 - **Recovering a unit that will not boot means reaching the SD card, and that means opening the case.**
   It is feasible and it takes experience; an inexperienced attempt can break the enclosure. Nobody
   associated with this project is responsible for a broken case, a broken card or a bricked unit.

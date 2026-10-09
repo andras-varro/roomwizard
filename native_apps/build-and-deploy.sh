@@ -7,7 +7,7 @@
 #   ./build-and-deploy.sh <ip> set-default     # build + deploy + set as default app
 #   ./build-and-deploy.sh --bundle <dir>       # build + stage into an offline bundle
 #
-# System setup (bloatware cleanup, init service, audio, time-sync) is handled
+# System setup (init service, audio, time-sync) is handled
 # separately by commissioning/provision.sh.  Run that once before deploying for the first time.
 #
 # --bundle stages the same artifacts this script would scp, under
@@ -568,8 +568,8 @@ fi
 # is a working device that has NOT had the audibility fix — every one of those
 # tones is at or below the speaker's knee.  So this is not an optional asset step.
 #
-# /opt/sound is where the music bed already lives and device-files/clean-rules.conf
-# keeps that directory wholesale, so a re-commission does not take them away.  They
+# /opt/sound is where the music bed already lives and nothing in commissioning
+# deletes that directory, so a re-commission does not take them away.  They
 # are checked in (sounds/fx_*.wav — SOURCED files, not build output; ⚠️ running
 # sounds/gen-sounds.sh overwrites them with generated noise), so
 # unlike the music there is nothing to hand-copy.

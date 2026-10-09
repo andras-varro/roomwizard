@@ -1,7 +1,6 @@
 #!/bin/sh
 #
-# commissioning/set-hostname.sh — set a RoomWizard's host name, in /etc/hostname, /etc/hosts
-#                   AND /etc/dhclient.conf
+# commissioning/set-hostname.sh — set a RoomWizard's host name, in /etc/hostname and /etc/hosts
 #
 # ONE implementation, called from two places with different connection models:
 #
@@ -13,20 +12,11 @@
 # It lives in its own file rather than in either caller because the two paths
 # would otherwise carry the same 30 lines of /etc/hosts rewriting and drift
 # apart; and because a standalone script can be exercised on the host against a
-# copy of a real vendor rootfs, with no SD card and no device.
+# copy of a rootfs, with no SD card and no device.
 #
-# Why /etc/hosts is rewritten and not just /etc/hostname: the vendor image maps
-# the device's OWN host name, on a non-loopback line, to an external address that
-# is unreachable from anywhere these units are used. That mapping is baked into
-# the image, so it is the same on every unit cloned from it. Setting
-# /etc/hostname alone leaves it in place, and anything resolving its own name
-# still gets the wrong answer.
-#
-# Why /etc/dhclient.conf too: it is the THIRD place the name is stored, and the
-# one a DHCP server — and therefore a router's device list — actually reads.
-# Measured on a unit in service on 2026-08-05: renamed months earlier, and still
-# announcing `send host-name "RW09";`. Nothing in this repo wrote that file until
-# now — it is the third of the three places, after /etc/hostname and /etc/hosts.
+# The host name lives in those two files only: our root runs busybox udhcpc, ships no
+# /etc/dhclient.conf, and its networking init script adds `hostname <name>`, read from
+# /etc/hostname, to each dhcp stanza.
 #
 # Usage: commissioning/set-hostname.sh NAME [ROOTFS]
 #   NAME    RFC-1123 single label. No dots — mDNS appends .local itself, and a
@@ -74,7 +64,6 @@ fi
 
 HOSTNAME_FILE="$ROOTFS/etc/hostname"
 HOSTS_FILE="$ROOTFS/etc/hosts"
-DHCLIENT_FILE="$ROOTFS/etc/dhclient.conf"
 
 if [ ! -f "$HOSTS_FILE" ]; then
     echo "set-hostname.sh: $HOSTS_FILE does not exist — is '$ROOTFS' a rootfs?" >&2
@@ -144,46 +133,6 @@ if [ -f "$HOSTNAME_FILE" ] && [ ! -f "$HOSTNAME_FILE.backup" ]; then
 fi
 printf '%s\n' "$NAME" > "$HOSTNAME_FILE"
 
-# ── /etc/dhclient.conf ──────────────────────────────────────────────────────
-#
-# `send host-name "<name>";` is what the DHCP server records, so it is the name a
-# router's device list shows and the name any DNS-from-DHCP integration resolves.
-# Measured 2026-08-05 on a unit renamed months ago: still `"RW09"`.
-#
-# Rewritten in place with sed when the directive is present, appended when it is
-# not, and skipped entirely when the file does not exist — a --deep-cleaned unit
-# has no dhclient.conf and does not need one, and creating a config for a client
-# that is not there would be a file nothing reads.
-#
-# Anchored on the directive rather than on the old NAME: the vendor's own value is
-# not necessarily the same as /etc/hostname's (RW09 in dhclient.conf beside `null`
-# in /etc/hostname is a real combination), so keying on OLD would miss it.
-if [ -f "$DHCLIENT_FILE" ]; then
-    [ -f "$DHCLIENT_FILE.backup" ] || cp "$DHCLIENT_FILE" "$DHCLIENT_FILE.backup"
-    DTMP="$DHCLIENT_FILE.tmp.$$"
-    if grep -qE '^[ \t]*send[ \t]+host-name' "$DHCLIENT_FILE"; then
-        sed "s|^[ \t]*send[ \t][ \t]*host-name.*|send host-name \"$NAME\";|" \
-            "$DHCLIENT_FILE" > "$DTMP"
-    else
-        cp "$DHCLIENT_FILE" "$DTMP"
-        printf 'send host-name "%s";\n' "$NAME" >> "$DTMP"
-    fi
-    # Assert the directive is there and names the new host, rather than trusting
-    # the sed: an unanchored substitution that matched nothing would leave the
-    # file valid, unchanged, and still announcing the old name.
-    if ! grep -qF "send host-name \"$NAME\";" "$DTMP"; then
-        rm -f "$DTMP"
-        echo "set-hostname.sh: refusing to write $DHCLIENT_FILE — the result would" >&2
-        echo "  not announce '$NAME'. The file is unchanged (backup: $DHCLIENT_FILE.backup)." >&2
-        exit 1
-    fi
-    cp "$DTMP" "$DHCLIENT_FILE"
-    rm -f "$DTMP"
-    DHCLIENT_DONE=" and $DHCLIENT_FILE"
-else
-    DHCLIENT_DONE=""
-fi
-
 # ── running kernel ──────────────────────────────────────────────────────────
 # Only meaningful for the live root; offline there is no kernel to tell.
 if [ -z "$ROOTFS" ]; then
@@ -196,8 +145,3 @@ else
     echo "  host name: $NAME"
 fi
 echo "  $HOSTNAME_FILE and $HOSTS_FILE updated (backups: *.backup)"
-if [ -n "$DHCLIENT_DONE" ]; then
-    echo " $DHCLIENT_DONE updated — the DHCP server will now record '$NAME'"
-else
-    echo "  no $DHCLIENT_FILE on this tree — nothing announces a name over DHCP"
-fi

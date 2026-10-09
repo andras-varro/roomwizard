@@ -89,8 +89,8 @@ command (four findings with it removed or moved below `set -e`, zero above; work
 
 ⚠️ **Running the whole gate as root does NOT reach phase 2 on this host, so a root-only C regression is
 reached by compiling and running that one test as root** — its own header carries the command. Two
-independent reasons, both artefacts of the shell rather than the repo: `commission_prep_test.sh` exits 2
-as root, and phase 2 returns without printing a word while any harness error stands; then `git ls-files`
+independent reasons, both artefacts of the shell rather than the repo: a host-only suite that exits 2 as
+root, and phase 2 returning without printing a word while any harness error stands; then `git ls-files`
 fails on dubious ownership, so phase 3 finds no scripts. **A phase that grades nothing prints nothing
 here** — read the summary's harness-error count, never the absence of red rows.
 
@@ -185,7 +185,7 @@ it. **Disambiguate the sentence** — "that suite's cases B6/C3a/C5a" reads as a
 the scan alike — never delete a working pointer, and never exclude the file.
 
 ⚠️ **Do not answer this with a whole-tree ID-token census** — that collision means "every ID-shaped token
-with no heading" returns 581 hits that cannot be triaged, `rw_clean_test.sh` alone contributing ~70.
+with no heading" returns hundreds of hits that cannot be triaged, one suite alone contributing ~70.
 Anchor on **vocabulary** instead: the three shapes above gave 11 findings and **zero** false positives.
 Recipe: `~/.claude/plans/peaceful-herding-valiant.md` → Phase 2b.
 
@@ -230,10 +230,9 @@ identical file unstripped. **Put search patterns and multi-line harnesses in fil
 inputs your tool cannot inspect rather than passing them. **If a fix is supposed to drive a number to
 zero, check that it reaches zero** — a small residue is the tell, both times it happened.
 
-⚠️ **Extract the wiring under test; never restate it.** `tests/commission_prep_test.sh` covers two
-host-side decisions in `commissioning/card-prep.sh` that are unreachable by running the script, so both
-are **extracted from the shipped file by line range** and run against stubs. An earlier version of that
-harness re-emitted the `OPERATOR_HOME=` assignment itself and thereby **repaired the sabotage it was
+⚠️ **Extract the wiring under test; never restate it.** A decision that is unreachable by running its
+script is tested by **extracting it from the shipped file** (by line range or function) and running it
+against stubs. A harness that re-emits the assignment under test itself **repairs the sabotage it was
 meant to catch**.
 
 ## What a suite cannot see
@@ -277,7 +276,7 @@ meant to catch**.
 - **`rw_ssh_test.sh` starts a real `sshd`** on a loopback high port with an empty `AuthorizedKeysFile`
   — which needs no root — because a genuine `Permission denied` cannot be produced by a stub without
   writing the string the code is supposed to recognise.
-- **`rw_clean_test.sh`'s fixture is synthetic with real symlinks**, for the reason above.
+- **`rw_provision_test.sh`'s fixtures are synthetic with real symlinks**, for the reason above.
 - **`commission_offline_test.sh`** needs root and a staged bundle; every check it makes has a sabotage
   case, and its fixture builder is `tests/make-fake-card.sh`.
 - ⚠️ **`setup_build_env_test.sh` drives the probe loop over FIXTURE tables, never the real package set.**
@@ -343,7 +342,7 @@ command exits, which is indistinguishable from a hung WSL.** `timeout N` anythin
 host regression that hangs is a *test result*, not a tool timeout.
 
 ```bash
-wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && timeout 300 ./tests/rw_clean_test.sh > /mnt/c/work/roomwizard/out.txt 2>&1"
+wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && timeout 300 ./tests/rw_provision_test.sh > /mnt/c/work/roomwizard/out.txt 2>&1"
 ```
 
 ⚠️ **WSL's `/tmp` does not survive between `wsl.exe` calls** — the instance idles out and takes it with

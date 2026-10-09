@@ -1,20 +1,20 @@
 #!/bin/bash
-# commissioning/clone-to-32gb.sh — Clone and expand RoomWizard SD card from 4GB to 32GB
+# commissioning/clone-to-32gb.sh — Write a card image onto a larger card and grow the root filesystem
 #
 # Usage:
 #   sudo ./commissioning/clone-to-32gb.sh --clone-from <image_or_device> /dev/sdX
 #   sudo ./commissioning/clone-to-32gb.sh --expand-only /dev/sdX
 #
-# This script clones the original RoomWizard ~4GB SD card image onto a larger
-# (16-32GB) SD card and expands the root filesystem (p6) to use all available
-# space, while preserving partition numbering and filesystem UUID.
+# This script writes a card image (as rootfs/make-card-image.sh builds it, ~4GB)
+# onto a larger (16-128GB) SD card and expands the root filesystem (p6) to use all
+# available space, while preserving partition numbering and filesystem UUID.
 #
-# The original RoomWizard partition table has 7 partitions:
+# The image's partition table has 7 partitions:
 #   p1: FAT32, ~70.6 MB, bootable (MLO, U-Boot, uImage, DTB)
 #   p2: ext3, ~251 MB (application data)
 #   p3: ext3, ~243 MB (system logs)
 #   p4: extended container, ~3.14 GB (holds p5-p7)
-#   p5: ext3, ~1.40 GB (OEM backup)
+#   p5: ext3, ~1.40 GB (unused, kept in the table)
 #   p6: ext3, ~981 MB (root filesystem)
 #   p7: swap, ~259 MB (swap space — dropped during upgrade)
 #
@@ -25,11 +25,11 @@
 #   SD_CARD_UPGRADE.md
 #
 # Strategy:
-#   1. Clone the original 4GB image to the 32GB card with dd
+#   1. Write the image to the larger card with dd
 #   2. Use sfdisk to expand extended partition (p4) and rootfs (p6)
 #   3. Drop swap partition (p7) — not needed for gaming
 #   4. Use e2fsck + resize2fs to grow the ext3 filesystem
-#   5. Preserve p5 (backup) at original size to maintain p6 device numbering
+#   5. Keep p5 at its size so p6 keeps its device number
 #   6. UUID is preserved because we resize, not reformat
 
 # Source-path directive: resolves the source= hints below against this script's directory.
@@ -40,10 +40,10 @@ set -euo pipefail
 # Constants
 # ---------------------------------------------------------------------------
 MIN_TARGET_SIZE_GB=16
-# Upper bound as well as a lower one: a minimum alone rejects the original 4 GB
+# Upper bound as well as a lower one: a minimum alone rejects a card as small as the 4 GB image
 # card and accepts a 4 TB disk.  Env-overridable for a genuinely large card.
 MAX_TARGET_SIZE_GB=${MAX_TARGET_SIZE_GB:-128}
-EXPECTED_PARTITION_COUNT=7  # Original has 7 partitions (including swap on p7)
+EXPECTED_PARTITION_COUNT=7  # The image has 7 partitions (including swap on p7)
 SCRIPT_NAME="$(basename "$0")"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -135,7 +135,7 @@ part_dev() {
 # Usage / help
 # ---------------------------------------------------------------------------
 usage() {
-    echo -e "${BOLD}${SCRIPT_NAME}${NC} — Clone and expand RoomWizard SD card from 4GB to 32GB"
+    echo -e "${BOLD}${SCRIPT_NAME}${NC} — Write a card image to a larger card and grow p6"
     echo ""
     echo -e "${BOLD}USAGE${NC}"
     echo "  sudo ./${SCRIPT_NAME} --clone-from <image_or_device> <target_device>"
@@ -144,7 +144,7 @@ usage() {
     echo ""
     echo -e "${BOLD}MODES${NC}"
     echo "  --clone-from <src>   Clone from an image file or source device, then expand."
-    echo "                       Example: --clone-from roomwizard-original-4gb.img /dev/sdb"
+    echo "                       Example: --clone-from roomwizard-card.img /dev/sdb"
     echo "                       Example: --clone-from /dev/sdc /dev/sdb"
     echo ""
     echo "  --expand-only        Skip cloning; expand partitions on a card that already"
@@ -171,19 +171,19 @@ usage() {
     echo ""
     echo -e "${BOLD}WHAT IT DOES${NC}"
     echo "  1. (Clone mode) dd the source image/device to the target"
-    echo "  2. Verify expected 7-partition layout (originally) and rootfs UUID"
+    echo "  2. Verify the image's 7-partition layout and rootfs UUID"
     echo "  3. Expand extended partition (p4) and rootfs (p6) to fill the card"
     echo "  4. Drop swap partition (p7) to maximize rootfs space"
-    echo "  5. Preserve backup partition (p5) at original size for device numbering"
+    echo "  5. Keep the unused partition (p5) at its size so p6 keeps its device number"
     echo "  6. Grow the ext3 filesystem on p6 with resize2fs"
     echo "  7. Verify UUID is preserved"
     echo ""
-    echo -e "${BOLD}PARTITION LAYOUT (original 7 partitions)${NC}"
+    echo -e "${BOLD}PARTITION LAYOUT (the image's 7 partitions)${NC}"
     echo "  p1: FAT32  ~70.6 MB  bootable  (boot: MLO, U-Boot, uImage, DTB)"
     echo "  p2: ext3   ~251 MB             (application data)"
     echo "  p3: ext3   ~243 MB             (system logs)"
     echo "  p4: ext    ~3.14 GB            (extended container for p5-p7)"
-    echo "  p5: ext3   ~1.40 GB            (OEM backup)"
+    echo "  p5: ext3   ~1.40 GB            (unused, kept in the table)"
     echo "  p6: ext3   ~981 MB             (root filesystem)"
     echo "  p7: swap   ~259 MB             (swap — DROPPED during upgrade)"
     echo ""
@@ -366,13 +366,13 @@ check_device_safe() {
     fi
 
     # A size *window*.  A minimum alone is not a safety check — it rejects the
-    # original 4 GB card and waves through a 4 TB drive.
+    # 4 GB image-sized card and waves through a 4 TB drive.
     local size_bytes size_gb
     size_bytes=$(blockdev --getsize64 "$dev")
     size_gb=$(( size_bytes / 1073741824 ))
     if [ "$size_gb" -lt "$MIN_TARGET_SIZE_GB" ]; then
         error "Target device is ${size_gb} GB — minimum ${MIN_TARGET_SIZE_GB} GB required"
-        error "This check ensures you're not accidentally writing to the original 4GB card"
+        error "This check ensures you're not accidentally writing to a card as small as the image"
         exit 1
     fi
     if [ "$size_gb" -gt "$MAX_TARGET_SIZE_GB" ]; then
@@ -493,7 +493,7 @@ do_verify() {
     info "Found ${part_count} partition(s) on ${DEVICE}"
 
     if [ "$part_count" -ne "$EXPECTED_PARTITION_COUNT" ]; then
-        error "Expected ${EXPECTED_PARTITION_COUNT} partitions (originally), found ${part_count}"
+        error "Expected ${EXPECTED_PARTITION_COUNT} partitions, found ${part_count}"
         echo ""
         lsblk "$DEVICE"
         error "The target device does not have the expected RoomWizard partition layout"
@@ -512,10 +512,10 @@ do_verify() {
     # p1 p2 p3 p5 p6 — byte-identical on every unit measured — and deliberately
     # does NOT pin p4 or p7, which absorb the difference in physical card size.
     if rw_is_card_disk "$DEVICE"; then
-        info "Partition layout matches the RoomWizard original ✓"
+        info "Partition layout matches the RoomWizard card layout ✓"
     else
-        warn "Partition layout does NOT match the RoomWizard original."
-        warn "  p1 p2 p3 p5 p6 must be at their original start sectors and sizes."
+        warn "Partition layout does NOT match the RoomWizard card layout."
+        warn "  p1 p2 p3 p5 p6 must be at the image's start sectors and sizes."
         warn "  Expected: ${RW_LAYOUT}"
         echo ""
         warn "If this card has already been expanded, you are past the point this"
@@ -624,7 +624,7 @@ do_repartition() {
     info "  p2: start=${p2_start}, size=${p2_size}, type=${p2_type}  (~$(( p2_size * 512 / 1048576 )) MB, data)"
     info "  p3: start=${p3_start}, size=${p3_size}, type=${p3_type}  (~$(( p3_size * 512 / 1048576 )) MB, log)"
     info "  p4: start=${p4_start}, size=${p4_size}, type=${p4_type}  (~$(( p4_size * 512 / 1048576 )) MB, extended)"
-    info "  p5: start=${p5_start}, size=${p5_size}, type=${p5_type}  (~$(( p5_size * 512 / 1048576 )) MB, backup)"
+    info "  p5: start=${p5_start}, size=${p5_size}, type=${p5_type}  (~$(( p5_size * 512 / 1048576 )) MB, unused)"
     info "  p6: start=${p6_start}, size=${p6_size}, type=${p6_type}  (~$(( p6_size * 512 / 1048576 )) MB, rootfs)"
     info "  p7: start=${p7_start}, size=${p7_size}, type=${p7_type}  (~$(( p7_size * 512 / 1048576 )) MB, swap — WILL BE DROPPED)"
 
@@ -858,7 +858,7 @@ main() {
     echo ""
     echo -e "${BLUE}${BOLD}╔══════════════════════════════════════════════════════╗${NC}"
     echo -e "${BLUE}${BOLD}║  RoomWizard SD Card Clone & Expand Tool              ║${NC}"
-    echo -e "${BLUE}${BOLD}║  4 GB → 32 GB (or any ≥${MIN_TARGET_SIZE_GB} GB card)               ║${NC}"
+    echo -e "${BLUE}${BOLD}║  4 GB image → larger card (any ≥${MIN_TARGET_SIZE_GB} GB)                 ║${NC}"
     echo -e "${BLUE}${BOLD}╚══════════════════════════════════════════════════════╝${NC}"
     echo ""
 

@@ -234,8 +234,8 @@ fill() {   # fill <partnum> <rootfs tar> [<state tar>]
         tar --no-same-owner -xpf "$3" -C "$MNT/p" || die "extract $3 into p$n"
     fi
     if [ "$n" = 6 ]; then
-        # The data partitions mount here; the mount points stay empty (p5 is not mounted).
-        mkdir -p "$MNT/p/home/root/data" "$MNT/p/home/root/log" "$MNT/p/home/root/backup"
+        # p2 and p3 mount here; the mount points stay empty. p5 has no mount point.
+        mkdir -p "$MNT/p/home/root/data" "$MNT/p/home/root/log"
         [ ! -d "$MNT/p/home/root/.ssh" ] || chmod 700 "$MNT/p/home/root/.ssh"
         [ ! -f "$MNT/p/home/root/.ssh/authorized_keys" ] || chmod 600 "$MNT/p/home/root/.ssh/authorized_keys"
         # state.tar no longer carries /etc/hosts (the vendor's), so the rootfs's own

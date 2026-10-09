@@ -5,7 +5,7 @@
 #
 #   wsl.exe -e bash -lc "cd /mnt/c/work/roomwizard && bash tests/measure_release_sabotage.sh"
 #
-# In a FILE and not in argv, for the reason measure_sabotage.sh gives: a pattern
+# In a FILE and not in argv, because a pattern
 # containing `$`, `[` or a tab does not survive being quoted through
 # `wsl.exe -e bash -lc "..."`, and a sabotage that fails to apply reports "0
 # failed" — which reads exactly like a suite that cannot detect the breakage.

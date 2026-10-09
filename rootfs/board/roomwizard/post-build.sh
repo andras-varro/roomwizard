@@ -74,7 +74,7 @@ rm -f "$TARGET/etc/resolv.conf"
 ln -s /var/run/resolv.conf "$TARGET/etc/resolv.conf"
 
 # Mount points for the SD card partitions and the app tree.
-mkdir -p "$TARGET/home/root/data" "$TARGET/home/root/log" "$TARGET/home/root/backup" \
+mkdir -p "$TARGET/home/root/data" "$TARGET/home/root/log" \
     "$TARGET/opt/games" "$TARGET/opt/roomwizard" "$TARGET/media"
 mkdir -p "$TARGET/home/root/.ssh"
 chmod 0700 "$TARGET/home/root/.ssh"

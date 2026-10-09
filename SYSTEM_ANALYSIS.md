@@ -713,14 +713,13 @@ Native rate is 48000 Hz; `plughw` and the OSS shim both sample-rate-convert auto
 (`:2718-2720`) over the same cards. Userspace ships `libasound.so.2.0.0` (**alsa-lib 1.2.1.2**), `aplay`,
 `amixer`, `alsactl`, 238 files under `/usr/share/alsa` — which **`libasound` itself needs**: every
 `snd_pcm_open` loads `alsa.conf`, and `plughw`/`plug` are defined only there [inferred from alsa-lib] — but no headers — a same-version alsa-lib build
-supplies them (§6.3). Measured 2026-09-27 on our kernel: a soft-float client played on `plughw:0,0` and
+supplies them (§6.3); git tag `static-only-last` is the last commit before that dynamic build. Measured 2026-09-27 on our kernel: a soft-float client played on `plughw:0,0` and
 `plughw:1,0`. **Native apps and ScummVM are such clients, and ALSA is their only output** — `audio_out.c`
 opens `plughw:N,0` for `/dev/dspN`; on `.188` 2026-09-28 native apps and ScummVM held `/dev/snd/pcmC1D0p`, and ScummVM's 22050 Hz
 1 ch request was granted 1 ch, so `plughw` converts. Dynamic, not raw ioctls: `bluez-alsa` is a plugin.
 
 - ⚠️ **`CONFIG_SND_SEQUENCER` is not set** (`:2731`), so ScummVM's `--enable-alsa` is a trap: it is
   MIDI/sequencer support, not PCM output. PCM is hand-written, which is why `oss-mixer.cpp` exists.
-- **The deep clean cannot reach `libasound` or `/usr/share/alsa`** — a validated rules file may not (§5.2).
 - ⚠️ **After a USB audio card is removed, `snd_pcm_avail_update()` lies and `snd_pcm_avail()` tells the
   truth.** Measured 2026-10-01 on `.188` (alsa-lib 1.2.x, ARM, no mmap'd status page, so every query is
   `SYNC_PTR`): `avail_update` returned a frozen positive count with no error for the 25 s watched, while
@@ -1013,8 +1012,8 @@ Two defects in one file. The name is **baked into the image** rather than genera
 cloned from it claims `RW09` — which is also where this repo's name for the reference unit came
 from. And on a stock image **the device's own name resolves to a dead address**, so anything that
 resolves its own hostname gets the wrong answer. `commissioning/set-hostname.sh` fixes both files together, to
-loopback-only (it is what `commissioning/card-prep.sh`'s prompt and `commissioning/provision.sh --hostname` both
-call).
+loopback-only (`commissioning/provision.sh --hostname` and `rootfs/make-card-image.sh` both
+call it).
 
 **⚠️ The vendor regenerates all four network files on every boot, so editing them is not the last
 word.** `/opt/sbin/networkmanager` — a 24,894-byte shell script, started by `/etc/init.d/networkmanager`
@@ -1035,8 +1034,7 @@ and **byte-identical on both captured cards** — rewrites these from `/home/roo
   `Manual IP Mode detected.` / `Vaild host name found: null` / `status: manual-bound`.
 - **Deleting `/home/root/data/websign` makes the script inert for the host name.** Both writers live
   *inside* `set_manual()`/`set_dhcp()`; with `net.mode` unreadable neither branch runs, so `/etc/hosts`
-  and `/etc/hostname` are never touched again. `commissioning/provision.sh`'s deep clean removes that directory,
-  which is why a cleaned unit keeps the name `commissioning/set-hostname.sh` gave it — and an uncleaned one does not.
+  and `/etc/hostname` are never touched again.
 - ⚠️ **The vendor's own validator rejects hyphens.** `net.hostname` is filtered by an awk regex that
   accepts `RW09`, `RW20`, `rwtest` and `null` but **rejects `RW-Test` and `rw-test`**; a rejected name
   logs `Invalid host name detected.` and the DHCP client then announces the hardcoded fallback
@@ -1059,8 +1057,8 @@ and **byte-identical on both captured cards** — rewrites these from `/home/roo
 `/etc/init.d/avahi-daemon` are both on the vendor image — there is simply **no `rc5.d` link**, so it
 never runs. One symlink enables it (`commissioning/provision.sh` now adds `S30avahi-daemon`), after which the
 unit answers to `<name>.local` and neither SSH nor the deploy scripts need a DHCP-lease hunt. Its
-`Required-Start` is `$remote_fs dbus`, and dbus is one of the few dynamic consumers the deep clean
-deliberately keeps, so the dependency holds even on a fully cleaned device. The shipped `enable-wide-area=yes` and
+`Required-Start` is `$remote_fs dbus`, so dbus must be running too.
+The shipped `enable-wide-area=yes` and
 `publish-workstation=no` do not affect `.local` resolution. **Listeners:** the vendor image had UDP 514 (syslogd, no
 arguments), UDP 5353 plus a random avahi port, TCP 22, UDP 68; `SYSLOGD="-s -s"` in `/etc/default/syslogd` and avahi
 `use-ipv6=no`, `allow-interfaces=eth0`, `enable-wide-area=no`, `enable-reflector=no` leave UDP 68, 5353 and TCP 22 only [measured, `.188`].
@@ -1320,13 +1318,13 @@ pwmchip0 - dmtimer-pwm@9      pwmchip1 - dmtimer-pwm@11      pwmchip2 - dmtimer-
 C implementation: `native_apps/common/hardware.c`. Vendor scripts that still exist:
 `/opt/sbin/backlight/setbacklight.sh`, `/opt/sbin/brightness.sh`, `/opt/sbin/conc_leds.sh`.
 
-**The backlight ceiling is 100, and a cleaned unit is already sitting on it.** `max_brightness` is 100
+**The backlight ceiling is 100, and a unit without the vendor stack is already sitting on it.** `max_brightness` is 100
 and a write above it does not raise the duty — `echo 150` reads back `100`. Measured on `rwtest`
-2026-08-06 before `sshd` and long before `roomwizard-app`: a freshly booted **cleaned** unit reads
+2026-08-06 before `sshd` and long before `roomwizard-app`: a freshly booted unit with the vendor stack removed reads
 **100 of 100** with nothing in our stack having written it — `app_launcher` makes no `hw_set_backlight()`
 call at all. The vendor's own mechanism (`adjustbklight.sh` → `setbacklight.sh` / `backlight.sh -1`)
 writes this one node from `websign/brightness.conf` and **defaults to 100** when that file is missing,
-which is the state our clean leaves behind. So a boot-time setter would write 100 over 100.
+which is the state without the vendor stack. So a boot-time setter would write 100 over 100.
 
 ⚠️ **"The panel looks dim" is therefore not a software question — at a fixed duty cycle, perceived
 brightness follows what is *drawn*.** The launcher grid measures **19.2 % mean luminance**, 87.5 % of
@@ -1538,21 +1536,10 @@ failure in grace period" before it gives up.
 
 **In game mode those services are all absent, so this reboots the device every ~70 minutes.**
 
-**The clean DELETES it, and that is the only layer that removes the code.** `/opt/sbin/watchdog` is a
-*directory* of three scripts (`watchdog.sh`, `watchdog_repair.sh`, `watchdog_test.sh`), and
-`device-files/clean-rules.conf` removes the whole directory in group `base` — which no flag can keep —
-so no bring-up path leaves a rebooter on disk. Two weaker layers sit behind it: `disable-steelcase.sh`
-**replaces the whole crontab** with the two cleanup jobs worth keeping (`rotatelogfiles.sh`,
-`cleanupfiles.sh`), which is what would otherwise have scheduled `watchdog.sh`, and it `touch`es
-`/var/watchdog_test` as its first command — belt and braces, since `watchdog_test.sh` skips every check
-unless that file (or `_checkmem`) exists, and the script it guards is already gone. The factory crontab
-is not backed up; its content is recoverable from the images under `partitions/`.
-
-⚠️ **A device can be running a copy of that script older than the repo's, and a unit cleaned before the
-delete rule existed still has the rebooter on disk** — bypassed by the two weaker layers, not removed.
-`commissioning/provision.sh <ip>` deploys it (to `/opt/roomwizard/`) and runs it once;
-`/etc/init.d/roomwizard-app` re-runs the *deployed* copy on every boot. **Check `--status` before drawing
-any conclusion from a unit**: one that has not been re-provisioned is running whatever it was given.
+**Our own root carries no cron and none of this.** `/opt/sbin/watchdog` is a *directory* of three scripts
+(`watchdog.sh`, `watchdog_repair.sh`, `watchdog_test.sh`) that exists only on the vendor root.
+`watchdog_test.sh` skips every check unless `/var/watchdog_test` (or `_checkmem`) exists. The hardware
+watchdog above is a separate mechanism and stays.
 
 ### 3.14 What is not present
 
@@ -1624,7 +1611,7 @@ OMAP3 ROM
 | p1 | FAT32 | 70.6 MB | `/var/volatile/boot` | `mlo`, `u-boot.bin`, `uImage-system`, `ctrlblock.bin`. **The DTB is inside `uImage-system`** — no separate `.dtb` file exists. |
 | p2 | ext3 | 256 MB | `/home/root/data` | Application data |
 | p3 | ext3 | 250 MB | `/home/root/log` | System logs |
-| p5 | ext3 | 1500 MB | `/home/root/backup` | Firmware backup, incl. `factory/` upgrade images + `.md5` files |
+| p5 | ext3 | 1500 MB | `/home/root/backup` | Firmware backup, incl. `factory/` upgrade images + `.md5` files; on our own root it stays in the table, unused and never mounted |
 | p6 | ext3 | ~981 MB | `/` | Root filesystem |
 
 > **Gotcha — p6 is ext3, mounted by the ext4 driver.** U-Boot passes `rootfstype=ext4` and the ext4
@@ -1639,7 +1626,7 @@ all three empty; the vendor's config and logs are on the other partitions.
 | Partition | Used | Largest items |
 |---|---|---|
 | p6 `/` | 379 MB | `/usr` 223 MB (`/usr/lib` 138, `/usr/share` 60) · `/opt` 142 MB (`openjre-8` 93, `jetty-9-4-11` 43). **Everything outside `/usr` and `/opt` totals 15 MB** |
-| p2 `/home/root/data` | 144 MB | `cron/` **131 MB** — a *log*, not the spool (`commissioning/provision.sh` truncates it rather than deleting the directory) · `test.hex` 10 MB · `websign/` 220 KB, the network config of [§3.5](#35-network-and-power) |
+| p2 `/home/root/data` | 144 MB | `cron/` **131 MB** — a *log*, not the spool · `test.hex` 10 MB · `websign/` 220 KB, the network config of [§3.5](#35-network-and-power) |
 | p3 `/home/root/log` | 31 MB | `jetty_logs` 18 MB · `browser.err` 8 MB · `messages` 4 MB |
 | p5 `/home/root/backup` | 492 MB | `factory/` **472 MB** — vendor upgrade/restore images plus `.md5` files · `websigns/` 15 MB |
 
@@ -1652,13 +1639,11 @@ and `ts/` (tslib), which are worth keeping.
 **The vendor's upgrade machinery is on disk and its payload is p5's `factory/`:**
 `/etc/init.d/startautoupgrade`, `/opt/sbin/upgrade_logger.sh`, `IsUpgradeRunning` on p5, and the
 litter of `upgradeProgressListener_upgradeStatus=*` files dropped in `/` show it has run.
-**[unverified]** whether it can still fire unattended — nobody has established it either way — but
-deleting `factory/` removes the payload it would need, which is why that deletion is a safety measure
-and not a space measure.
+**[unverified]** whether it can still fire unattended — nobody has established it either way.
 
 **Vendor p5 content, measured on `.188` (2026-10-09):** `factory/nand_boot_redirect_oob.bin` (135168 B, plus
 `.md5`), `factory/uImage-system-original` (5225796 B), `factory/upgrade.conf`, `serialno` and `pointercal`.
-Nothing in the repo reads them except `clean-rules.conf` and the tests; the full-card backup holds them.
+The full-card backup holds them.
 
 **The layout is the identity; the UUIDs are not.** Measured across two units of the same firmware
 build (`/etc/version` `20180309123456`), the partition table is byte-identical — same start sector
@@ -1860,80 +1845,12 @@ a different offset — and anything gated on that file's *identity* is gated on 
 ### 5.2 As we run it — game mode
 
 Native apps render straight to the framebuffer, so X11, the browser, Jetty, Java and the databases
-are all unnecessary — and the Steelcase software watchdog reboots the device roughly hourly if they
-are simply *absent* without being disabled properly. `commissioning/provision.sh <ip>` does all of this.
+are all unnecessary. Our own Buildroot root does not carry them: it starts only the services listed in
+`rootfs/CLAUDE.md` (our boot links), and the Steelcase stack, cron and its software watchdog are absent
+from it ([§3.13](#313-watchdogs) for what that watchdog does on a stock unit).
 
-**Result: ~80 MB RAM freed, no unwanted reboots, stable game mode.** Optionally
-`commissioning/provision.sh <ip> --remove` deletes the bloatware (~178 MB, and removes a vulnerable
-Jetty/HSQLDB/Java stack); `--deep-clean` frees ~560 MB more.
-
-**Why cleanup this aggressive is safe: both bring-up paths refuse a rules file that could reach our
-runtime.** Native apps and ScummVM link the device's loader, glibc, `libasound`, `libstdc++` and
-`libgcc_s` dynamically (§6.3); no rule but a `keep` may touch those or `/usr/share/alsa`
-(`device-files/CLAUDE.md`), so a removal's blast radius is the vendor software that used it. Git tag `static-only-last` marks the last commit before the dynamic `libasound` build.
-
-**Init services disabled:**
-
-| Service | Why |
-|---|---|
-| `webserver`, `jetty` | Jetty wrapper + servlet container — not needed |
-| `browser` | Epiphany/WebKit — games use the framebuffer |
-| `x11` | Xorg — games use the framebuffer |
-| `hsqldb` | Room-booking database — not needed |
-| `snmpd` | SNMP monitoring — not needed |
-| `vsftpd` | FTP server — not needed, security risk |
-| `nullmailer` | Mail relay — not needed |
-| `ntpd` | Replaced by the `time-sync` init script |
-| `startautoupgrade` | Steelcase OTA upgrades — not needed |
-
-**Cron jobs disabled:**
-
-| Job | Why |
-|---|---|
-| `watchdog.sh` | **Root cause of the ~70-minute reboots** — monitors the absent Steelcase stack |
-| `get_time_from_server.sh` | Steelcase NTP — fails repeatedly, spams logs |
-| `sync_clocks.sh` | SW/HW clock sync — spams "time difference" messages |
-| `rotatedbtables.sh` | HSQLDB table rotation — database removed |
-| `backup.sh` | Steelcase data backup |
-| `scheduledusagereport.sh` | Steelcase telemetry |
-| `gettimestamp.sh` | Steelcase timestamp |
-| `remove_older_sync_meetings.sh` | Meeting data cleanup |
-| `runfsck.sh` | Filesystem check at 03:10 — can stall the system |
-| `checkformemoryusage.sh` | Java heap monitor — Java removed |
-| `adjustbklight.sh` | Backlight schedule — turns the screen off at 19:00 |
-
-**Kept:**
-
-| Item | Purpose |
-|---|---|
-| `watchdog` | Hardware watchdog feeder — prevents hard resets |
-| `sshd` | Remote access. ⚠️ **Its host keys ship in the image, so every unit has the same ones** — `md5sum /etc/ssh/ssh_host_{ed25519,rsa}_key.pub` identical on `.188` and `.73` (measured 2026-10-08) |
-| `cron` | Runs the two surviving jobs |
-| `dbus` | System message bus |
-| `audio-enable` | Speaker amplifier GPIO + mixer setup |
-| `time-sync` | `rdate`-based time sync at boot (matters — see [RTC](#310-rtc-and-hold-up)) |
-| `roomwizard-app` | App launcher respawn service (`S99`, runlevels 2–5) |
-| `rotatelogfiles.sh` (cron, 4 h) | Log rotation — prevents disk fill |
-| `cleanupfiles.sh` (cron, 4 h) | Temp file cleanup |
-
-**The boot links a working unit actually has** — read from a unit in service on 2026-08-05 (vendor
-bloatware removed, games running, 4 days uptime) and re-read on a second unit the same day, which
-matches it link for link. This is the empirical keep-list: everything else under `rc5.d`/`rcS.d` on a
-stock card can go, which is what lets the cleanup be a **whitelist** rather than a growing list of
-vendor service names. `device-files/clean-rules.conf` is that whitelist, transcribed from this table.
-
-| Directory | Links |
-|---|---|
-| `rcS.d` | `S02banner.sh` `S03sysfs.sh` `S04udev` `S05modutils.sh` `S06alignment.sh` `S06devpts.sh` `S10checkroot.sh` `S30procps.sh` `S30ramdisk` `S35mountall.sh` `S37populate-volatile.sh` `S39hostname.sh` `S40networking` `S43syslog` `S45mountnfs.sh` `S99finish.sh` — not `S55bootmisc.sh`: the stock link, deleted, its two live duties moved (reasons in `device-files/clean-rules.conf`) |
-| `rc5.d` | `S02dbus-1` `S09sshd` `S20cron` `S20hwclock.sh` `S28time-sync` `S29audio-enable` `S40ctrlblk` `S50watchdog` `S99roomwizard-app` (+ `S89xpad-modules` `S90usb-host` where `usb_host` is installed) |
-| `rc2.d`–`rc4.d` | `S02dbus-1` `S09sshd` `S20hwclock.sh` `S40ctrlblk` `S50watchdog` `S99roomwizard-app` `S99stop-bootlogd` |
-| `rc0.d`, `rc6.d` | `K09sshd` `K20dbus-1` `K20hwclock.sh` `K20psplash` `K20wpa_supplicant` `K31alsa-state` `K85watchdog` `S20sendsigs` `S25save-rtc.sh` `S31umountnfs.sh` `S38urandom` `S40umountfs` `S90halt`/`S90reboot` |
-
-⚠️ **`rc0.d` and `rc6.d` are shutdown, not startup — never clean them.** Why they are unreachable by
-construction rather than merely unvisited: `device-files/CLAUDE.md`.
-**`S30avahi-daemon` is absent** on both units while `/usr/sbin/avahi-daemon`, `/etc/avahi/` and
-`/etc/init.d/avahi-daemon` are present — `commissioning/provision.sh` adds the link, and all four paths are `keep`
-entries in `clean-rules.conf` so that no clean can delete what setup enables.
+**mDNS on the stock image:** `S30avahi-daemon` is absent while `/usr/sbin/avahi-daemon`, `/etc/avahi/` and
+`/etc/init.d/avahi-daemon` are present, so the daemon never runs there.
 
 ⚠️ **On our own Buildroot root, OpenSSH `sshd` does not listen until the kernel's crng is initialised, and with
 no seed that takes ~2 min after boot.** Measured twice on `.188`: 09:20:34 to 09:22:42, and rc 5 at 09:43:44
@@ -1943,29 +1860,16 @@ to sshd listening at 09:45:50. BusyBox `seedrng` (`rootfs/board/roomwizard/overl
 ⚠️ **`/var/log` is a symlink to `/home/root/log`, i.e. p3, and `syslogd` holds three files there
 open.** Measured from `/proc/<pid>/fd` on a unit in service, 2026-08-05: `messages` (its target per
 `/etc/syslog.conf`), `upgrade.log` and `concurrent.log`. **Unlinking any of them on a running device
-leaves `syslogd` writing to an unlinked inode and logging silently stops until reboot** — so
-`clean-rules.conf` keeps and truncates them rather than deleting them, and the same applies to `wtmp`
-and `lastlog`, which `sshd` and `login` hold open. Offline the symlink dangles, so a rule naming
-`/var/log/anything` reaches nothing at all; name the p3 path.
+leaves `syslogd` writing to an unlinked inode and logging silently stops until reboot** — truncate them
+instead, and the same applies to `wtmp` and `lastlog`, which `sshd` and `login` hold open. Offline the
+symlink dangles, so a path under `/var/log/` reaches nothing at all; name the p3 path.
 
-⚠️ **The root crontab lives on p2, reached through a symlink.** `/var/cron/tabs/root` is a symlink to
-`/home/root/data/cron/tabs/root` (measured on the unit in service, symlink dated Jan 2022). Two
-consequences that matter to any cleanup:
-
-- **`rm -rf /home/root/data/cron` destroys the crontab and cron's spool root**, not just the 131 MB
-  `log` file inside it. `commissioning/provision.sh --remove` truncates the log for exactly this reason, and
-  `clean-rules.conf` keeps the directory and **truncates** both the crontab and the log — cron itself
-  stays running, because the two surviving jobs are in this table's *Kept* list.
-- **Offline, the crontab is on a different partition from `/var`.** A tool that mounts only p6 sees
-  `/var/cron/tabs/root` as a dangling symlink and `/home/root/data` as an empty mount point, so it can
-  neither read nor write the crontab. The four mounts of [§4.2](#42-partitions) are not optional.
-
-The two surviving jobs on that unit are `rotatelogfiles.sh` and `cleanupfiles.sh` at `0 */4` and
-`5 */4`, in a crontab whose header reads `# RoomWizard crontab - managed by disable-steelcase.sh` —
-i.e. the crontab `disable-steelcase.sh` writes, not the vendor's.
-
-Full guide including filesystem analysis and security considerations:
-[`native_apps/README.md#system-optimization`](native_apps/README.md#system-optimization).
+⚠️ **On the stock image the root crontab lives on p2, reached through a symlink.** `/var/cron/tabs/root` is a
+symlink to `/home/root/data/cron/tabs/root` (measured on the unit in service, symlink dated Jan 2022).
+`rm -rf /home/root/data/cron` destroys the crontab and cron's spool root, not just the 131 MB `log` file
+inside it. Offline, the crontab is on a different partition from `/var`: a tool that mounts only p6 sees
+`/var/cron/tabs/root` as a dangling symlink and `/home/root/data` as an empty mount point, so it can
+neither read nor write the crontab. The mounts of [§4.2](#42-partitions) are not optional.
 
 ### 5.3 App launcher and manifests
 

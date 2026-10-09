@@ -244,8 +244,8 @@ if [ "$ONLY" = "selftest" ]; then
 
     mkdir -p "$T/failing"
     printf '#!/bin/bash\necho "3 passed, 1 failed"\nexit 1\n' > "$T/failing/rw_identify_test.sh"
-    for n in check_arm_safe commission_offline rw_bundle_ssh rw_clean \
-             rw_provision rw_release rw_ssh setup_build_env; do
+    for n in check_arm_safe commission_offline provision_online rw_bundle_ssh \
+             rw_provision rw_release rw_ssh rw_state setup_build_env smoke_first_screen; do
         printf '#!/bin/bash\necho "1 passed, 0 failed"\n' > "$T/failing/${n}_test.sh"
     done
     printf '#!/bin/bash\necho ok\n' > "$T/failing/doc_check.sh"

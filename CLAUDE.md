@@ -124,15 +124,15 @@ the annotated walkthrough.
 ./roomwizard.sh                     # front door: a menu over everything below
 ./deploy-all.sh <ip>                # build + deploy everything (native_apps first)
 ./deploy-all.sh <ip> <component>    # one component;  --list  to see them
-./commissioning/provision.sh <ip>   # system setup; ⚠️ CLEANS by default, then reboots
+./commissioning/provision.sh <ip>   # update a unit: backup, install, reboot; --dry-run, --status
 ./release.sh --stage-only           # build all components + stage one offline bundle + tar
 cd native_apps && ./build-and-deploy.sh [<ip>] [set-default]
 ```
 
-⚠️ **Both bring-up paths clean the vendor stack by default**, and a power cycle is therefore no longer
-a free undo. `--no-clean` opts out; neither path writes p1. `set-default` is the only
-mode `native_apps/build-and-deploy.sh` accepts. Cleanup, bloatware removal and the boot service live
-**only** in `commissioning/provision.sh` — never in a component script. All of it:
+**Units run only our own root filesystem** (`rootfs/`); a card comes from `rootfs/make-card-image.sh`, and
+`provision.sh` updates a running unit, taking a `backup.sh` archive before its first write. Neither path
+writes p1. `set-default` is the only mode `native_apps/build-and-deploy.sh` accepts. The boot service is
+installed **only** by the provision rules — never by a component script. All of it:
 `commissioning/CLAUDE.md`.
 
 **Components** (each a subdir with a `build-and-deploy.sh`): `native_apps` (C games + launcher +
@@ -169,7 +169,7 @@ misparses. When in doubt, over-deploy — the failure mode is silent.
 | `common/logger.c`, `common/ui_focus.c` | `native_apps` + `vnc_client` — **measured** for `ui_focus.c`: `vnc_client/Makefile` `SRCS` links `ui_focus.o`, `configure.patch` does not name it |
 | `common/framebuffer.c`, `common/touch_input.c`, `common/hardware.c`, `common/config.c`, `common/input_scan.c`, `common/overtemp.h`, `common/blank_decide.h` (read by `hardware.c`), `native_apps/sysmon/mon_ring.h` (both read by `framebuffer.c`) | **all three** — `./deploy-all.sh <ip>`; ScummVM is the slow one. ⚠️ **Measured from `scummvm-roomwizard/backend-files/configure.patch`, which is the list** — it appends each of these `.o` to ScummVM's `OBJS`, so a header in that chain counts too |
 | `common/audio_out.c`, `common/audio_gen.c` (+ `audio_out.h`, `audio_gen.h`) | `native_apps` + **ScummVM** — ⚠️ **two, not three: measured 2026-09-09**, `vnc_client/Makefile`'s `SRCS` names neither, and no `audio_out` symbol appears anywhere in that tree. They are on ScummVM's `OBJS` via `configure.patch`, which is why the row above cannot speak for them |
-| anything in `device-files/` (`roomwizard-app`, `disable-steelcase.sh`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or `commissioning/commission-offline.sh`, offline) |
+| anything in `device-files/` (`roomwizard-app`, the rules files, …) | neither — **only** `./commissioning/provision.sh <ip>`, which ends in a reboot (or a new `make-card-image.sh` image, offline) |
 | the four **`usb`-group** device files (`usb-host`, `enable-usb-host.sh`, `xpad-modules`, `usb-audio-modules`) | either of the above, **or** `cd usb_host && ./build-and-deploy.sh <ip>` — it compiles the `usb` group itself and, unlike them, needs no reboot. Same for the **`bluetooth`** group (`bluetooth`, `bluetooth.conf`, `bluetooth-main.conf`, `bluetooth-input.conf`) with `cd bluetooth && ./build-and-deploy.sh <ip>` |
 | `usb_host/devmem_write.c`, `build-kernel-modules.sh` | `cd usb_host && ./build-and-deploy.sh <ip>` |
 
@@ -289,16 +289,10 @@ tool-level traps rather than device facts, and each has cost real time.
   Authoring rules: `native_apps/CLAUDE.md` → *Touch model*.
 - **Don't probe I2C bus 1.** `pv02_app 5` (the vendor light-sensor factory test) can hang the bus, and
   **bus 1 carries the PMIC** — `SYSTEM_ANALYSIS.md#39-i2c`. There is no light sensor to find.
-- **A stock unit may be unreachable, and the vendor rewrites the network files on every boot.** If
-  `websign/net.mode` is `manual` the unit takes a static address and sends no DHCP request — it appears
-  in no router lease list and SSH is impossible until the card is edited offline. Mechanism:
-  `SYSTEM_ANALYSIS.md#35-network-and-power`; handling: `commissioning/CLAUDE.md`.
-- **The Steelcase software watchdog reboots the device ~every 70 min** in game mode; `disable-steelcase.sh`
-  is what disables it, and `/etc/init.d/roomwizard-app` re-runs that on every boot. ⚠️ **A device can be
-  running an older copy than the repo's until `commissioning/provision.sh` is re-run** — check
-  `--status` (read-only, no reboot) **before reproducing anything against a device**, or you will draw
-  conclusions about code the device is not running. The *hardware* watchdog is fine — keep it, but any
-  app that takes over the screen for long periods must keep feeding `/dev/watchdog` (60 s).
+- ⚠️ **A device can be running an older copy than the repo's until `commissioning/provision.sh` is
+  re-run** — check `--status` (read-only, no reboot) **before reproducing anything against a device**, or
+  you will draw conclusions about code the device is not running. The *hardware* watchdog
+  (`/dev/watchdog`, 60 s) is fed by `/sbin/watchdog` from `rcS.d/S06watchdog` — keep it.
 - **Audio via OSS `/dev/dsp` is buggy**: open with `O_NONBLOCK` and handle `EAGAIN`, attenuate ~50 %,
   and set SPEED→FMT→CHANNELS then read back with `SOUND_PCM_READ_*` because those ioctls reset each
   other. The hardware is permanently mono. `SYSTEM_ANALYSIS.md#34-audio`.
@@ -334,9 +328,8 @@ Full detail, measurements and the flags each component uses:
 | Layer | Script | When |
 |---|---|---|
 | Front door (menu over everything below) | `roomwizard.sh` | whenever you'd rather not remember the flags |
-| SD-card commissioning | `commissioning/card-prep.sh` | once, offline |
-| System setup (cleanup, init, audio, time-sync, mDNS) | `commissioning/provision.sh` | once, over SSH |
-| **All of the above in one offline pass** | `commissioning/commission-offline.sh` | once, offline, for *delivery* |
+| Whole-card image; `--bundle` adds the no-prompt installer `commissioning/commission-offline.sh` | `rootfs/make-card-image.sh` | once per card, offline |
+| Update a running unit (backup, install, reboot) | `commissioning/provision.sh` | per update, over SSH |
 | Build + deploy all components | `deploy-all.sh` | per deploy |
 | Per-component build/deploy/manifest | `*/build-and-deploy.sh` | per component |
 | Build + stage + publish an offline bundle | `release.sh` | per release |
@@ -344,16 +337,16 @@ Full detail, measurements and the flags each component uses:
 
 `roomwizard.sh` is a **composition layer with no logic of its own** except `wait_for_ssh` — which polls
 **SSH, not ping**, because ping answers while `sshd` is still starting. Every item execs one of the
-scripts below it, and all of them stay non-interactive when called directly. Why the phases are not
-merged into one script: `COMMISSIONING.md`.
+scripts below it, and all of them stay non-interactive when called directly.
 
 ⚠️ **Never identify a partition by filesystem UUID** — a UUID names one *card*, and two units on
 identical firmware share none of their four. `lib/rw-identify.sh` is the one implementation: content
 for a mounted rootfs, the partition table for a disk, **position** for which partition holds which
 tree. ⚠️ **p1 is deliberately absent from `RW_PART_ROLES`, and a test asserts its absence**, so nothing
 can reach `mlo`/`u-boot.bin`/`ctrlblock.bin` through those functions. ⚠️ **And a rootfs mounted offline
-shows `/home/root/{data,log,backup}` as three EMPTY directories** — they are mount points for p2/p3/p5,
-so a tool that mounts only p6 can report success having touched none of them. All three:
+shows `/home/root/{data,log}` as EMPTY directories** — they are mount points for p2/p3 (p5 stays in
+the table, unused and unmounted), so a tool that mounts only p6 can report success having touched
+neither. All three:
 `lib/CLAUDE.md`.
 
 **A script's executable bit lives in the git index, so one bad commit breaks every fresh clone.** All

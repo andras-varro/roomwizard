@@ -10,8 +10,8 @@
 | [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md) | Authoritative device facts: SoC, boot chain, display, audio, GPIO, unused hardware | Before touching anything hardware-related |
 | [HARDWARE.md](HARDWARE.md) | The board itself: parts, connectors, headers, the unpopulated XBee socket, the enclosure — with the teardown photos | Opening a unit, or probing a header |
 | [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md) | The single backlog — bugs and features with `file:line` | Before starting work, so you don't rediscover a known bug |
-| [COMMISSIONING.md](COMMISSIONING.md) | Setup workflow: SD card → system setup → deploy | Bringing up a new unit |
-| [SD_CARD_UPGRADE.md](SD_CARD_UPGRADE.md) | Optional 4 GB → 32 GB card upgrade | Only if you run out of disk |
+| [COMMISSIONING.md](COMMISSIONING.md) | Setup workflow: card image → first boot → deploy | Bringing up a new unit |
+| [SD_CARD_UPGRADE.md](SD_CARD_UPGRADE.md) | Writing the image to a larger card and growing p6 | Only if you run out of disk |
 
 Each component directory also has a `CLAUDE.md` (authoring guidance for that component) and a
 `README.md` (what it is and how to use it):
@@ -44,7 +44,7 @@ All code is cross-compiled on the dev host and deployed over SSH — there is no
 
 ### Start here — `./roomwizard.sh`
 
-One menu over every path below, and the reason a single card write can produce a working unit at next
+One menu over every path below. A card image written once produces a working unit at next
 boot. It has **no logic of its own**: each item execs one of the scripts documented further down, and
 every one of those stays non-interactive when called directly.
 
@@ -53,20 +53,18 @@ every one of those stays non-interactive when called directly.
 ```
 
 ```
-  1) Prepare the card            PHASE 1 of 3   offline; then 2 and 3, over ssh
-  2) Set up a booted device      PHASE 2 of 3   ssh; cleans, ends in a reboot
-  3) Deploy apps                 PHASE 3 of 3   ssh; source, bundle or release
-  5) All three, in sequence      1 -> 2 -> 3    ssh between; you boot the unit
+  2) Update a booted device      ssh; backup, update, reboot
+  3) Deploy apps                 ssh; source, bundle or release
+  5) First boot of an imaged card  boot, wait for ssh, deploy
 
-  6) THE WHOLE JOB, offline, one boot   <-- deliver a unit  (bundle, or fetch one)
+  6) Build a card image          offline; our root + bundle, one boot (deliver a unit)
 
   4) Device status               read-only
   7) Host build prerequisites    this machine; no device, no card
 ```
 
-Which item you want depends on whether you are **delivering** a unit or **developing** on one. Both
-paths are supported and neither is going away; they differ in how many boots and how much toolchain
-they need.
+Which item you want depends on whether you are **delivering** a unit (item 6, then 5) or **developing**
+on one (items 2 and 3); they differ in how many boots and how much toolchain they need.
 
 ### Before anything builds — `./setup-build-env.sh`
 
@@ -99,25 +97,25 @@ native app, and gives its first frame one verdict (pass / did-not-start / starte
 ./tests/run-all.sh --scope=deploy   # skip the documentation checks
 ```
 
-### Delivering a unit — item 6, offline, one boot
+### Delivering a unit — build a card image, one boot
 
-Everything the two-phase path does over SSH, done to the card instead: card commissioning, system
-setup and the binaries, in one pass. The unit works at first boot and never needs to be reachable.
+A card is one whole-card image built by `rootfs/make-card-image.sh` (root, WSL): our root filesystem,
+the kernel modules and — with `--bundle` — every component, installed by
+`commissioning/commission-offline.sh`. The unit works at first boot and never needs to be reachable.
 
 ```bash
-sudo ./commissioning/commission-offline.sh --bundle <tar.gz|dir>
-sudo ./commissioning/commission-offline.sh --release latest   # fetch the bundle first
+sudo ./rootfs/make-card-image.sh --bundle <tar.gz|dir> <partsdir> <rootfs.tar> <out.img>
 ```
 
-⚠️ **`--release` is the one step here that opens a socket** — everything else is offline. It and
-`--bundle` are mutually exclusive: both name a source of binaries, so pass one.
-
-Make a bundle with `./release.sh --stage-only`, or publish one with `./release.sh --tag <tag>`.
+`<partsdir>` comes from `rootfs/fetch-card-parts.sh`, `<rootfs.tar>` from `rootfs/build-rootfs.sh`; the
+operator-facing steps are in [COMMISSIONING.md](COMMISSIONING.md). Make a bundle with
+`./release.sh --stage-only`, or publish one with `./release.sh --tag <tag>`. For a card larger than the
+image, grow p6 afterwards with `commissioning/clone-to-32gb.sh` ([SD_CARD_UPGRADE.md](SD_CARD_UPGRADE.md)).
 
 ### Installing from a published release — no cross-compiler
 
 Every other mode builds, so every other mode needs the ARM cross-compilers. Someone handed a device
-has no toolchain, so a published release is installable directly — over SSH, or onto a card:
+has no toolchain, so a published release is installable directly over SSH:
 
 ```bash
 ./deploy-all.sh --from-release latest <ip>       # over SSH, to a set-up unit
@@ -131,74 +129,57 @@ rules are in [lib/CLAUDE.md](lib/CLAUDE.md).
 
 `--from-bundle <tar.gz|dir>` is the same install with a local bundle instead of a download.
 
-### Developing on a unit — the two-phase SSH loop
+### Developing on a unit — update, then deploy
 
-This is the build/deploy loop, and what you want while writing code.
+This is the build/deploy loop, and what you want while writing code. The unit already runs our own root
+(from an imaged card, above) and is reachable by key-only SSH.
 
 ```bash
-# Phase 1: SD card — set password, SSH, DHCP
-./commissioning/card-prep.sh
-
-# Insert SD card, boot device, find its IP...
-# deploy private key for SSH access:
-# ssh-copy-id -i ~/.ssh/id_rsa.pub root@<ip>
-# login once to add the device to known_hosts:
-# ssh root@<ip>
-
-# Phase 2: SSH — provision, deep clean, reboot
+# Update the system setup: backs the unit's per-unit state up first, installs, reboots
 ./commissioning/provision.sh <ip>
 
-# Phase 3: build + deploy everything (native_apps first — it provides the launcher)
+# Build + deploy everything (native_apps first — it provides the launcher)
 ./deploy-all.sh <ip>
 ./deploy-all.sh <ip> vnc_client      # or one component;  --list  to see them
 ```
 
 ⚠️ **Only our own kernel image is supported**; installing it is a manual step ([kernel/README.md](kernel/README.md)),
-and no script writes p1. **Both bring-up paths CLEAN by default**, so that they leave the same unit. Each
-asks once whether the card is backed up, before the first write. The opt-outs:
+and no script writes p1. `provision.sh` deletes no software. Its other flags:
 
 ```bash
-./commissioning/provision.sh <ip> --dry-run        # what would be deleted
-./commissioning/provision.sh <ip> --no-clean       # delete nothing
-./commissioning/provision.sh <ip> --remove         # named vendor stacks only, no sweeps
+./commissioning/provision.sh <ip> --dry-run        # print the plan; change nothing
 ./commissioning/provision.sh <ip> --no-usb         # no USB host mode at all
 ./commissioning/provision.sh <ip> --status         # report current state; changes nothing
 ```
 
-The clean is not undoable **on the device**: the 472 MB factory-restore payload goes with the rest of the
-vendor stack, and recovery is a card reflash.
-
-Before an update or a reflash, `./commissioning/backup.sh <ip> [<out.tar.gz>]` copies the unit's per-unit state (host keys,
+`./commissioning/backup.sh <ip> [<out.tar.gz>]` copies the unit's per-unit state (host keys,
 highscores, VNC config, ScummVM config and saves, calibration) to `backups/`; it is read-only on the unit and the archive holds
-secrets. After, `./commissioning/restore.sh <ip> <archive> [--dry-run]` stops the app, writes it back and starts the app.
+secrets. `provision.sh` runs it first. After a reflash, `./commissioning/restore.sh <ip> <archive> [--dry-run]` stops the app, writes it back and starts the app.
 
 ## Architecture
 
 ```
 roomwizard/
 ├── roomwizard.sh                # Front door: a menu over everything below
-├── deploy-all.sh                # Phase 3: build + deploy all components
+├── deploy-all.sh                # Build + deploy all components
 ├── release.sh                   # Build + stage a bundle; --tag also publishes it
+├── rootfs/                      # Our own root filesystem: Buildroot tree, make-card-image.sh (whole-card image)
 ├── commissioning/
-│   ├── card-prep.sh             # Phase 1: SD card commissioning (offline)
-│   ├── provision.sh             # Phase 2: SSH system setup (one-time)
-│   ├── commission-offline.sh    # Phases 1-3 in one offline pass
-│   ├── set-hostname.sh          # /etc/hostname + /etc/hosts + dhclient.conf
+│   ├── provision.sh             # Update a unit over SSH: backup, install the plan, reboot
+│   ├── commission-offline.sh    # The image step: a release bundle installed onto a mounted card
+│   ├── set-hostname.sh          # /etc/hostname + /etc/hosts
 │   ├── backup.sh, restore.sh    # A unit's per-unit state to/from a host tarball (read-only / stop-extract-start)
 │   └── clone-to-32gb.sh         # Clone a card onto a larger one
 ├── lib/                         # Sourced, never executed
-│   ├── rw-identify.sh           # Which card, which partition, by content/position
-│   ├── rw-clean.sh              # clean-rules.conf -> a plan
+│   ├── rw-identify.sh           # Is this our root; which partition, by content/position (root, data, log)
 │   ├── rw-provision.sh          # provision-rules.conf -> a plan
-│   ├── rw-ssh.sh, rw-sshd.sh    # The one "can I reach this device" gate; the --ssh-auth=password|key guard
+│   ├── rw-ssh.sh                # The one "can I reach this device" gate
 │   ├── rw-release.sh            # Resolve + fetch + verify a published release
 │   └── rw-bundle.sh             # The release-bundle layout, both directions
 ├── device-files/                # Installed onto the device verbatim
 │   ├── roomwizard-app           # App respawn loop; rwmond = init for the history daemon
-│   ├── disable-steelcase.sh     # Bloatware cleanup (run at every boot)
 │   ├── enable-usb-host.sh       # The /dev/mem MUSB host-mode patch; usb-host runs it (S90)
 │   ├── xpad-modules             # insmod -f the three controller modules (S89)
-│   ├── clean-rules.conf         # What a clean removes, one reason per line
 │   └── provision-rules.conf     # What the device ends up with
 ├── LICENSE.md                   # MIT, plus the third-party enumeration
 ├── COMMISSIONING.md             # Commissioning workflow
@@ -216,12 +197,10 @@ roomwizard/
 | Layer | Script | Runs |
 |-------|--------|------|
 | **Front door** | `roomwizard.sh` | Whenever you'd rather not remember the flags (composition only) |
-| **SD card setup** | `commissioning/card-prep.sh` | Once (offline) |
-| **System setup** | `commissioning/provision.sh` | Once (SSH) |
-| **All of the above, offline** | `commissioning/commission-offline.sh` | Once, offline, to deliver a unit |
+| **Card image** | `rootfs/make-card-image.sh` | Once per card (offline, WSL root); `--bundle` runs `commissioning/commission-offline.sh` over it |
+| **Update a unit** | `commissioning/provision.sh` | Per update (SSH; backs up first, reboots) |
 | **Deploy all** | `deploy-all.sh` | After setup (builds + deploys everything) |
 | **Build + stage + publish** | `release.sh` | Per release |
-| **Bloatware cleanup** | `disable-steelcase.sh` | On setup + every boot |
 | **App launcher** | `device-files/roomwizard-app` | Every boot (respawn loop, reads `/opt/roomwizard/default-app`) |
 | **Project deploy** | `*/build-and-deploy.sh` | Per project (build + deploy + app manifests) |
 
@@ -272,10 +251,9 @@ modules (GPL-2.0-only, written source offer). Everything is enumerated in
 [LICENSE.md](LICENSE.md), which is also where MIT's *scope* is stated: it governs the source and does not
 decide the licence of a binary it is linked into.
 
-⚠️ **No warranty, meant literally.** The vendor stack is deleted by default, our kernel replaces the
-vendor's on the boot partition, and recovering a unit that will not boot means reaching the card — which
-means opening the case. That is feasible and it takes experience; an inexperienced attempt can break the
-enclosure. `--no-clean` opts out of the clean.
+⚠️ **No warranty, meant literally.** Our kernel replaces the vendor's on the boot partition, and
+recovering a unit that will not boot means reaching the card — which means opening the case. That is
+feasible and it takes experience; an inexperienced attempt can break the enclosure.
 
 Steelcase and RoomWizard are trademarks of their respective owner. This project is unaffiliated with,
 and not endorsed by, Steelcase.

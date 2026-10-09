@@ -1,425 +1,151 @@
 # RoomWizard Commissioning
 
-This document describes the commissioning process for RoomWizard devices.
+How a RoomWizard gets our software, and how it stays up to date. A unit runs **only our own root
+filesystem** (the Buildroot tree in [`rootfs/`](rootfs/CLAUDE.md), marker `/etc/roomwizard-rootfs`);
+nothing here commissions or cleans the Steelcase one. Anyone holding a stock unit can check out the tag
+`last-vendor-rootfs`, the last tree that could.
 
 ## Overview
 
-**To deliver a working unit, there is one command.** It runs offline against the card, needs no
-network and no reachable device, and the unit works after a single boot:
+Two paths, and a third step that follows either:
 
-```bash
-sudo ./commissioning/commission-offline.sh --bundle build/release
-```
-
-That is [*Single-pass offline commissioning*](#single-pass-offline-commissioning) below, and it is the
-verified delivery path. Everything else in this document is the **development loop** — the same ground
-in three phases, over SSH, which is what you want when you are changing the software rather than
-handing over a unit.
-
-Bring-up in phases is three scripts, run in order:
-
-| Phase | Script | Connection | When |
-|-------|--------|------------|------|
-| **1. SD Card** | `commissioning/card-prep.sh` | Offline (SD in PC) | Once per device |
-| **2. System Setup** | `commissioning/provision.sh` | SSH over network | Once per device |
-| **3. Deploy apps** | `deploy-all.sh` | SSH over network | Per deploy |
-
-⚠️ **Phase 1 alone does not give you a RoomWizard you can use, and on a stock unit it may not even
-give you one you can reach.** It writes credentials and network settings; the vendor software stays,
-and `/opt/sbin/networkmanager` rewrites the host name and the DHCP setting ~7 s into the first boot
-out of `/home/root/data/websign/net.*` — measured on an RW20, 2026-08-08, which came up at a static
-`10.11.140.22` on a subnet the host could not reach, with `/etc/hostname` back to `null`. Phase 1 now
-**measures** that config on p2 and offers to disable the regenerator; see
-[*The vendor network regenerator*](#the-vendor-network-regenerator).
+| Path | Script | Connection | When |
+|---|---|---|---|
+| **Image a card** | `rootfs/make-card-image.sh` (`--bundle` runs `commissioning/commission-offline.sh`) | Offline, on the dev host | Delivering a unit, or starting one from nothing |
+| **Update a unit** | `commissioning/provision.sh <ip>` | SSH | A unit already running our root |
+| **Deploy apps** | `deploy-all.sh` | SSH | Per deploy |
 
 **A menu over all of it is [`roomwizard.sh`](roomwizard.sh)**, which implements nothing of its own and
-shells out to the scripts above:
+shells out to the scripts above: build a card image, update a unit, back up, restore, deploy, and *First
+boot of an imaged card* (boot, wait for SSH, deploy). It polls **SSH, not ping**, because ping answers
+while `sshd` is still starting. Every script stays callable directly and non-interactively; `--help` on
+each is current.
+
+## Imaging a card
+
+The delivery path. One image, written to a card, one boot; no network and no reachable device are needed
+to produce it.
 
 ```bash
-./roomwizard.sh          # item 6 is the whole job; items 1-3 are the three phases
+./release.sh --stage-only                                    # build host, once: build/release
+rootfs/make-card-image.sh --bundle build/release <partsdir> <rootfs.tar> <out.img>   # as root, in WSL
 ```
 
-Item **5** chains 1 → 2 → 3, and it exists because of the two human gaps between the
-phases: after commissioning you must boot the device, and Phase 2 *reboots* it, so the operator
-was otherwise guessing when to start the next step. `roomwizard.sh` polls SSH — not ping, which
-answers while `sshd` is still starting — at both transitions. Every phase remains callable
-directly and non-interactively; nothing in the three scripts changed to accommodate the menu.
+`<partsdir>` comes from `rootfs/fetch-card-parts.sh`, `<rootfs.tar>` from the Buildroot build, and the
+kernel modules from `kernel/build-modules.sh --out <dir>`; inputs, geometry and why the image is built on
+the native WSL filesystem are in [`rootfs/CLAUDE.md`](rootfs/CLAUDE.md) and the script header. Write the
+finished image to the card from Windows.
 
-### Why the three are separate, and stay separate
+`--bundle` mounts p6, p2 and p3 as `<base>/{root,data,log}` and runs
+[`commissioning/commission-offline.sh`](commissioning/commission-offline.sh) over them. It asks nothing,
+cleans nothing and mounts nothing else: the boot scripts and links from
+[`device-files/provision-rules.conf`](device-files/provision-rules.conf) and every component's files go in,
+and the script's own verify pass runs before you boot the card. `--dry-run` resolves and prints every
+action without writing.
 
-The obvious simplification — fold Phase 2's cleanup into offline commissioning — does not work,
-for a mechanical reason. Phase 2's targets are spread across **four partitions** that only a
-booted kernel assembles into one tree:
+**What it verifies on the image.** md5 of every installed file against the bundle manifest; `+x` on
+everything that needs it (a real measurement on ext4, impossible on `/mnt/c`);
+`native_apps/check-arm-safe.sh` over the downloaded binaries; every `.app`'s `exec=` and `icon=`, and that
+`default-app` names one of them; `dash -n` on every `/bin/sh` script it wrote.
 
-| Partition | Mounted as | Cleanup that touches it |
-|---|---|---|
-| p6 | `/` | `/opt/jetty*`, `/opt/openjre-8`, `/usr/share/cjkfont`, WebKit/GTK/X11 libs, `/etc/init.d/*` |
-| p2 | `/home/root/data` | `websign`, `conctest`, the 79 MB `cron/log` truncation |
-| p3 | `/home/root/log` | `Xorg.0.log`, `browser.err`, `jettystart`, … |
-| p5 | `/home/root/backup` | `serialno`, `pointercal`, the 5 MB fallback kernel, and the 472 MB `factory/*.img` restore payload the clean deletes |
+p1 holds `mlo`, `u-boot.bin`, `ctrlblock.bin` and `uImage-system` and is never mounted or written by the
+bring-up scripts; our own kernel image is installed there by hand ([`kernel/README.md`](kernel/README.md)).
 
-`commissioning/card-prep.sh` locates exactly **one** of these (p6, by content — see
-[*Finding the card*](#finding-the-card)). Three further reasons:
-`disable-steelcase.sh` is re-run **on every boot** by the init script, so the disable half is
-inherently a running-system job; already-commissioned units exist and must stay cleanable without
-pulling their card; and the deep clean measures `df` before/after and offers a dry run, which
-assumes a live device. Commissioning's job is to produce a device you can *reach* — a cleanup that
-broke boot there would cost you SSH and tell you nothing.
+Regression: [`tests/commission_offline_test.sh`](tests/commission_offline_test.sh) — every check with a
+sabotage case; needs root and a staged bundle.
 
-**`commissioning/commission-offline.sh` is the answer to that argument, not an exception to it.** It
-mounts all four partitions by *position* and maps every device-absolute path onto the right one — the
-work a booted kernel does for free — which is why one offline pass can do what the three phases do.
+### First boot
 
-## Single-pass offline commissioning
+Connect Ethernet and power on. SSH answers after roughly half a minute, and the unit also answers to
+`<hostname>.local` once mDNS is up. sshd policy is the overlay's
+`rootfs/board/roomwizard/overlay/etc/ssh/sshd_config` (key-only), the only one there is. SSH host keys are
+generated on first boot, so a fresh p2 means a slow first boot. Then deploy: `./deploy-all.sh <ip>`, or the
+menu item *First boot of an imaged card*.
 
-The delivery path. One command, offline, one boot; no network, no reachable device, no toolchain on the
-machine running it.
-
-```bash
-sudo ./commissioning/commission-offline.sh --bundle build/release
-```
-
-`--bundle` takes either a staged directory or a release tarball; `./release.sh --stage-only` produces
-one in `build/release`. `--dry-run` resolves and prints every action without writing.
-
-**What it does, in order:** mounts p6/p2/p3/p5 by position → cleans the vendor stack from
-`device-files/clean-rules.conf` → runs `commissioning/card-prep.sh` for the credentials, host name and
-network → installs the boot scripts and links from `device-files/provision-rules.conf` → installs the
-bundle → verifies. It never mounts p1.
-
-**What it asks.** One consent question, before the first write: *is the whole card backed up somewhere
-else?* The clean is not undoable on the device. On a non-TTY it proceeds and prints a banner saying what
-nobody answered.
-
-**What it verifies, on the card, before you boot it.** md5 of every installed file against the bundle
-manifest; `+x` on everything that needs it (a real measurement on ext4, and impossible on `/mnt/c`);
-`native_apps/check-arm-safe.sh` over the downloaded binaries; every `.app`'s `exec=` and `icon=`, and
-that `default-app` names one of them; `dash -n` on every `/bin/sh` script it wrote; and that `websign/`
-and the `rcS.d/S60networkmanager` link are both gone.
-
-⚠️ **The clean has no in-place rollback**: recovery is reflashing the card from the image commissioning
-takes. `--no-clean` deletes nothing. Our own kernel image, the only one supported, is installed on p1 by
-hand ([`kernel/README.md`](kernel/README.md)).
-
-Because this pass deletes `websign/` and the regenerator link in the same run that sets the host name,
-the [regenerator problem below](#the-vendor-network-regenerator) does not exist on this path — it is
-removed rather than worked around. Confirmed on hardware: a unit commissioned as `rwtest` booted with
-its name intact and answered on the network.
-
-Regression: [`tests/commission_offline_test.sh`](tests/commission_offline_test.sh) — every
-check with a sabotage case; needs root and a staged bundle.
+A card larger than the image's fixed geometry needs p6 grown:
+[`commissioning/clone-to-32gb.sh`](commissioning/clone-to-32gb.sh) (`--help` lists its modes and guards).
 
 ## Finding the card
 
 ⚠️ **A partition is identified by position and content, never by filesystem UUID.** A UUID is
-generated at mkfs time, so it names one *card*, not a model: units are mkfs'd independently at the
-factory, and two RoomWizards running the identical firmware build share **none** of their four
-UUIDs. A hardcoded UUID therefore recognises only the unit its constant was copied from and rejects
-every other RoomWizard. It cannot be repaired by assigning the constant to the new card either —
-two cards with one UUID is a worse bug than the one it hides.
+generated at mkfs time, so it names one *card*, not a model: two RoomWizards running the identical
+firmware build share **none** of their UUIDs. A hardcoded UUID therefore recognises only the unit its
+constant was copied from and rejects every other one. Nothing on the device consumes a UUID either:
+U-Boot passes `root=/dev/mmcblk0p6` and `/etc/fstab` names partitions by position.
 
-Nothing on the device consumes a UUID at all: U-Boot passes `root=/dev/mmcblk0p6` and `/etc/fstab`
-names `/dev/mmcblk0p{2,3,5,7}`, both by position.
-
-[`lib/rw-identify.sh`](lib/rw-identify.sh) holds the two checks, sourced by both
-`commissioning/card-prep.sh` and `commissioning/clone-to-32gb.sh`:
+[`lib/rw-identify.sh`](lib/rw-identify.sh) holds the two checks:
 
 | Function | Question | How |
 |---|---|---|
-| `rw_is_rootfs` | is this mounted tree a RoomWizard rootfs? | the four files commissioning edits, plus one vendor marker — `/opt/sbin/watchdog/watchdog.sh`, `/opt/pv02`, `/opt/roomwizard`, or the `RW20 Embedded Platform` banner in `/etc/issue`. The marker set is an **or** because our own clean deletes `/opt/sbin` by default and `/opt/roomwizard` arrives only with phase 2, and a card already in service must still be recognisable. |
-| `rw_is_card_disk` | is this disk a RoomWizard card? | the partition table: start and size of p1 p2 p3 p5 p6, which are byte-identical on every unit. p4 and p7 are **not** pinned — they absorb the difference in physical card size. |
+| `rw_is_rootfs` | is this mounted tree our RoomWizard root? | the marker file `/etc/roomwizard-rootfs`. No vendor root is recognised. |
+| `rw_is_card_disk` | is this disk a RoomWizard card? | the partition table: start and size of the fixed partitions, which are byte-identical on every unit. The partitions that absorb the difference in physical card size are **not** pinned. |
 
-Two safety properties worth knowing, because a content scan can reach places a UUID lookup could
-not:
+Partition roles are root (p6), data (p2) and log (p3). p5 stays in the partition table, unused and never
+mounted. `rw_offline_path` and `rw_offline_base_ok` map a device-absolute path onto the right mounted
+partition and check that a `<base>` is usable. `/` is never a candidate: selecting it would rewrite this
+host's own `/etc/shadow`.
 
-- **`/` is never a candidate.** Commissioning is a card-in-reader operation, so the live root is
-  never the target — and selecting it would rewrite this host's own `/etc/shadow`. It is excluded
-  from the scan unconditionally. To act on a live root, set `ROOTFS=/` by hand.
-- **An explicit `$ROOTFS` is still checked**, and a tree that fails the check needs a typed `yes`
-  before anything is written. The escape hatch stays usable for a deliberately odd target;
-  `export ROOTFS=/` by accident does not silently proceed.
-
-Regression: [`tests/rw_identify_test.sh`](tests/rw_identify_test.sh) — host-only, no card, no root.
-It builds synthetic rootfs trees for every state a card can be in and synthetic partition tables
-with `sfdisk` on sparse files, so both the positive and the negative controls are self-contained.
+Regression: [`tests/rw_identify_test.sh`](tests/rw_identify_test.sh) — host-only, no card, no root. It
+builds synthetic rootfs trees and partition tables (`sfdisk` on sparse files), so the positive and
+negative controls are self-contained.
 
 ```bash
 ./tests/rw_identify_test.sh
 ```
 
-## Phase 1: SD Card Commissioning
+## Updating a unit
 
-The [`commissioning/card-prep.sh`](commissioning/card-prep.sh) script configures the device offline by mounting its SD card on a Linux machine.
+[`commissioning/provision.sh`](commissioning/provision.sh) is the **online** path for a unit that already
+runs our root. It deletes no software and never writes p1.
 
-### What it does
-- Sets root password (SHA-512 hash in `/etc/shadow`)
-- **Sets the host name** in `/etc/hostname` *and* `/etc/hosts` (see below)
-- Enables SSH (root login, password + pubkey auth)
-- Optionally installs your SSH public key
-- Configures DHCP networking on eth0
-- Backs up every file it modifies
+Order: SSH gate, compile the plan, `--dry-run` prints it and exits, then
+[`commissioning/backup.sh`](commissioning/backup.sh) (**the run aborts if it fails**), install the plan,
+apply sysctl, reboot.
 
-### The host name, and why `/etc/hosts` is rewritten too
-
-A unit as it arrives carries **a name it did not choose and a mapping for that name that does not
-work**. Both are properties of the image rather than of the unit, so both are the same on every
-card, but *what* the name is varies — measured examples are `RW09` and `null`. What is consistent is
-the shape: `/etc/hosts` maps the device's own name on a **non-loopback** line, to an address that is
-unreachable from anywhere the unit is now used. So more than one unit can claim one name, and every
-unit resolves its own name wrongly.
-
-⚠️ **Three variants of that broken line have been seen on real units — do not assume which one a given
-unit has, read it.** They are different defects and only the first is the one a factory card shows:
-
-| Variant | What the line holds | Why it is broken |
-|---|---|---|
-| **Vendor image**, on a factory card | the shipped name against a vendor-subnet address | unreachable from anywhere the unit is now used; several units claim one name |
-| **Hardcoded self-IP**, found on units already in service | the unit's own *leased* address | goes stale the moment the lease moves |
-| **RFC-1918 address mapped to the name `null`**, on a card whose `/etc/hostname` is also `null` | a private address against a placeholder name | the unit answers to nothing and resolves nothing |
-
-[`commissioning/set-hostname.sh`](commissioning/set-hostname.sh) handles all three, because it keys the
-removal on the name it *reads* from `/etc/hostname` rather than on a hardcoded one — which is also why it
-works on a card whose shipped name is anything at all.
-
-Setting `/etc/hostname` alone would leave that mapping in place, so anything on the device that
-resolves its own name would still get the wrong answer. The prompt therefore writes both files, via
-[`commissioning/set-hostname.sh`](commissioning/set-hostname.sh) — one implementation shared with `commissioning/provision.sh --hostname`,
-so the offline and over-SSH paths cannot drift. The result is loopback-only:
-
-```text
-127.0.0.1 localhost
-127.0.0.1 <name>
-```
-
-Give each unit a **unique single label** (`rw09`, not `rw09.local` — mDNS appends `.local`
-itself). Combined with Phase 2 enabling mDNS, that is what makes `ssh root@rw09.local` and
-`./commissioning/provision.sh rw09.local` work instead of hunting for a DHCP lease.
-
-### The vendor network regenerator
-
-⚠️ **On a unit that still carries the vendor stack, everything Phase 1 just wrote is rewritten ~7 s
-into the first boot.** `/opt/sbin/networkmanager`, started from `etc/rcS.d/S60networkmanager`, rewrites
-`/etc/hostname`, `/etc/hosts`, `/etc/resolv.conf` and `/etc/dhclient.conf`'s `send host-name` out of
-`/home/root/data/websign/net.*`, and in `manual` mode it also kills the `dhclient` that
-`S40networking` started and applies a static address.
-
-Measured on an RW20, 2026-08-08 — a card prepared here as `rwtest`:
-
-```text
-Aug  8 19:16:21 rwtest kernel: ...                       # S39hostname.sh applied 'rwtest'
-Aug  8 19:16:38 rwtest NETWORKMANAGER: Killed dhclient.
-Aug  8 19:16:42 rwtest NETWORKMANAGER: Manual IP Mode detected.
-Aug  8 19:16:43 rwtest NETWORKMANAGER: Vaild host name found: null
-Aug  8 19:17:01 rwtest NETWORKMANAGER: status: manual-bound
-Aug  8 19:17:01 rwtest NETWORKMANAGER: ip address: 10.11.140.22
-```
-
-The card afterwards: `/etc/hostname` back to `null`, `/etc/hosts` rewritten as
-`# Generated by PV networkmanager` / `10.11.140.22 null`. **Nothing had failed** — and the unit was on
-a subnet the host could not reach, so Phase 2 was impossible and Phase 1 could not lead anywhere.
-
-`commissioning/card-prep.sh` therefore ends by **measuring** this rather than warning about it in the
-abstract. `websign/` is on **p2** and this script has p6, so it resolves the card's own disk from the
-mounted rootfs and mounts p2 **read-only** to read three files:
-
-| `net.mode` | What happens on the first boot | What Phase 1 offers |
-|---|---|---|
-| `manual` | static address, `dhclient` killed, host name reset — **unreachable** if that address is not on your subnet | disable the regenerator (default), or keep it and use the vendor's address |
-| `dhcp` | a lease still arrives, but the host name and `/etc/hosts` are still rewritten | the same choice; only the *name* is at stake |
-| `websign/` absent | nothing — both writers are inside `set_manual()`/`set_dhcp()` | nothing to do, reported as such |
-| p2 unreachable | unknown | reported as **unmeasured**, never as nothing-to-do |
-
-"Disable" removes `etc/rcS.d/S60networkmanager` on p6 and nothing else. `/etc/init.d/networkmanager`
-stays, so the restore is one `ln -s ../init.d/networkmanager`, and the link is *not* renamed in place
-because `/etc/init.d/rc` globs `S[0-9][0-9]*` — `S60networkmanager.disabled` would still run. This is
-not a new deletion decision: `device-files/clean-rules.conf` already names that link, so Phase 2
-removes it on every unit anyway. Phase 1 only moves it earlier, to the one phase that has no other way
-to survive its own first boot.
-
-The prompt is `[ -t 0 ]`-gated. A non-TTY run **keeps** the regenerator and prints an unmissable block
-saying nobody was asked — an EOF must not be read as consent to remove a boot link.
-
-### Usage
-
-1. **Insert the SD card** into a Linux machine (or WSL), and mount its rootfs (p6). Any mount
-   point works — the script finds it by content.
-2. Run:
-   ```bash
-   ./commissioning/card-prep.sh
-   ```
-   If it cannot find a rootfs it names the disk it *did* find and prints the mount command. You
-   can also point it at a mounted tree directly with `export ROOTFS=/mnt/rw`.
-3. Follow the prompts for password / host name / SSH key
-4. Unmount, re-insert into device, power on
-
-<!--
-  ⚠️ The block between the two markers below is READ AT RUNTIME, not just by humans.
-  commissioning/card-prep.sh prints it verbatim as its epilogue, so this file is the single
-  source of truth for the next steps and the script has no second copy. Two consequences:
-
-    - Keep both markers. tests/commission_prep_test.sh asserts the block appears in a
-      standalone run and does NOT appear when RW_COMMISSION_ORCHESTRATED is set (the
-      offline single pass has already done every step it names). Deleting a marker turns
-      that test red, which is the intended alarm rather than a nuisance.
-    - It is printed to a terminal, so it is indented plain text with no markdown syntax.
-      Bullets and backticks would be read out literally.
--->
-<!-- NEXT_STEPS_START -->
-
-  Remaining steps
-  ────────────────
-  1. Unmount SD card:       sync && sudo umount <mountpoint>
-
-  2. Reinsert SD card into device, connect Ethernet, power on
-
-  3. Wait ~30 s, find device IP from router DHCP leases
-     (after step 5 the device also answers to NAME.local, where NAME is
-      the host name you just set)
-
-  4. If SSH key was NOT installed during commissioning: nothing to do here.
-     Every script's SSH gate now tells "device is down" from "device is up
-     and refused our key", and on the second it offers to generate a key
-     and ssh-copy-id it for you. To do it by hand anyway:
-       ssh-copy-id -i ~/.ssh/id_rsa.pub root@<ip>
-
-  5. One-time system setup. Stops the vendor services, installs the app
-     launcher, enables mDNS and DEEP-CLEANS the vendor software. Ends in a
-     reboot:
-       ./commissioning/provision.sh <ip>
-
-     It asks once whether the card is backed up, before the first write.
-     The clean is not undoable on the device, and the 472 MB
-     factory-restore payload goes with the rest.
-       --no-clean       delete nothing
-
-  6. Deploy all apps:
-       ./deploy-all.sh <ip>
-
-  Or run those last two from the menu — items 2 and 3:   ./roomwizard.sh
-
-  Full guide: COMMISSIONING.md
-
-<!-- NEXT_STEPS_END -->
-
-## Phase 2: System Setup (SSH)
-
-The [`commissioning/provision.sh`](commissioning/provision.sh) script is run once over SSH after the device first boots.
-It **disables** the Steelcase services, installs the generic app launcher framework and deep-cleans the
-vendor stack. It never writes p1.
-
-⚠️ **With no flags this now does the FULL commissioning — it CLEANS.** The point is that the SSH path
-and the offline path leave the same unit, differing only in how they authenticate. `--no-clean` is the
-opt-out.
-
-| | What it does | Default? | Reversible |
-|---|---|---|---|
-| **disable** (`--no-clean`) | stops and de-registers the vendor services, writes the watchdog bypass. Re-applied on **every boot** by the init script. Deletes nothing. | no, opt-**out** | yes |
-| **remove** (`--remove`) | additionally *deletes* the named vendor stacks — ~178 MB plus the 472 MB factory-restore payload. **Narrower than the default.** | no, opt-in | no — needs the host-side card image |
-| **deep clean** (`--deep-clean`) | `--remove` plus the whitelist sweeps: everything in `/etc/rc*.d`, `/opt` and the data partitions that the keep-list does not name. ~560 MB more | **yes — this is what a bare run does** | no — needs the host-side card image |
-
-Both clean selectors read the same
-[`device-files/clean-rules.conf`](device-files/clean-rules.conf) and differ only by its `sweeps`
-group — so `--remove` is exactly `--deep-clean --keep-sweeps`. Use `--dry-run` to see the resolved
-delete list before anything happens.
-
-⚠️ **One consent question covers the irreversible step.** It asks whether the card is backed up, once,
-before the first write. A declined answer skips the clean; the provision and the reboot still happen,
-because both are repeatable. On a **non-TTY** the run proceeds and
-prints an unmissable banner saying what nobody answered — the defect that replaced was an unguarded
-`read` whose EOF cancelled the clean and returned 0, so a scripted run silently did not clean while the
-operator believed the default did. `--status` and `--hostname` never see the question, because they write
-nothing.
-
-⚠️ **The clean is not undoable on the device.** The 472 MB on-device factory-restore payload is deleted
-with the rest of the vendor stack — it would only restore software whose start-up mechanism the same
-clean removes, so keeping it preserves the ability to undo a commissioning it can no longer perform.
-`--keep-factory` opts out, and the 5 MB fallback kernel is kept either way. p1 is not written. The
-accepted cost is that **a power cycle is no longer a free undo**, and recovery is reflashing the card
-from the image commissioning takes.
-
-### What it does
-
-Nothing in the list below is written out in `commissioning/provision.sh`. Steps 1–3 are one compiled plan over
-[`device-files/provision-rules.conf`](device-files/provision-rules.conf) and step 5 is one compiled plan
-over [`device-files/clean-rules.conf`](device-files/clean-rules.conf) — the **same two data files**
-`commissioning/commission-offline.sh` reads, so the SSH pass and the offline pass cannot drift.
-
-1. **Provision** — the boot scripts (`audio-enable`, `time-sync`, `sysctl.conf`,
-   `roomwizard-app`, `disable-steelcase.sh`, and the three USB scripts `enable-usb-host.sh` /
-   `usb-host` / `xpad-modules`), the `rc*.d` links (`S28`, `S29`, `S30avahi-daemon`, `S89xpad-modules`,
-   `S90usb-host`, `S99roomwizard-app` in rc2–5.d), the sshd directives, the `/var/watchdog_test`
-   bypass, and the two config fix-ups. Stale `rc*.d` links from an earlier install are removed first.
-2. **Disable** — runs `disable-steelcase.sh`: watchdog bypass, a fresh crontab, services stopped.
-3. **Apply** the sysctl settings to the running kernel.
-4. **Report** what vendor software is still on disk.
-5. **Clean** — the deep clean, unless `--no-clean`, `--remove` or `--keep-<group>` narrows it.
-6. **Reboot**.
-
-⚠️ **Restoring a card from a whole-card capture:** a same-release restore by `dd` is measured working; the
-restored unit inherits the donor's touch calibration and needs recalibrating. ⚠️ **Only p1 may be restored
-file-by-file** (FAT32, regular files); an ext partition must go back with `dd` — a file copy of a live
-rootfs carries no symlinks and leaves no `/bin/sh`, on hardware with no serial console.
-
-⚠️ **A plan record is state; running a script is an action.** `disable-steelcase.sh` is *installed* by
-the plan and therefore also lands on an offline-commissioned card, but *running* it stops live processes
-and writes a crontab, so it has no offline equivalent by nature. `/etc/init.d/roomwizard-app` re-runs it
-on every boot, which is what makes the offline path's omission harmless rather than a gap.
-
-### Usage
+The plan is [`device-files/provision-rules.conf`](device-files/provision-rules.conf), the same data file
+`commission-offline.sh` reads, so the online and offline passes cannot drift. Its verbs are `install`,
+`link`, `link-opt` and `unlink`; stale `rc*.d` links from an earlier install are removed first.
 
 ```bash
-./commissioning/provision.sh <target>                    # FULL: provision + deep clean + reboot
-./commissioning/provision.sh <target> --dry-run          # what the clean would delete
-./commissioning/provision.sh <target> --no-clean          # provision, harden, reboot — delete nothing
-./commissioning/provision.sh <target> --remove           # clean the named stacks only, no sweeps
-./commissioning/provision.sh <target> --deep-clean       # the default, stated explicitly
-./commissioning/provision.sh <target> --keep-factory     # ... but keep the 472 MB restore payload
-./commissioning/provision.sh <target> --no-usb           # no USB host mode at all
+./commissioning/provision.sh <target>                    # backup, install the plan, reboot
+./commissioning/provision.sh <target> --dry-run          # print the plan; change nothing
+./commissioning/provision.sh <target> --no-usb           # skip a group: mdns usb bluetooth
 ./commissioning/provision.sh <target> --status           # report only, no changes
 ./commissioning/provision.sh <target> --hostname rw09    # set the host name only. NO reboot.
-./commissioning/provision.sh <target> --sshd-only --ssh-auth=key  # SSH only, key-only. NO reboot.
 ```
 
-**`--ssh-auth=password|key`** is on both bring-up paths. `password` (the default) is the behaviour every
-unit has had; `key` turns off every password method and is **refused** unless a key is proven first —
-a publickey-only BatchMode login online, an `authorized_keys` that `card-prep.sh` wrote in the same run
-offline — because a fresh unit may have no key and there is no serial console. Online, the new file must
-pass `sshd -t`, a reload and a fresh key login, or the device restores the previous one by itself.
-Either mode drops SHA-1 MACs and `ssh-rsa` signatures; the records and their reasons are the `sshd`
-groups of `device-files/provision-rules.conf`.
+`<target>` is an IPv4 address **or** a host name. `--status` also md5s the deployed scripts against the
+repo's and reports `matches repo` or `DRIFTED` per file. Every retired flag is refused: `--ssh-auth`/`--sshd-only` by name, the rest as unknown options.
 
-`<target>` is an IPv4 address **or** a host name. `--status` also md5s the two deployed scripts
-against the repo's and reports `matches repo` or `DRIFTED` per file. `--keep-<group>` switches off part
-of the clean (`browser java snmp mail extras factory sweeps`); `--no-<group>` part of the provision
-(`mdns sshd usb`). Each is named after the groups in its own data file.
+### The host name, and mDNS
 
-### mDNS and `--hostname`
-
-Phase 2 enables mDNS by symlinking `/etc/init.d/avahi-daemon` into `rc5.d`. The daemon and its
-init script are already on the vendor image; the image just ships no boot link, so it never
-started. After the reboot the unit answers to `<hostname>.local`:
+Give each unit a **unique single label** (`rw09`, not `rw09.local` — mDNS appends `.local` itself). The
+plan links `/etc/init.d/avahi-daemon` into `rc5.d`, so after the reboot the unit answers to
+`<hostname>.local`:
 
 ```bash
 ssh root@rw09.local
 ./commissioning/provision.sh rw09.local --status
 ```
 
-This is only useful once the unit has a **unique** name — every unit cloned from the vendor image
-claims `RW09`, and avahi would resolve the collision by renaming to `RW09-2.local`. Phase 1
-prompts for the name; `--hostname NAME` is the way to set it on a unit that is **already
-commissioned**, because it is targeted and does **not** reboot. That matters for a unit in
-service as a live display.
+[`commissioning/set-hostname.sh`](commissioning/set-hostname.sh) writes `/etc/hostname` **and**
+`/etc/hosts` (loopback only: `127.0.0.1 localhost`, `127.0.0.1 <name>`), so anything on the device that
+resolves its own name gets the right answer. `provision.sh --hostname NAME` is targeted and does **not**
+reboot, which matters for a unit in service as a live display. Two units claiming one name make avahi
+rename the second to `NAME-2.local`.
 
-### Why is this needed?
+## Backup and restore
 
-The Steelcase firmware includes a cron-based software watchdog (`/opt/sbin/watchdog/watchdog.sh`)
-that checks every 5 minutes whether HSQLDB, Jetty, and the browser are running. When these
-services are absent (which they are after we repurpose the device), the watchdog triggers a repair
-cycle and eventually **reboots the device** (~70 min after first failure). It also includes a
-backlight schedule that turns the screen off at 19:00 on weekdays.
+**Before an update or a reflash, back the unit up; after it, restore:**
+`./commissioning/backup.sh <ip>` then, once the unit is back, `./commissioning/restore.sh <ip> <archive>`
+(`--dry-run` lists what it would write). `provision.sh` runs the backup itself. The archive holds secrets
+(VNC password, SSH host keys): keep it private. `rootfs/make-card-image.sh` refuses a `state.tar` made
+before the image allowlist existed; re-run `rootfs/fetch-card-parts.sh` to make a current one.
 
-`commissioning/provision.sh` disables all of these non-essential mechanisms. See
-[SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md#52-as-we-run-it--game-mode) for the complete rationale.
+⚠️ **Restoring a card from a whole-card capture:** a same-release restore by `dd` is measured working; the
+restored unit inherits the donor's touch calibration and needs recalibrating. ⚠️ **Only p1 may be restored
+file-by-file** (FAT32, regular files); an ext partition must go back with `dd` — a file copy of a live
+rootfs carries no symlinks and leaves no `/bin/sh`, on hardware with no serial console.
 
 ## The dev host: what must be installed, and in which shell
 
@@ -464,9 +190,9 @@ unit can tell you which of them is responsible.
 There is no serial console ([§3.12](SYSTEM_ANALYSIS.md#312-serial-ports)), so the only post-mortem is
 mounting p3 offline and reading `messages` — which helps only if the boot got as far as syslog.
 
-## Phase 3: Deploy Apps
+## Deploy apps
 
-After both commissioning phases, deploy apps to the device.
+After imaging or updating, deploy apps to the device.
 
 ### All at once (recommended)
 ```bash
@@ -484,7 +210,7 @@ cd scummvm-roomwizard && ./build-and-deploy.sh <ip>
 The `set-default` flag makes that app start on boot.
 After deploying, reboot: `ssh root@<ip> reboot`
 
-### From a bundle, with no toolchain — the delivery mode
+### From a bundle, with no toolchain
 
 ⚠️ **Everything above BUILDS.** `deploy-all.sh <ip>` and every `build-and-deploy.sh` need
 a cross-compiler (`arm-linux-gnueabi-gcc`; `-gnueabihf-` for `vnc_client`), and ScummVM needs WSL and
@@ -500,7 +226,7 @@ It stops the running app, installs, md5-verifies every file against the bundle's
 on every entry declared executable, sets `default-app` and restarts the launcher. Modes come from the
 manifest, never from the transfer — see [`CLAUDE.md`](CLAUDE.md) → *Bundles*.
 
-### USB host mode: it travels in the bundle and the bring-up path
+### USB host mode: it travels in the bundle and the provision plan
 
 ⚠️ **A bundle can deliver USB host mode**, by two independent mechanisms:
 
@@ -509,22 +235,21 @@ manifest, never from the transfer — see [`CLAUDE.md`](CLAUDE.md) → *Bundles*
 | `/dev/mem` patch of `omap2430_ops.dma_init`/`.dma_exit` + a MUSB rebind | **USB host mode itself** | nothing on disk — re-applied at every boot by `/etc/init.d/usb-host` | the `usb` group of [`device-files/provision-rules.conf`](device-files/provision-rules.conf) |
 | `xpad.ko` / `joydev.ko` / `ff-memless.ko`, force-loaded | the controller as `/dev/input/event*` | `/lib/modules/4.14.52/extra` (p6) | the release bundle, md5-verified |
 
-So a unit commissioned by either path — `commissioning/provision.sh <ip>` or
+So a unit set up by either path — `commissioning/provision.sh <ip>` or
 `commissioning/commission-offline.sh` — comes up with USB host mode by default. The controller power
-budget is whatever our kernel's device tree says (`kernel/README.md`). The three device scripts and the
-two `rc5.d` links are ordinary provision records; the four built artifacts (`devmem_write` plus the
-three `.ko`s) travel in the bundle and add **no** `TAKEN ON TRUST` entries, because all four are unstripped.
+budget is whatever our kernel's device tree says (`kernel/README.md`). The device scripts and the
+`rc5.d` links are ordinary provision records; the built artifacts (`devmem_write` plus the `.ko`s) travel
+in the bundle and add **no** `TAKEN ON TRUST` entries, because all of them are unstripped.
 
 ⚠️ **A bundle install alone does NOT give you USB.** `./deploy-all.sh --from-bundle <b> <ip>` installs
-whatever the manifests name, so the four artifacts arrive — but nothing installs the three device
-scripts. Those come from a bring-up path. To add USB to an already-commissioned unit from a machine
-with the ARM toolchain:
+whatever the manifests name, so the artifacts arrive — but nothing installs the device scripts. Those come
+from a provision plan. To add USB to a running unit from a machine with the ARM toolchain:
 
 ```bash
 cd usb_host && ./build-and-deploy.sh <ip>      # needs bc libssl-dev bison flex python3
 ```
 
-`--no-usb` opts out of the whole group on both bring-up paths.
+`--no-usb` opts out of the whole group on both paths.
 
 ### Switching Apps
 
@@ -544,44 +269,33 @@ Then reboot or restart the service: `ssh root@<ip> /etc/init.d/roomwizard-app re
 
 ## Architecture
 
-**Two data files hold every decision; the scripts are executors over them.** Neither the SSH pass nor
-the offline pass decides what to install or delete, which is what makes "the result is the same either
-way" a fact rather than an intention.
+**One data file holds every install decision; the scripts are executors over it.** Neither the SSH pass
+nor the offline pass decides what to install, which is what makes "the result is the same either way" a
+fact rather than an intention.
 
 ```
-device-files/clean-rules.conf      WHAT IS REMOVED     <type> <group> <path> <reason>
 device-files/provision-rules.conf  WHAT IS INSTALLED   <type> <group> <mode> <target> <source> <reason>
 
-lib/rw-clean.sh       parses clean-rules.conf     -> a plan, plus the offline executor
 lib/rw-provision.sh   parses provision-rules.conf -> a plan, plus BOTH executors
 lib/rw-bundle.sh      the bundle layout, plus the SSH bundle installer
 lib/rw-identify.sh    which card, which partition — by content and POSITION, never by UUID
 
 roomwizard.sh                          Front door: a menu over everything below
-commissioning/card-prep.sh             Phase 1: SD card (offline). A SUBROUTINE of the next one
-commissioning/commission-offline.sh    All three phases in ONE offline pass — the delivery path
-commissioning/provision.sh             Phase 2: SSH provision + deep clean, ends in a reboot
-deploy-all.sh                          Phase 3: build + deploy everything
-deploy-all.sh --from-bundle            Phase 3 with NO toolchain — install a release bundle
+rootfs/make-card-image.sh              Whole-card image; --bundle runs the next one over it
+commissioning/commission-offline.sh    The image step: install + verify, offline, no prompts
+commissioning/provision.sh             Online update: backup, install, reboot
+commissioning/backup.sh, restore.sh    Per-unit state off and back onto a unit
+deploy-all.sh                          Build + deploy everything
+deploy-all.sh --from-bundle            Install a release bundle with NO toolchain
 release.sh                             Build all components + stage one offline bundle
-device-files/disable-steelcase.sh      Device payload: watchdog bypass + fresh crontab, every boot
 device-files/roomwizard-app            Device payload: installed as /etc/init.d/roomwizard-app
 device-files/{enable-usb-host.sh,usb-host,xpad-modules}   Device payload: the usb group
 */build-and-deploy.sh                  One per component
 ```
 
-⚠️ **`commissioning/card-prep.sh` is step 3 *of* `commissioning/commission-offline.sh`, not an
-alternative to it.** The name still reads like a sibling, and no better one has been agreed. The
-handover carries **two** variables: `ROOTFS` skips its own card detection, and
-`RW_COMMISSION_ORCHESTRATED` suppresses the closing banner, the `NEXT_STEPS` block and the regenerator
-prompt — all three of which are about work the orchestrator has already done or is about to undo.
-⚠️ `ROOTFS` alone must **not** suppress them: it is also the documented "I mounted the card myself"
-hatch, and that operator does still need the next steps.
-
 ### On-device layout
 ```
 /opt/roomwizard/
-├── disable-steelcase.sh         Bloatware cleanup (run on every boot)
 ├── apps/*.app                   Launcher manifests (INI: name=, exec=, icon=, args=)
 ├── icons/*.ppm                  Tile icons, PPM P6
 └── default-app                  One line: path to executable (e.g. /opt/roomwizard/app_launcher)
@@ -596,8 +310,7 @@ hatch, and that operator does still need the next steps.
 /usr/local/bin/enable-usb-host.sh  The /dev/mem patch itself, run by usb-host
 /usr/local/bin/devmem_write        Its tool
 /lib/modules/4.14.52/extra/        ff-memless.ko, joydev.ko, xpad.ko
-/etc/sysctl.conf                 Kernel hardening, replacing the vendor file; no iptables here
-/var/watchdog_test               The Steelcase software-watchdog bypass
+/etc/sysctl.conf                 Kernel hardening; no iptables here
 /opt/games/                      Native games + tools
 /opt/vnc_client/                 VNC client binary + config
 /opt/scummvm/                    ScummVM, where installed
@@ -606,39 +319,23 @@ hatch, and that operator does still need the next steps.
 ⚠️ **p1 is not in the list above and never will be.** `mlo`, `u-boot.bin` and `ctrlblock.bin` are unreachable from every function in `lib/rw-identify.sh` —
 `RW_PART_ROLES` does not contain p1, and a test asserts its absence.
 
-⚠️ **Every `rc*.d` link above is also on `clean-rules.conf`'s keep list.** A link the whitelist does not
-name is deleted by the next `--deep-clean`, so the pair is asserted rather than remembered —
-`rw_provision_check_keeps` refuses to provision if one is missing.
-
 ## Troubleshooting
 
-### "No RoomWizard rootfs is mounted" (Phase 1)
+### "No RoomWizard rootfs is mounted"
 
-The script prints the diagnosis itself — if a disk with the RoomWizard partition layout is present
-it names it and gives you the exact `mount` command. If it found no such disk, the card is not
-visible to Linux at all; on WSL it must first be attached from Windows:
+Tools that look for a card print the diagnosis themselves — if a disk with the RoomWizard partition
+layout is present they name it. If none is found, the card is not visible to Linux at all; on WSL it must
+first be attached from Windows:
 
 ```bash
 wsl --mount \\.\PHYSICALDRIVEn --bare
 lsblk -o NAME,FSTYPE,SIZE,MOUNTPOINT | grep -v loop
 ```
 
-Then **re-run the script**. Once the disk is visible it resolves the rootfs itself and prints the
-device to mount. ⚠️ **It deliberately does not tell you to `mount /dev/sdX6`**: whoever is holding a
-card cannot see partition numbers, `lib/rw-identify.sh` exists so that nobody has to work one out, and
-`${dev}6` is the wrong name on an `mmcblk` reader anyway (`rw_part_dev` inserts the `p`). If you want
-to mount it by hand, it is the **~980 MB ext4** partition.
-
-**Do not go looking for a particular UUID** — see [*Finding the card*](#finding-the-card).
-
-### Device reboots after ~70 minutes
-System setup (Phase 2) wasn't completed. Run `./commissioning/provision.sh <ip>`.
-
-### Screen goes blank at 19:00
-The backlight cron wasn't disabled. Run `./commissioning/provision.sh <ip>` or manually:
-```bash
-ssh root@<ip> /opt/roomwizard/disable-steelcase.sh
-```
+Then **re-run the script**. ⚠️ Do not work out a partition number by hand: whoever is holding a card
+cannot see them, `lib/rw-identify.sh` exists so that nobody has to, and `${dev}6` is the wrong name on an
+`mmcblk` reader anyway (`rw_part_dev` inserts the `p`). **Do not go looking for a particular UUID** — see
+[*Finding the card*](#finding-the-card).
 
 ### No app starts after reboot
 No default app configured. Set one:
@@ -647,24 +344,9 @@ ssh root@<ip> 'echo /opt/roomwizard/app_launcher > /opt/roomwizard/default-app'
 ssh root@<ip> reboot
 ```
 
-## Backups
-
-**Before an update or a reflash, back the unit up; after it, restore:**
-`./commissioning/backup.sh <ip>` then, once the unit is back, `./commissioning/restore.sh <ip> <archive>` (`--dry-run` lists what
-it would write). The archive holds secrets (VNC password, SSH host keys): keep it private. `rootfs/make-card-image.sh` refuses a
-`state.tar` made before the image allowlist existed; re-run `rootfs/fetch-card-parts.sh` to make a current one.
-
-Phase 1 creates backups on the SD card:
-- `/etc/shadow.backup`
-- `/etc/ssh/sshd_config.backup`
-- `/etc/network/interfaces.backup`
-
-Phase 2 backs up the original crontab:
-- `/var/crontab.steelcase.bak`
-
 ## Related Documentation
 
-- [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md) — Hardware specs, watchdog details, cron job tables
+- [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md) — Hardware specs, boot chain, subsystems
 - [native_apps/README.md](native_apps/README.md) — Native apps development docs
 - [vnc_client/README.md](vnc_client/README.md) — VNC client docs
 - [scummvm-roomwizard/README.md](scummvm-roomwizard/README.md) — ScummVM backend docs

@@ -213,10 +213,6 @@ silence at boot.
 /etc/rc5.d/S90usb-host      ->  ../init.d/usb-host
 ```
 
-Both are on [`device-files/clean-rules.conf`](../device-files/clean-rules.conf)'s keep list, and
-`rw_provision_check_keeps` refuses to provision if a boot link it installs is not whitelisted — otherwise
-the next `--deep-clean` deletes them and the unit boots right once.
-
 ### Step 7: Verify
 
 ```bash

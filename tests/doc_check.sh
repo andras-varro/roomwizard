@@ -235,7 +235,7 @@ norm_path() {
 }
 
 # ⚠️ The path resolves relative to the citing file and then, failing that, from the repo
-# root — because most of these anchors are not links. A comment in `lib/rw-clean.sh` or a
+# root — because most of these anchors are not links. A comment in `lib/rw-identify.sh` or a
 # backticked pointer in `lib/CLAUDE.md` writes the doc's plain filename and means the one at
 # the root; requiring `../` there would put path arithmetic into 25 human-readable comments
 # to satisfy a checker. The invariant worth having is that the **fragment** names a real
@@ -359,7 +359,6 @@ clock_gettime64	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 743 ms	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 audio_interrupt	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
 audio_stream_start	native_apps/CLAUDE.md	IMPROVEMENT_PLAN.md
-RFC-1918	COMMISSIONING.md	IMPROVEMENT_PLAN.md
 1486	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 22,317	SYSTEM_ANALYSIS.md	IMPROVEMENT_PLAN.md
 button_check_tap	native_apps/CLAUDE.md	-

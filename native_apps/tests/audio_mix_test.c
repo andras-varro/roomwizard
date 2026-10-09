@@ -210,7 +210,7 @@ typedef enum {
  * refusal in the log means something changed rather than something is unsupported.
  *
  * ⚠️ **The two music files are hand-copied and are not in the repo** — they
- * survive `device-files/clean-rules.conf`'s wholesale keep of `/opt/sound` but not
+ * survive a re-commission of the same card (nothing deletes `/opt/sound`) but not
  * a fresh card. If a pad refuses with "cannot open",
  * that is the first thing to check, not a code fault.
  *

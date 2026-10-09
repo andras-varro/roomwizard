@@ -236,8 +236,8 @@ fi
 # after the operator has already been told the release is ready.
 #
 # Guarded rather than trusted: $OUT comes from the command line and this is an
-# `rm -rf`.  It follows lib/rw-clean.sh's del() guard, which refuses in three
-# stages; this one needs the first two verbatim and substitutes for the third.
+# `rm -rf`.  The guard refuses root, a path
+# containing `..`, a non-directory, and a non-empty directory that is not a bundle.
 #
 # Normalise before comparing, so that "//" and "/." cannot spell root past a
 # string test — rw_offline_base_ok does exactly this, for exactly this reason,
@@ -252,10 +252,9 @@ if [[ -e "$OUT" && ! -d "$OUT" ]]; then
 fi
 
 # ⚠️ This is the check that makes the `rm -rf` below safe, and it is the one that
-# was missing.  del()'s third stage refuses a target that does not resolve under
-# its $BASE; release.sh has no base to contain against, because --out is
-# legitimately anywhere the operator wants to stage.  So the substitute for
-# containment is OWNERSHIP: an existing $OUT must be something this script made —
+# was missing.  Containment under a base is not available here, because --out is
+# legitimately anywhere the operator wants to stage.  So the guard is
+# OWNERSHIP: an existing $OUT must be something this script made —
 # a previous bundle, or an empty directory — and `--out /usr` is refused rather
 # than destroyed.
 #

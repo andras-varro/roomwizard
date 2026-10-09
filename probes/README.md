@@ -31,22 +31,19 @@ UART3 clock gate stay modified when it returns. **Always end a stepped session w
 `./xbee_socket_continuity.sh restore`**, which puts the pad and the clock gate back and prints both
 read-backs. An abandoned session leaves the unit muxed and clocked until it is power-cycled.
 
-## The vendor ZigBee tooling — it no longer survives commissioning
+## The vendor ZigBee tooling — not on our root
 
-⚠️ **`/opt/sbin` is deleted by default now.** It is a `vendorscripts` clean group in
-`device-files/clean-rules.conf`, so both bring-up paths remove those ~1.4 MB of vendor shell scripts
-unless you pass **`--keep-vendorscripts`**. That is the *only* way to keep the bytes: none of them are
-in this repo and none of them may be — they are Steelcase's, and this project is published. If a probe
-here ever needs the vendor's own implementation as a reference, commission with the flag, or read it
-off a card backup. (`/opt/pv02` is a separate `keep` record in the same rules file and is unaffected.)
+⚠️ **`/opt/sbin` exists only on the vendor root filesystem.** Our own root does not carry it, and none of
+those ~1.4 MB of vendor shell scripts are in this repo — they are Steelcase's, and this project is
+published. If a probe here ever needs the vendor's own implementation as a reference, read it off a
+card backup of a stock unit.
 
-What that tooling was, so the loss is a decision rather than an accident — each fact has one home:
+What that tooling was — each fact has one home:
 
 - the ZigBee gateway daemon, its channel mask and link key, the vendor's `AT`-command implementation
   and the burn-in script — [3.12 Serial ports](../SYSTEM_ANALYSIS.md#312-serial-ports)
 - the network regenerator that rewrites all four network files every boot —
-  [3.5 Network and power](../SYSTEM_ANALYSIS.md#35-network-and-power), and the operator-facing account in
-  [The vendor network regenerator](../COMMISSIONING.md#the-vendor-network-regenerator)
+  [3.5 Network and power](../SYSTEM_ANALYSIS.md#35-network-and-power)
 - the cron-driven software watchdog and its repair/reboot chain —
   [3.13 Watchdogs](../SYSTEM_ANALYSIS.md#313-watchdogs)
 - the backlight and LED scripts — [3.7 LEDs, backlight and PWM](../SYSTEM_ANALYSIS.md#37-leds-backlight-and-pwm)

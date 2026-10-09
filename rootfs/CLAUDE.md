@@ -21,26 +21,24 @@ Everything that builds the **root filesystem we boot instead of the vendor's Yoc
   compiled into U-Boot): `SYSTEM_ANALYSIS.md#4-boot-chain-and-recovery`. Recovery is "reimage the card".
 - **Our links:** `rcS.d` `S01mountall` `S01seedrng` `S02alignment` `S03udev` `S04hostname` `S05sysctl`
   `S06watchdog` `S07syslog` `S08networking`; `rc5.d` `S02dbus-1` `S09sshd` `S20hwclock.sh`.
-  `device-files/clean-rules.conf` knows only the vendor's names.
 
 - **Root's login shell is `/bin/bash`**, set by `rootfs/board/roomwizard/post-build.sh` (the Buildroot skeleton gives `/bin/sh`,
   BusyBox ash); the prompt comes from the overlay's `/etc/profile.d/prompt.sh`. Measured on `.188`.
 - **`make-card-image.sh --bundle <release bundle>` installs every component offline**: it runs
-  `commissioning/commission-offline.sh --base <tree> --no-clean --no-sshd --unattended` against the new image's p6/p2/p3/p5.
+  `commissioning/commission-offline.sh --base <tree>` against the new image's p6/p2/p3.
   Measured on `.188`: a card built that way boots to the launcher, touch works, and the launcher's Shutdown tile runs `poweroff`
-  and the panel goes dark. The provision plan also installs files our root does not need (`/etc/default/syslogd`,
-  `disable-steelcase.sh`, `/var/watchdog_test`) — inferred harmless, not observed.
+  and the panel goes dark.
 
 ## What the image must carry, and what it need not
 
-- **Carry:** OpenSSH, not dropbear (`rw-sshd.sh` runs `sshd -t` and sets `Ciphers`/`MACs`/`KexAlgorithms`/
-  `PubkeyAcceptedKeyTypes`); a `/dev/watchdog` feeder on every boot (60 s); udev with the rule that makes
+- **Carry:** OpenSSH, not dropbear (the overlay's key-only `sshd_config` is the only sshd policy; `provision.sh` never edits it);
+  a `/dev/watchdog` feeder on every boot (60 s); udev with the rule that makes
   `/dev/input/touchscreen0` (`app_launcher` exits without it); dbus (+ `DBUS_SYSTEM_BUS_ADDRESS`), avahi,
   `amixer`, `libasound` **with `/usr/share/alsa`**; `insmod`/`lsmod`, `rdate`, `hwclock -u`, `date -s`,
   `logger` + a syslogd, `start-stop-daemon`, `pidof -x`, `killall`, `/usr/share/zoneinfo`, DHCP on eth0
   sending the host name, `reboot`/`poweroff` (BusyBox has no `shutdown` applet).
-- **Need not:** cron, `S40ctrlblk`, `update-rc.d`, `/var/watchdog_test`, `disable-steelcase.sh`,
-  `clean-rules.conf`. BlueZ and bluealsa are our own builds, not Buildroot packages.
+- **Need not:** cron, `S40ctrlblk`, `update-rc.d`, any Steelcase software.
+  BlueZ and bluealsa are our own builds, not Buildroot packages.
 
 ## Per-unit state (carried by `make-card-image.sh`'s `state.tar`)
 

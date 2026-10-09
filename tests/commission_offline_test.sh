@@ -7,9 +7,9 @@
 #
 #   wsl.exe -u root -e bash -lc "cd /mnt/c/work/roomwizard && tests/commission_offline_test.sh"
 #
-# Needs root, kept from when the offline installer wrote through sudo and a plain `wsl.exe -e bash -lc`
-# stalled on `sudo: a password is required`; nothing in this path asks for sudo now, but the
-# gate counts a non-root run as a skip, so `-u root` above stays the one way to run it.
+# Needs root: run without it, a step that reaches for sudo stalls a plain `wsl.exe -e bash -lc`
+# on `sudo: a password is required`, and the gate counts a non-root run as a skip, so
+# `-u root` above is the one way to run it.
 # Needs a staged bundle: ./release.sh --stage-only [--component
 # native_apps] leaves one in build/release.
 #

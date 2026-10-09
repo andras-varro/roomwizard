@@ -37,23 +37,6 @@ hedge, and a verdict is a weaker answer than a description, so say which one the
 
 ## Correctness and verification
 
-### B29. Two findings from the 2026-08-09 walkthrough — open
-
-1. ⚠️ **`card-prep.sh` still asks the operator to mount the rootfs; `commission-offline.sh` does not, and
-   the asymmetry has no reason left.** The operator is holding the card either way, and
-   `rw_mount_card`/`rw_check_card_mounts` already exist and are what the offline pass uses. Phase 1
-   should find the card disk (`rw_find_card_disks`), mount what it needs, and unmount on every exit path
-   — with `$ROOTFS` still honoured as the "I mounted it myself" hatch, and the desktop-automounted case
-   detected rather than double-mounted. ⚠️ **It needs p2 as well as p6** (`websign/net.mode` is read from
-   p2, mounted read-only), so this is one mount decision covering both. Whatever mounts must also be
-   reachable from a failure trap, the same rule `rw_umount_boot` follows.
-2. **The panel keeps displaying the vendor's old IP after phase 1, while SSH answers on the new one** —
-   observed 2026-08-09 on the unit commissioned with the regenerator disabled. Consistent with the
-   display reading `websign/net.ipaddress`/`net.status` on **p2**, which phase 1 does not touch: the
-   vendor UI is showing its own stale config, not the live interface. Benign, and it disappears with the
-   clean that deletes `websign/`. **Worth confirming that is the source** before writing it down as
-   fact anywhere else — it is currently an inference from where the value could have come from.
-
 ### B30. `brick_breaker` hides lives past the ninth — open, latent, cosmetic
 
 Three games draw a capped HUD lives row and each caps it differently:
@@ -191,32 +174,21 @@ work only.
 
 ---
 
-### F13. Commissioning from Windows without WSL, and from macOS — open, unsolved
+### F13. Building a card image from Windows without WSL, and from macOS — open, unsolved
 
-**Delivery** — someone clones the repo, puts a card in a reader, answers a few questions, puts the card
-back, and the device works, never building anything — assumes the operator can run the card path. Today
-that means Linux, or Windows with WSL2. This entry exists so the gap is recorded rather than discovered
-by someone holding a card.
+Delivery is two steps with different host needs. **Writing** a finished `card.img` is a raw block copy, which any OS's
+imager does (the operator writes cards from Windows). **Building** one is not: `rootfs/make-card-image.sh` loop-mounts
+the image and needs read-write ext4 across the partitions, real symlinks (the `rc*.d` links) and a real `chmod` (the `+x`
+assertion is a measurement precisely because ext4 honours it) — a kernel-filesystem need that no shell dialect supplies.
 
-⚠️ **The interim is one honest line in `COMMISSIONING.md`** stating the host requirement; the real answer is a
-bootable image, and macOS cannot be tested from here at all.
-
-⚠️ **This is not a shell-portability problem, and rewriting `bash` as POSIX `sh` would not touch it.**
-The blocker is the *kernel's* filesystem support: `commissioning/commission-offline.sh` needs read-write ext4 across
-four partitions, real symlink creation (the `rc*.d` links) and a real `chmod` (the `+x` assertion is a
-measurement precisely because ext4 honours it). No shell dialect supplies any of that.
-
-| Host | Route | Status |
+| Host | Build | Status |
 |---|---|---|
-| Linux | native reader | works; the only fully verified path once Unit A passes |
-| Windows + WSL2 | `wsl --mount \\.\PHYSICALDRIVEn --bare` | the documented path; `wsl --install` is one command |
-| Windows, no WSL | none | no native ext4. Third-party drivers are not something to stake a card on |
-| macOS | Linux VM, or a paid ext4 driver | worse than Windows: no kernel ext4 write support, and `ext4fuse` is read-only |
+| Linux, or Windows + WSL2 | native / inside WSL | the documented path |
+| Windows, no WSL | none | no native ext4; third-party drivers are not something to stake a card on |
+| macOS | Linux VM | untested from here; `ext4fuse` is read-only |
 
-**The option that would actually deliver all three is a bootable USB commissioner image** — a small
-Linux that boots, finds the card and runs the existing script unchanged. That keeps one implementation
-and moves the portability problem to a boot medium instead of into the script. Substantial new work,
-deliberately not scoped here.
+A published per-release image would remove the build step for anyone who needs no per-unit state — which is the
+generic flash-and-go image entry. **Done when** an operator with no Linux host can produce a working card.
 
 ### F101. Build our own kernel image, rebased onto 4.14.336 — open
 
@@ -296,34 +268,16 @@ The operator wants root not to be the default user on our root filesystem. Open 
 (a non-root SSH account, apps stay root), or apps run as a non-root user too (which touches `/dev/fb0`, `/dev/input`,
 `/dev/dsp`, `/dev/watchdog` and the `roomwizard-app` respawn loop). **Done when** the operator has answered and the chosen shape is built.
 
-### F139. Provisioning supports our own root filesystem only — open, operator decision 2026-10-09
+### F139. Provisioning supports our own root filesystem only — open, code and docs done 2026-10-09, device check left
 
-The vendor root is retired (tag `last-vendor-rootfs`, at the last commit that can commission it). Direction: `provision.sh` becomes
-"update an already-imaged unit online", `make-card-image.sh --bundle` is the primary install, and the consent gate and the
-`--unattended` guard simplify once there is no clean. It stays the online update/upgrade path for an imaged unit, and should take a `commissioning/backup.sh`
-backup before it changes anything. Scope, from a reading of the tree (re-grep before starting):
-
-1. ⚠️ **Hazard until the clean is gone: `provision.sh` without `--no-clean` on our root deletes our boot links.** `clean-rules.conf`'s
-   `scope sweeps /etc/rcS.d` keep-list (~120-140) names only the vendor's links; our `rcS.d` links (`rootfs/CLAUDE.md`) are not in
-   it and the `rc5.d` keep-list is unchecked for `S02dbus-1`, `S09sshd`, `S20hwclock.sh`. Predicted, not run: no network or SSH
-   after the reboot, recovery by reflash. Use only `--no-clean` on our root.
-2. The clean: `device-files/clean-rules.conf` (whole file, incl. the p5 rules that still describe vendor p5 content),
-   `lib/rw-clean.sh`, `commissioning/provision.sh` (`DO_CLEAN` :95, `run_clean` :462, `ask_consent` :365/:802, `--remove`/`--deep-clean`),
-   `commissioning/commission-offline.sh` (`DO_CLEAN` :133, backup question :331, clean :632-662, `--unattended` guard :287-298).
-3. The watchdog bypass: `device-files/disable-steelcase.sh`, its call from `device-files/roomwizard-app` (~:86-95, with the
-   `touch /var/watchdog_test` fallbacks), `provision.sh:255`, and the provision-rules rows for `disable-steelcase.sh` (:105) and
-   `/var/watchdog_test` (:162). Also `/etc/default/syslogd` (:106) if our root already starts syslogd quietly (check first).
-4. `commissioning/card-prep.sh`'s edits of the vendor `shadow` (:215-230), `sshd_config` (:281-319), `dhclient.conf`/`hosts` (:535-544).
-5. Vendor markers in `lib/rw-identify.sh`: `RW_ROOTFS_VENDOR` (:59), `RW_ISSUE_RE` (:60) and the banner fallback (:93-96), the p2/p5 vendor
-   content notes (:270-285, :413); `/home/root/backup` readers `provision.sh:520,624,628`, `lib/rw-identify.sh:296` and
-   `control_panel/monitor_page.c:60` (p5 is empty and unmounted on our root, so they report p6's numbers).
-6. The sshd policy: `provision-rules.conf` sshd rows (:205-223). The default `--ssh-auth=password` writes `PasswordAuthentication yes` +
-   `PermitRootLogin yes` over the image's key-only `sshd_config` (root password is locked, so not exploitable, but a regression), and its
-   fixed `KexAlgorithms` drops the post-quantum kex, so the OpenSSH client warns on every connection after provisioning (confirmed
-   2026-10-09). Target: leave the image's policy intact unless the operator asks; `--ssh-auth` and `lib/rw-sshd.sh` shrink or go.
-7. The vendor `/etc/profile` drop of `wsplatform.conf` (`provision-rules.conf:235`) and `provision.sh:589`.
-
-**Done when** no code path targets the vendor root, `./tests/run-all.sh` is green, and a card plus an online provision both pass on `.188`.
+The vendor root is retired (tag `last-vendor-rootfs`). **Done when**, on `.188`: `provision.sh --status` reads clean;
+`provision.sh 192.168.50.188` leaves `backups/<host>-*.tar.gz`, cleans nothing and reboots; afterwards
+`/opt/roomwizard/disable-steelcase.sh`, `/var/watchdog_test` and `/etc/default/syslogd` are absent, `sshd_config` equals
+the overlay's (no kex warning), `netstat -lnu` shows no `:514`, the `rcS.d`/`rc5.d` links match `rootfs/CLAUDE.md`,
+`roomwizard-app status` names `app_launcher`, and `fbset` plus a screenshot show the launcher at 32 bpp. Then the same
+checks on a card built by `rootfs/make-card-image.sh --bundle` — re-run `rootfs/fetch-card-parts.sh` first, because
+older `state.tar` files are refused. ⚠️ Before the online run, diff `.188`'s `sshd_config` against the overlay copy: an
+earlier provision may have written `PasswordAuthentication yes`.
 
 ### F140. A generic "flash and go" base card image — open, operator wish 2026-10-09, not designed
 
@@ -429,15 +383,6 @@ Office Runner's TRAINING toggle in `platformer.c` uses) is not script-reachable 
 `/dev/uinput` — so a mode with no CLI entry has no first-screen SSH check either; it makes a deep state
 cheaper for a human, not automatable.
 
-### C12. Offline commissioning has never been run against a real disk — open
-
-`tests/commission_offline_test.sh` contains no `--dry-run`, so each of its cases already **is** a real
-`--base` pass — the clean, `card-prep.sh`, the provision plan, the install and the verify all run for
-real on a fabricated card tree. `--base` cannot locate p1 by construction, so the p1 gate, backup,
-patch, verify and rollback are the one unexercised half, and reaching them needs a physical card in a
-reader. ⚠️ **Not feasible on this dev host — it has no card reader, and the USB-reader route is closed
-to us.** The entry stays open as a known gap in the delivery path, not as work anybody can pick up here. (`rootfs/make-card-image.sh --bundle` now runs the install against a real image's partitions through loop mounts, but it is `--base`, so p1 stays unexercised.)
-
 ### C15. The bare plan-ID scan collides with function-key names — open, measured 2026-09-03
 
 `bare_sites()` in `tests/doc_check.sh` matches an `F`-numbered ID in parentheses or after `see`/`is`/
@@ -457,8 +402,7 @@ deletes it, or a note records that it is ignored.
 ### D17. `LICENSE.md` overhaul — open, operator ruling 2026-09-29
 
 Our GPL kernel and modules ship (source-offer duty), the glibc row names only `gnueabihf`, and the obligation column is
-unreviewed; Buildroot's `legal-info` gives the package manifest. The offline path (`commission-offline.sh --base`) would need
-its clean sweeps, `rw_is_rootfs` markers and stdin prompts dealt with first. **Done when** every shipped package has a
+unreviewed; Buildroot's `legal-info` gives the package manifest. **Done when** every shipped package has a
 licence row and the source-offer duty is stated.
 
 ---
