@@ -29,14 +29,12 @@
 #
 # ── Where ScummVM's saves go ────────────────────────────────────────────────
 #
-# Our backend constructs a bare DefaultSaveFileManager (backend-files/roomwizard.cpp)
-# and registers no default "savepath"; scummvm.ini on the units sets none either.
-# DefaultSaveFileManager::getSavePath() then returns "", which resolves against the
-# process's CURRENT DIRECTORY: "/" when booted (the init script does not cd and
-# app_launcher does not chdir), /home/root when started from an SSH shell. That is
-# why a save, kq2.000, turned up loose in /home/root. Saves have no fixed name
-# (<target>.NNN for AGI, <target>.sNN for SCUMM), so the backup takes every regular
-# file directly in those two directories (RW_STATE_LOOSE_DIRS).
+# Our backend's default savepath is home/root/data/scummvm-saves (p2; backend-files/
+# roomwizard.cpp). Binaries built before it had none, and a save then landed in the
+# process's CURRENT DIRECTORY: "/" when booted, /home/root from an SSH shell — which
+# is why kq2.000 turned up loose in /home/root. Saves have no fixed name (<target>.NNN
+# for AGI, <target>.sNN for SCUMM), so the backup also takes every regular file
+# directly in those two directories (RW_STATE_LOOSE_DIRS), for units with old saves.
 #
 # ── The deny check is an ALLOWLIST, plus a hard list ────────────────────────
 #
@@ -74,6 +72,7 @@ RW_STATE_BACKUP_ONLY=(
     opt/games/scummvm.ini
     'home/root/data/*.hig'
     home/root/data/ssh
+    home/root/data/scummvm-saves
 )
 
 # Directories whose loose REGULAR files are backed up (ScummVM saves; see above).

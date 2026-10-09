@@ -3,8 +3,8 @@
 The sourced-not-executed shell libraries. Loaded when you work in `lib/`.
 
 These live at the top level rather than under `commissioning/` because the component build scripts
-source `rw-bundle.sh` on the *write* side while the commissioner reads it, and all seven SSH-using
-scripts source `rw-ssh.sh`. Device facts are in `SYSTEM_ANALYSIS.md`; open work in
+source `rw-bundle.sh` on the *write* side while the commissioner reads it, and every SSH-using script sources
+`rw-ssh.sh`. Device facts are in `SYSTEM_ANALYSIS.md`; open work in
 `IMPROVEMENT_PLAN.md`; how to author the two rules files these libraries parse is in
 `device-files/CLAUDE.md`.
 
@@ -17,12 +17,13 @@ scripts source `rw-ssh.sh`. Device facts are in `SYSTEM_ANALYSIS.md`; open work 
 | `rw-release.sh` | fetch a published release — **the one library here that opens a socket** |
 | `rw-ssh.sh` | the one answer to "can I reach this device" |
 | `rw-sshd.sh` | the guard around an `sshd_config` change: key proof, offline check, `sshd -t`, self-undoing reload |
+| `rw-state.sh` | the per-unit state lists: what a card image may carry (allowlist plus hard deny) and the BACKUP set; `rootfs/` and `commissioning/backup.sh`/`restore.sh` source it, `tests/rw_state_test.sh` covers it |
 
 ## One SSH gate, and BatchMode stays on it
 
-**`rw-ssh.sh` is the only implementation of "can I reach this device".** Nine scripts source it —
-`commissioning/provision.sh`, `commissioning/card-prep.sh`, `deploy-all.sh`, `roomwizard.sh` and all
-five `*/build-and-deploy.sh` — and ten call sites go through `rw_ssh_gate`. They each keep their own
+**`rw-ssh.sh` is the only implementation of "can I reach this device".** The scripts that source it
+are listed by `grep -rln 'rw-ssh.sh' -- commissioning deploy-all.sh roomwizard.sh */build-and-deploy.sh`
+and every call goes through `rw_ssh_gate`. They each keep their own
 gate *call*, because a component script must run standalone; what they must not keep is their own
 probe. There used to be eight, already drifted into three wordings of one message.
 
@@ -227,6 +228,6 @@ over a path. It installs nothing and never touches a device. `rw-bundle.sh` stay
 ## Regressions
 
 Host-only, no device, no root: `tests/rw_ssh_test.sh`, `tests/rw_provision_test.sh`,
-`tests/rw_clean_test.sh`, `tests/rw_identify_test.sh`, plus the
+`tests/rw_clean_test.sh`, `tests/rw_identify_test.sh`, `tests/rw_state_test.sh`, plus the
 `tests/measure_*_sabotage.sh` harnesses that re-measure them. What each one can and cannot see, and
 the traps in extending them, are in `tests/CLAUDE.md`.

@@ -649,6 +649,11 @@ ssh root@<ip> reboot
 
 ## Backups
 
+**Before an update or a reflash, back the unit up; after it, restore:**
+`./commissioning/backup.sh <ip>` then, once the unit is back, `./commissioning/restore.sh <ip> <archive>` (`--dry-run` lists what
+it would write). The archive holds secrets (VNC password, SSH host keys): keep it private. `rootfs/make-card-image.sh` refuses a
+`state.tar` made before the image allowlist existed; re-run `rootfs/fetch-card-parts.sh` to make a current one.
+
 Phase 1 creates backups on the SD card:
 - `/etc/shadow.backup`
 - `/etc/ssh/sshd_config.backup`

@@ -168,6 +168,10 @@ asks once whether the card is backed up, before the first write. The opt-outs:
 The clean is not undoable **on the device**: the 472 MB factory-restore payload goes with the rest of the
 vendor stack, and recovery is a card reflash.
 
+Before an update or a reflash, `./commissioning/backup.sh <ip> [<out.tar.gz>]` copies the unit's per-unit state (host keys,
+highscores, VNC config, ScummVM config and saves, calibration) to `backups/`; it is read-only on the unit and the archive holds
+secrets. After, `./commissioning/restore.sh <ip> <archive> [--dry-run]` stops the app, writes it back and starts the app.
+
 ## Architecture
 
 ```
@@ -180,6 +184,7 @@ roomwizard/
 │   ├── provision.sh             # Phase 2: SSH system setup (one-time)
 │   ├── commission-offline.sh    # Phases 1-3 in one offline pass
 │   ├── set-hostname.sh          # /etc/hostname + /etc/hosts + dhclient.conf
+│   ├── backup.sh, restore.sh    # A unit's per-unit state to/from a host tarball (read-only / stop-extract-start)
 │   └── clone-to-32gb.sh         # Clone a card onto a larger one
 ├── lib/                         # Sourced, never executed
 │   ├── rw-identify.sh           # Which card, which partition, by content/position
