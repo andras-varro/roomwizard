@@ -330,13 +330,15 @@ backup before it changes anything. Scope, from a reading of the tree (re-grep be
 No per-unit state: flash, insert, and it boots and works. First boot picks a random host name (or asks a few optional questions).
 **The published image carries no `authorized_keys` at all** (operator, 2026-10-09: a builder's key in a downloadable image is a
 login to every unit flashed from it); the image build refuses one, like the `lib/rw-state.sh` deny check. `sshd` is key-only, so
-the user adds their own key after flashing — a key file on p1 imported and deleted at first boot is one option (an exception to
-the p1 five-file rule, not yet agreed). While `/etc/touch_calibration.conf` is
+the image is closed out of the box (root's password is locked: no default password exists). Operator's design, 2026-10-09: a
+Control Panel SSH page — mode Off / Key only / Key + password / Password only, "set password" on the on-screen keyboard (required
+before any password mode), and the unit's IP and host name; README then explains: set a password, pick Key + password,
+`ssh-copy-id`, optionally back to Key only. While `/etc/touch_calibration.conf` is
 absent the launcher shows a "not calibrated" status text on top. The per-unit image (a `state.tar` from one unit) stays as the second
 package kind. Needs: `rootfs/make-card-image.sh` accepting no `state.tar` (today `rootfs/fetch-card-parts.sh` makes it from a unit);
 a first-boot init script for the host name (`commissioning/set-hostname.sh` has the `/etc/hosts` logic; host keys already generate on
 first boot on p2); the banner in `native_apps/app_launcher/app_launcher.c`. **Done when** a card built with no unit state boots on a
-unit, shows the banner, holds no SSH key until the user adds one, and the user's key then works.
+unit, shows the banner, refuses SSH until the panel's SSH page opens it, and the README's key procedure then works.
 
 ### F106. Support BeagleBone Black boards — open, operator idea 2026-10-01, future
 
