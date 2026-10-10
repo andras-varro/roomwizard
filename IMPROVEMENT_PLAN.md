@@ -359,12 +359,27 @@ rest committed as bare PPMs with no generator — and collected by the `*//*.ppm
 the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then delete the three old scripts.
 **Done when** the launcher grid on the panel reads as the same family as the Control Panel's. Operator 2026-10-07 also wants a better icon for the Control Panel's System page, done with this rework: its page has `.icon = NULL` (`system_page.c:563`) and `ICONS` in `gen_cp_icons.py:178` has no System entry.
 
-### F117. Rename the project away from "RoomWizard" — open, operator idea 2026-10-02, future
+### F117. Rename the project to **Arca** — open, name chosen by the operator 2026-10-10, not started
 
-"RoomWizard" is likely a Steelcase trademark **[unchecked]**. The operator's idea is "Lizard" (Linux + Wizard): not
-tied to rooms, since a BeagleBone target has nothing to do with rooms, and it fits a Steelcase-free distro/rootfs
-(`rootfs/`) and the BeagleBone port (F106). Candidate names are open. **Done when** a name is chosen and the tree, docs,
-device paths and `LICENSE.md` follow it.
+"RoomWizard" is likely a Steelcase trademark **[unchecked]**, so it leaves the code, identifiers, paths and product name.
+One descriptive README line ("runs on Steelcase RoomWizard hardware") may stay, so people can find the project; that is
+general understanding of descriptive use, not legal advice. **Name: Arca** (Latin for chest or box, and it sounds like
+"arcade"), full form **"Arca Linux"**. **Never "ArcaOS"**: that name belongs to Arca Noae's active OS/2-derived system
+(arcanoae.com). **Logo: a cuckoo**, because it moved into Steelcase's nest and pushed the original out. Draw our own bird,
+not one like the dead Cuckoo Sandbox's (`github.com/cuckoosandbox`, archived 2021). Host name and prompt: `arca-<per-unit part>`
+replaces `rw20`, and it fits F140's random first-boot name. The distro name goes in `/etc/os-release` and the boot banner,
+not in `PS1`.
+
+Collision check 2026-10-10 (shallow, WebFetch only, no search engine): DistroWatch lists no Arca, and GitHub shows no Arca
+distro. Outside IT the word is crowded (NYSE Arca and others), which is why the full form is used on the website and repo.
+**Still open before publishing:** a manual "ARCA" trademark search in classes 9 and 42 (USPTO, EUIPO, WIPO Brand DB), and
+package-name checks (AUR, Debian, PyPI, npm, Docker Hub) once the `arca-*` identifiers are picked.
+
+Scope: the device paths (`/opt/roomwizard/`, `/var/log/roomwizard/`, the `roomwizard-app` init script) need a
+migration step for units already deployed. The identifiers in code (`lib/rw-*.sh`, `RW_*`, `rw_*` tests, F144's board
+name), the scripts (`roomwizard.sh`), the docs and `LICENSE.md` follow separately. **Done when** the trademark search is
+recorded, `grep -ri roomwizard` outside that README line and `LICENSE.md`'s provenance rows finds nothing, and a migrated
+unit boots under the new paths.
 
 ## Structural and cleanup
 
