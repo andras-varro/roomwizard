@@ -268,8 +268,9 @@ No per-unit state: flash, insert, and it boots and works. **Every component is o
 random host name and asks nothing (operator: safe defaults; the name need not say "rw"). **The published image carries no
 `authorized_keys` at all** (operator: a builder's key in a downloadable image is a login to every unit flashed from it); the
 image build refuses one, like the `lib/rw-state.sh` deny check. `sshd` is key-only and root's password is locked, so the
-image is closed out of the box. **It cannot publish the vendor's p1 files** (`SYSTEM_ANALYSIS.md` §4.2), so it waits for our
-own SPL + U-Boot, or ships without them and the operator copies them from the unit's original card.
+image is closed out of the box. **It cannot publish the vendor's p1 files** (`SYSTEM_ANALYSIS.md` §4.2). Operator ruling,
+2026-10-09: build and test it now with the vendor p1 from our own units, never published; once our own SPL + U-Boot
+replaces those files, the image is published.
 
 Control Panel SSH page (operator, 2026-10-09). It **replaces** the System page's PASSWORD+KEY / KEY ONLY toggle
 (`native_apps/control_panel/system_page.c`, `sys_settings.c`): **Off** stops `sshd` and keeps it from starting at boot;
