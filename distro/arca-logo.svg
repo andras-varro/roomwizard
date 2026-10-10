@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Arca logo, draft 2: a cuckoo calling out of a clock box (the chest it moved into). -->
+  <defs>
+    <clipPath id="tail">
+      <path d="M -56 -10 L -204 22 L -196 52 L -50 20 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- the box: a cuckoo-clock house -->
+  <path d="M 256 42 L 462 206 L 432 206 L 432 466 L 80 466 L 80 206 L 50 206 Z"
+        fill="#353A50" stroke="#353A50" stroke-width="24" stroke-linejoin="round"/>
+  <path d="M 256 42 L 462 206 M 256 42 L 50 206" stroke="#C85A1E" stroke-width="18"
+        stroke-linecap="round" fill="none"/>
+
+  <!-- the door opening, and the door swung open on its left hinge -->
+  <path d="M 140 430 L 140 290 A 90 90 0 0 1 320 290 L 320 430 Z" fill="#12131A"/>
+  <path d="M 140 290 L 84 318 L 84 446 L 140 430 Z" fill="#C85A1E"
+        stroke="#C85A1E" stroke-width="8" stroke-linejoin="round"/>
+
+  <!-- the perch -->
+  <rect x="236" y="392" width="190" height="14" rx="7" fill="#C85A1E"/>
+
+  <!-- feet -->
+  <path d="M 314 360 L 310 394 M 334 356 L 334 394" stroke="#F2B233" stroke-width="7"
+        stroke-linecap="round"/>
+
+  <!-- the cuckoo: slim, long-tailed, small head, short beak, tilted up to call -->
+  <g transform="translate(300 330) rotate(-18)">
+    <!-- tail: dark with white bars, the one detail kept from the real bird -->
+    <path d="M -56 -10 L -204 22 L -196 52 L -50 20 Z" fill="#5B5F72"/>
+    <g clip-path="url(#tail)" stroke="#FFFFFF" stroke-width="9">
+      <line x1="-100" y1="-4" x2="-92" y2="34"/>
+      <line x1="-129" y1="2"  x2="-121" y2="40"/>
+      <line x1="-158" y1="8"  x2="-150" y2="46"/>
+      <line x1="-187" y1="15" x2="-179" y2="53"/>
+    </g>
+    <!-- body and head -->
+    <ellipse cx="0" cy="0" rx="80" ry="34" fill="#D5D8E2"/>
+    <circle cx="74" cy="-40" r="28" fill="#D5D8E2"/>
+    <path d="M 36 -24 L 56 -62 L 92 -22 Z" fill="#D5D8E2"/>
+    <!-- belly bars -->
+    <path d="M -6 18 q 18 7 36 1 M 8 28 q 16 5 30 -1 M 34 10 q 14 5 28 -2"
+          stroke="#9A9EB0" stroke-width="5" stroke-linecap="round" fill="none"/>
+    <!-- wing -->
+    <path d="M -76 -4 Q 0 -44 66 -18 Q 10 12 -84 10 Z" fill="#9A9EB0"/>
+    <!-- open beak, short and slightly down-curved, calling -->
+    <path d="M 96 -54 Q 116 -64 132 -60 Q 114 -54 98 -44 Z" fill="#F2B233"/>
+    <path d="M 98 -38 Q 114 -38 128 -32 Q 112 -30 95 -31 Z" fill="#F2B233"/>
+    <!-- eye with its yellow ring -->
+    <circle cx="80" cy="-46" r="8" fill="#F2B233"/>
+    <circle cx="80" cy="-46" r="4.5" fill="#12131A"/>
+  </g>
+</svg>

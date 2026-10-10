@@ -224,6 +224,7 @@ deployed on** — panel and touch working.
 | Boot messages on the panel | append `console=tty0` **last** in the same `CONFIG_CMDLINE_EXTEND`, so the panel is `/dev/console` (operator's choice) | ⚠️ **Resolve the hazard first — measured by code search:** no app sets `KD_GRAPHICS` or touches the VT, and apps `mmap` `/dev/fb0` directly, so once `tty0` is a console any printk at the default console loglevel — the known USB printk loop, say — draws over a running game. **The fix is `KDSETMODE KD_GRAPHICS` in `fb_init()` in `native_apps/common/framebuffer.c`** (operator agreed; every shipped fb program goes through it, so redeploy all three components): open `/dev/tty0` explicitly (apps have no controlling tty), set it unconditionally on every init so a crashed or `kill -9`ed predecessor is repaired, and do **not** restore `KD_TEXT` in `fb_close()` — the launcher closes and re-inits around each child, so that would flash the console; restore it only in the init script's `stop`, via a small helper. A `loglevel=` stays as a second line of defence. The serial getty on `ttyO1` comes from `inittab`, so it is unaffected **[inferred]** |
 | Scheduling | `PREEMPT`, `HZ=250` | config-only, and never measured to limit anything — include it, but do not justify the image with it |
 | USB gadget mode | `CONFIG_USB_GADGET` | config-only: the micro-B socket is already the one physical port |
+| Boot logo | the Arca cuckoo replaces Tux: render `distro/arca-logo.svg` to a ≤224-colour plain PPM and have a `kernel/patches/` entry replace `drivers/video/logo/logo_linux_clut224.ppm` (`LOGO_LINUX_CLUT224` is already enabled in `kernel/config-changes`) | 4.14 draws the logo at the top-left with no centring (`drivers/video/fbdev/core/fbmem.c:503`, `image.dx = 0`), so the bezel can cover its corner. Pad the PPM: a margin, or a full 800×480 frame with the logo centred. The full frame costs ~375 KB of image [inferred: one byte per pixel of `clut224` data]. Earlier than the kernel needs our own U-Boot (F144) |
 
 **The order to do it in, cheapest first.**
 
@@ -365,8 +366,12 @@ the style of `gen_cp_icons.py` for all ten apps, so every PPM has a source, then
 One descriptive README line ("runs on Steelcase RoomWizard hardware") may stay, so people can find the project; that is
 general understanding of descriptive use, not legal advice. **Name: Arca** (Latin for chest or box, and it sounds like
 "arcade"), full form **"Arca Linux"**. **Never "ArcaOS"**: that name belongs to Arca Noae's active OS/2-derived system
-(arcanoae.com). **Logo: a cuckoo**, because it moved into Steelcase's nest and pushed the original out. Draw our own bird,
-not one like the dead Cuckoo Sandbox's (`github.com/cuckoosandbox`, archived 2021). Host name and prompt: `arca-<per-unit part>`
+(arcanoae.com). **Logo: a cuckoo**, because it moved into Steelcase's nest and pushed the original out. It is our own bird,
+nothing like the dead Cuckoo Sandbox's (`github.com/cuckoosandbox`, archived 2021): `distro/arca-logo.svg`, a
+cuckoo calling out of a clock-house. The operator accepted it as the working logo on 2026-10-10, open to change.
+`distro/render.sh` (WSL, `rsvg-convert`) renders it at 512, 96, 32 and 16 px into the untracked `distro/preview/`. It
+reads at 32 px; at 16 px only the house is left, so a favicon needs a simpler variant. On the boot screen it is
+F101's boot-logo row. Host name and prompt: `arca-<per-unit part>`
 replaces `rw20`, and it fits F140's random first-boot name. The distro name goes in `/etc/os-release` and the boot banner,
 not in `PS1`.
 

@@ -566,3 +566,6 @@ prio.lst
 # commissioning/backup.sh output: per-unit state of a unit, INCLUDING SECRETS (VNC
 # password, SSH host keys). Never committed.
 backups/
+
+# Logo preview renders, rebuilt by distro/render.sh
+distro/preview/
