@@ -144,19 +144,14 @@ differ in more than the device, so the link is unproven. It needs a joint sessio
 (reading `in_voltage6_input` after each swap, and once with the port empty) and the table says which condition, if any, moves it.
 
 
-### B58. The monitor service (`rwmond`) is not running, so the Control Panel monitor page has no history — open, confirmed 2026-10-09 (operator report plus one `ps`)
-
-The operator reports the monitor page has no history. Measured on `.188` on our own root after `provision.sh --no-clean`
-and a reboot: `rwmond` (`/etc/init.d/rwmond`, link `S95rwmond` present) is absent from `ps`. The operator says it
-was already not running on the original vendor-root image, so this is not specific to our root. Cause not investigated: start
-with whether the init script runs at all, then whether `rwmond` starts and exits. **Done when** `rwmond` is in `ps` after a
-boot and the monitor page shows history.
-
 ### B63. Every reflash changes the host keys, and WSL keeps its own `known_hosts` — open, confirmed 2026-10-09
 
 `deploy-all.sh` run in WSL fails "REMOTE HOST IDENTIFICATION HAS CHANGED" after a reflash although Git Bash's entry was
-already removed; `ssh-keygen -R <ip>` is needed in **both** shells. Fix direction to evaluate: carry the unit's host keys
-forward in `state.tar` (the per-unit identity ruling allows it). **Done when** a reflash of a known unit needs no
+already removed; `ssh-keygen -R <ip>` is needed in **both** shells (measured again on the 2026-10-09 `--bundle` card).
+Cause, read in code: the keys live on p2 (`/home/root/data/ssh`, `overlay/etc/init.d/sshd`), which `lib/rw-state.sh`
+lists as backup-only and `RW_STATE_NEVER_IN_IMAGE` excludes, and an image creates p2 empty, so `sshd` generates new
+keys at first boot. Carrying them in `state.tar` needs that exclusion narrowed for `data/ssh` on a per-unit card (the
+per-unit identity ruling allows it); a generic image has no keys to carry. **Done when** a reflash of a known unit needs no
 `known_hosts` edit in either shell, or the scripts say which shell needs it.
 
 ## Features
@@ -267,17 +262,6 @@ a yes to both.
 The operator wants root not to be the default user on our root filesystem. Open question to the operator: login only
 (a non-root SSH account, apps stay root), or apps run as a non-root user too (which touches `/dev/fb0`, `/dev/input`,
 `/dev/dsp`, `/dev/watchdog` and the `roomwizard-app` respawn loop). **Done when** the operator has answered and the chosen shape is built.
-
-### F139. Provisioning supports our own root filesystem only — open, code and docs done 2026-10-09, device check left
-
-The vendor root is retired (tag `last-vendor-rootfs`). **Done when**, on `.188`: `provision.sh --status` reads clean;
-`provision.sh 192.168.50.188` leaves `backups/<host>-*.tar.gz`, cleans nothing and reboots; afterwards
-`/opt/roomwizard/disable-steelcase.sh`, `/var/watchdog_test` and `/etc/default/syslogd` are absent, `sshd_config` equals
-the overlay's (no kex warning), `netstat -lnu` shows no `:514`, the `rcS.d`/`rc5.d` links match `rootfs/CLAUDE.md`,
-`roomwizard-app status` names `app_launcher`, and `fbset` plus a screenshot show the launcher at 32 bpp. Then the same
-checks on a card built by `rootfs/make-card-image.sh --bundle` — re-run `rootfs/fetch-card-parts.sh` first, because
-older `state.tar` files are refused. ⚠️ Before the online run, diff `.188`'s `sshd_config` against the overlay copy: an
-earlier provision may have written `PasswordAuthentication yes`.
 
 ### F140. A generic "flash and go" base card image — open, operator wish 2026-10-09, not designed
 

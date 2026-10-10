@@ -1593,7 +1593,7 @@ OMAP3 ROM
        └─> redirects boot to SD
  └─> SD /dev/mmcblk0p1  (FAT32, bootable, 70.6 MB)   <-- everything lives here
        mlo (50,336 B)  ->  u-boot.bin (467,696 B)
- └─> U-Boot 2015.07 (Dec 13 2021), board=rw20, soc=omap3
+ └─> U-Boot 2015.07 (build date varies per unit, §4.2), board=rw20, soc=omap3
        bootcmd: mmc dev 0; mmc rescan;
                 cb_getinfo 0x82000000        <-- custom command, READS ctrlblock.bin from FAT
                 if cb_boot_mode == "system":    run loadsysimage; run sysboot
@@ -1608,11 +1608,28 @@ OMAP3 ROM
 
 | Partition | Type | Size | Mount | Contents |
 |---|---|---|---|---|
-| p1 | FAT32 | 70.6 MB | `/var/volatile/boot` | `mlo`, `u-boot.bin`, `uImage-system`, `ctrlblock.bin`. **The DTB is inside `uImage-system`** — no separate `.dtb` file exists. |
+| p1 | FAT32 | 70.6 MB | `/var/volatile/boot` | Boot files, listed below the table. **The DTB is inside `uImage-system`** — no separate `.dtb` file exists. |
 | p2 | ext3 | 256 MB | `/home/root/data` | Application data |
 | p3 | ext3 | 250 MB | `/home/root/log` | System logs |
 | p5 | ext3 | 1500 MB | `/home/root/backup` | Firmware backup, incl. `factory/` upgrade images + `.md5` files; on our own root it stays in the table, unused and never mounted |
 | p6 | ext3 | ~981 MB | `/` | Root filesystem |
+
+**The vendor's p1, file by file** — md5 and `grep -a 'U-Boot'` on the p1 of four units, 2026-10-09:
+
+| File | What it is | Per unit? | On our card |
+|---|---|---|---|
+| `mlo` (FAT is case-blind: `MLO` is the same entry) | U-Boot SPL 2015.07: loaded from FAT p1 by the NAND redirector, programs SDRAM, loads `u-boot.bin` | **differs**: three builds, 2017-08-06 (53,260 B), 2021-04-06 and 2021-12-13 (50,336 B); any one boots on any unit (operator, cross-booted cards) | kept |
+| `u-boot.bin` | U-Boot 2015.07, board `rw20`, with the custom `cb_getinfo` (§4.5) | same build as that unit's `mlo` | kept |
+| `u-boot-sd.bin` | **byte-identical to `u-boot.bin`** on all four; the chain above loads `u-boot.bin` | — | kept |
+| `ctrlblock.bin` | the 28-byte control block, §4.5 | **identical** on all four (md5 `e9ec9adb…`) | kept |
+| `uImage-system` | the kernel, DTB appended | — | ours (`kernel/README.md`) |
+| `uImage-bootstrap`, `ramfilesys.gz` | the recovery/upgrade kernel and ramdisk that `bootstrap` mode boots | — | deleted |
+
+Our card keeps the first four because nothing else boots this board yet, and deletes the bootstrap pair
+because we never set `bootstrap` mode (`P1KEEP` in `rootfs/make-card-image.sh`). ⚠️ **Those four files
+cannot go into a published image:** U-Boot is GPL-2.0, these builds are modified, and no source is
+published, so a redistributor cannot offer the corresponding source. A card therefore takes them from
+the unit's own card (`rootfs/fetch-card-parts.sh`).
 
 > **Gotcha — p6 is ext3, mounted by the ext4 driver.** U-Boot passes `rootfstype=ext4` and the ext4
 > driver happily mounts the ext3 filesystem. **Do not reformat it as ext4.** The converse also fails: `mke2fs -t ext3 -O none` makes a journal-less (ext2) filesystem that the kernel refuses as ext3 with `EINVAL`.
