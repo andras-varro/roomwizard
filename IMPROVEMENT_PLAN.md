@@ -305,8 +305,12 @@ the register dump): `~/.claude/plans/own-p1-uboot-plan.md`. Biggest risk: pinmux
 makes — the kernel boots with a dead panel, touch or USB; the plan replays the live pin configuration, calls
 `twl4030_power_init()` and requires an empty register-dump diff after boot. **The first card test needs the `P4` serial
 console** (a dead SPL is otherwise silent). Also needed for a publishable card: our own DTS, since `uImage-system` appends a
-DTB edited from the vendor's. Open (operator): which unit has `P4` fitted and an RS-232 (not TTL) adapter; a read-only
-`devmem` dump on the unit with the 2017 build; the spare card; `bootdelay`; the fallback kernel name. **Done when** a card
+DTB edited from the vendor's. Operator answers, 2026-10-10: `P4` is fitted on `.188`; the adapter is a 3.3 V TTL↔USB
+plus a MAX3232 breakout (P4 → MAX3232 → TTL↔USB), not yet wired; the first test uses the 8 GB card on `.188`; `bootdelay=1`
+stays (a window to stop at the serial prompt); the prompt is `arca #`, never `rw20 #`; the fallback kernel is
+`uImage-fallback`. No `devmem` dump of a 2017-build unit: which unit runs it is unknown, and its original card has no SSH.
+A U-Boot splash of the Arca logo is possible (`drivers/video/omap3_dss.c` is in v2026.10, but no board uses it) and comes
+after F101's kernel boot-logo row. **Done when** a card
 with our own `MLO` + `u-boot.bin` boots our kernel on two units with the register-dump diff empty, and F140's image
 carries them.
 
