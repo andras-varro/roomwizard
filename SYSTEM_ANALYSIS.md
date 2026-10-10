@@ -1604,6 +1604,15 @@ OMAP3 ROM
  └─> Linux 4.14.52, root=/dev/mmcblk0p6 (ext4 driver, ext3 filesystem)
 ```
 
+**The vendor U-Boot is a Gumstix Overo derivative** (its strings carry Overo's "Unrecognized expansion board" and
+`rw20-storm`). **The SDRAM setup it leaves behind**, read with `devmem` on `.188` 2026-10-09 and found as the same words in one
+table in all three vendor SPLs: 256 MB on CS0 only (`SDRC_MCFG_0` `0x03588099`, CS1 disabled), `ACTIM_CTRLA_0`
+`0x7AE1B4C6`, `ACTIM_CTRLB_0` `0x00024217`, `RFR_CTRL_0` `0x0005E601`, `MR_0` `0x32`, `CS_CFG` `0x2`, `SHARING` `0x100`,
+`DLLA_CTRL` `0xA`. Clocks: 13 MHz sys_clk, core 332 MHz, L3 166 MHz, MPU 600 MHz. The refresh word is the 200 MHz table's,
+so at 166 MHz refresh runs about every 9.1 µs [inferred from the decode]. **The NAND redirector does not load `mlo` itself**
+[inferred, strongly: its strings and `PRM_RSTST` `0x2`, a software reset]: it sets a software boot configuration and
+resets, and the ROM loads `MLO` from FAT p1 — so a bad `MLO` is undone by swapping the card.
+
 ### 4.2 Partitions
 
 | Partition | Type | Size | Mount | Contents |

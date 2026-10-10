@@ -294,6 +294,21 @@ One line of status: messages such as "not calibrated", date/time, CPU, refreshed
 app or page that fixes it (calibration for "not calibrated"). Not designed: which apps show it, and what it costs per frame
 on the software renderer. **Done when** the launcher shows it and a tap on a message opens the right page.
 
+### F144. Our own SPL + U-Boot on p1, so a card carries nothing from Steelcase — open, operator wish 2026-10-09, planned
+
+Replaces the vendor `mlo` and `u-boot.bin` (`SYSTEM_ANALYSIS.md` §4.2: modified GPL, no source, cannot be published) with
+mainline U-Boot built here: a new board `rw20` modelled on `igep00x0`/`devkit8000`, SDRC programmed with the live values
+(§4.1), a boot script that loads `uImage-system` from FAT p1 with the vendor's bootargs; `ctrlblock.bin`, the duplicate U-Boot copy and
+the bootstrap pair are dropped. The NAND redirector is never touched, and a bad `MLO` costs a card swap. Plan (10 steps, risks,
+the register dump): `~/.claude/plans/own-p1-uboot-plan.md`. Biggest risk: pinmux or PMIC settings only the vendor bootloader
+makes — the kernel boots with a dead panel, touch or USB; the plan replays the live pin configuration, calls
+`twl4030_power_init()` and requires an empty register-dump diff after boot. **The first card test needs the `P4` serial
+console** (a dead SPL is otherwise silent). Also needed for a publishable card: our own DTS, since `uImage-system` appends a
+DTB edited from the vendor's. Open (operator): which unit has `P4` fitted and an RS-232 (not TTL) adapter; a read-only
+`devmem` dump on the unit with the 2017 build; the spare card; `bootdelay`; the fallback kernel name. **Done when** a card
+with our own `MLO` + `u-boot.bin` boots our kernel on two units with the register-dump diff empty, and F140's image
+carries them.
+
 ### F141. A log viewer page in the Control Panel — open, operator request 2026-10-09, future
 
 **Read-only, beside the Monitor page** (`native_apps/control_panel/monitor_page.c` is the shape to copy). One tab each for
