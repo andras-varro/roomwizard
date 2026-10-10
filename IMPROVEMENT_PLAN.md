@@ -143,7 +143,6 @@ residues:
 differ in more than the device, so the link is unproven. It needs a joint session (operator confirmed 2026-10-07): the operator replugs while ch6 is read. **Done when** an operator swaps pad and dongle back and forth on the port
 (reading `in_voltage6_input` after each swap, and once with the port empty) and the table says which condition, if any, moves it.
 
-
 ### B63. Every reflash changes the host keys, and WSL keeps its own `known_hosts` — open, confirmed 2026-10-09
 
 `deploy-all.sh` run in WSL fails "REMOTE HOST IDENTIFICATION HAS CHANGED" after a reflash although Git Bash's entry was
@@ -263,21 +262,36 @@ The operator wants root not to be the default user on our root filesystem. Open 
 (a non-root SSH account, apps stay root), or apps run as a non-root user too (which touches `/dev/fb0`, `/dev/input`,
 `/dev/dsp`, `/dev/watchdog` and the `roomwizard-app` respawn loop). **Done when** the operator has answered and the chosen shape is built.
 
-### F140. A generic "flash and go" base card image — open, operator wish 2026-10-09, not designed
+### F140. A generic "flash and go" base card image — open, operator wish 2026-10-09, design settled 2026-10-09
 
-No per-unit state: flash, insert, and it boots and works. First boot picks a random host name (or asks a few optional questions).
-**The published image carries no `authorized_keys` at all** (operator, 2026-10-09: a builder's key in a downloadable image is a
-login to every unit flashed from it); the image build refuses one, like the `lib/rw-state.sh` deny check. `sshd` is key-only, so
-the image is closed out of the box (root's password is locked: no default password exists). Operator's design, 2026-10-09: a
-Control Panel SSH page — mode Off / Key only / Key + password / Password only, "set password" on the on-screen keyboard (required
-before any password mode), the unit's IP, and the host name — editable there too (replaces the random first-boot name; same
-`/etc/hostname` + `/etc/hosts` logic as `commissioning/set-hostname.sh`, then mDNS re-announces); README then explains: set a password, pick Key + password,
-`ssh-copy-id`, optionally back to Key only. While `/etc/touch_calibration.conf` is
-absent the launcher shows a "not calibrated" status text on top. The per-unit image (a `state.tar` from one unit) stays as the second
-package kind. Needs: `rootfs/make-card-image.sh` accepting no `state.tar` (today `rootfs/fetch-card-parts.sh` makes it from a unit);
-a first-boot init script for the host name (`commissioning/set-hostname.sh` has the `/etc/hosts` logic; host keys already generate on
-first boot on p2); the banner in `native_apps/app_launcher/app_launcher.c`. **Done when** a card built with no unit state boots on a
-unit, shows the banner, refuses SSH until the panel's SSH page opens it, and the README's key procedure then works.
+No per-unit state: flash, insert, and it boots and works. **Every component is on it** (`--bundle`). First boot picks a
+random host name and asks nothing (operator: safe defaults; the name need not say "rw"). **The published image carries no
+`authorized_keys` at all** (operator: a builder's key in a downloadable image is a login to every unit flashed from it); the
+image build refuses one, like the `lib/rw-state.sh` deny check. `sshd` is key-only and root's password is locked, so the
+image is closed out of the box. **It cannot publish the vendor's p1 files** (`SYSTEM_ANALYSIS.md` §4.2), so it waits for our
+own SPL + U-Boot, or ships without them and the operator copies them from the unit's original card.
+
+Control Panel SSH page (operator, 2026-10-09). It **replaces** the System page's PASSWORD+KEY / KEY ONLY toggle
+(`native_apps/control_panel/system_page.c`, `sys_settings.c`): **Off** stops `sshd` and keeps it from starting at boot;
+**Key only**; **Key + password** — a password mode never turns key login off. A separate **root login** setting is needed:
+the overlay `sshd_config` has `PermitRootLogin prohibit-password` (asserted by `rootfs/check-rootfs.sh`), so today's toggle,
+which edits only `PasswordAuthentication`, cannot let root in by password [inferred from the code, not tried]. "Set password"
+on the on-screen keyboard is required before any password mode (no page calls `keyboard_enter` yet; BusyBox `chpasswd` and
+the crypt config are unmeasured). The page shows the IP and the host name; editing the name asks for confirmation, then
+applies at once (`/etc/hostname` + `/etc/hosts` as `commissioning/set-hostname.sh` does, then mDNS re-announces). README then
+explains: set a password, pick Key + password, `ssh-copy-id`, optionally back to Key only.
+
+While `/etc/touch_calibration.conf` is absent the launcher shows a "not calibrated" text on top — that text only; the status
+line is F143. The per-unit image (a `state.tar` from one unit) stays as the second package kind. Needs:
+`rootfs/make-card-image.sh` accepting no `state.tar`; a first-boot host-name init script; the banner in
+`native_apps/app_launcher/app_launcher.c`. **Done when** a card built with no unit state boots on a unit, shows the banner, refuses SSH until the
+panel's SSH page opens it, and the README's key procedure then works.
+
+### F143. A status line across the top of the screen — open, operator idea 2026-10-09, future
+
+One line of status: messages such as "not calibrated", date/time, CPU, refreshed once a second. Tapping a message opens the
+app or page that fixes it (calibration for "not calibrated"). Not designed: which apps show it, and what it costs per frame
+on the software renderer. **Done when** the launcher shows it and a tap on a message opens the right page.
 
 ### F141. A log viewer page in the Control Panel — open, operator request 2026-10-09, future
 
