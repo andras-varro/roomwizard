@@ -24,10 +24,9 @@ static bool split_line(char *line, char **kw, char **val) {
     return true;
 }
 
-SshMode sys_ssh_mode(const char *text) {
-    if (!text) return SSH_MODE_UNKNOWN;
-    int pw = -1;        /* -1 absent, 0 no, 1 yes, 2 other */
-    int root = -1;      /* -1 absent, 1 yes, 2 other */
+/* The first global value of keyword kw: NULL-free, copied into val (len bytes),
+ * false when absent.  Stops at the first Match, as sshd's global section does. */
+static bool first_value(const char *text, const char *kw, char *val, size_t len) {
     const char *p = text;
     while (*p) {
         char line[256];
@@ -38,20 +37,44 @@ SshMode sys_ssh_mode(const char *text) {
         p += n;
         if (*p == '\n') p++;
 
-        char *kw, *val;
-        if (!split_line(line, &kw, &val)) continue;
-        if (strcasecmp(kw, "Match") == 0) break;
-        if (strcasecmp(kw, "PasswordAuthentication") == 0 && pw == -1)
-            pw = strcasecmp(val, "no") == 0 ? 0 : strcasecmp(val, "yes") == 0 ? 1 : 2;
-        else if (strcasecmp(kw, "PermitRootLogin") == 0 && root == -1)
-            root = strcasecmp(val, "yes") == 0 ? 1 : 2;
+        char *k, *v;
+        if (!split_line(line, &k, &v)) continue;
+        if (strcasecmp(k, "Match") == 0) break;
+        if (strcasecmp(k, kw) == 0) {
+            snprintf(val, len, "%s", v);
+            return true;
+        }
     }
-    if (pw == 0) return SSH_MODE_KEY_ONLY;
-    if (pw == 1 && root == 1) return SSH_MODE_PASSWORD;
+    return false;
+}
+
+SshMode sys_ssh_mode(const char *text) {
+    if (!text) return SSH_MODE_UNKNOWN;
+    char pw[32], pk[32];
+    if (!first_value(text, "PasswordAuthentication", pw, sizeof(pw))) return SSH_MODE_UNKNOWN;
+    /* key login off makes it something else: password only, or no way in */
+    if (first_value(text, "PubkeyAuthentication", pk, sizeof(pk)) &&
+        strcasecmp(pk, "yes") != 0) return SSH_MODE_UNKNOWN;
+    if (strcasecmp(pw, "no") == 0)  return SSH_MODE_KEY_ONLY;
+    if (strcasecmp(pw, "yes") == 0) return SSH_MODE_PASSWORD;
     return SSH_MODE_UNKNOWN;
 }
 
-/* ── Rewriting sshd_config, and the lockout guard ───────────────────────── */
+SshMode sys_ssh_effective(SshMode cfg_mode, bool off_marker) {
+    return off_marker ? SSH_MODE_OFF : cfg_mode;
+}
+
+SshRootLogin sys_ssh_root_login(const char *text) {
+    if (!text) return SSH_ROOT_UNKNOWN;
+    char v[48];
+    if (!first_value(text, "PermitRootLogin", v, sizeof(v))) return SSH_ROOT_KEY;
+    if (strcasecmp(v, "prohibit-password") == 0 || strcasecmp(v, "without-password") == 0)
+        return SSH_ROOT_KEY;
+    if (strcasecmp(v, "yes") == 0) return SSH_ROOT_PASSWORD;
+    return SSH_ROOT_UNKNOWN;
+}
+
+/* ── Rewriting sshd_config ──────────────────────────────────────────────── */
 
 typedef struct { char *p; size_t cap, len; bool over; } OutBuf;
 
@@ -67,44 +90,163 @@ static void ob_line(OutBuf *o, const char *s, size_t n) {
     ob_put(o, "\n", 1);
 }
 
-/* Which directive an input line is, using split_line() on a copy:
- * 1 PasswordAuthentication, 2 Match, 0 anything else (incl. comments). */
-static int line_kind(const char *s, size_t n) {
+/* One directive to force: every ACTIVE global line of kw becomes "kw value";
+ * add says whether one is inserted when there is none. */
+typedef struct { const char *kw, *value; bool add; bool seen; } Rule;
+
+static void rule_emit(OutBuf *o, const Rule *r) {
+    char l[96];
+    int n = snprintf(l, sizeof(l), "%s %s", r->kw, r->value);
+    ob_line(o, l, (size_t)n);
+}
+
+/* Which rule an input line is, using split_line() on a copy: index + 1, -1 for
+ * Match, 0 for anything else (incl. comments). */
+static int line_rule(const char *s, size_t n, const Rule *rules, int nr) {
     char line[256];
     size_t c = n < sizeof(line) - 1 ? n : sizeof(line) - 1;
     memcpy(line, s, c);
     line[c] = '\0';
     char *kw, *val;
     if (!split_line(line, &kw, &val)) return 0;
-    if (strcasecmp(kw, "PasswordAuthentication") == 0) return 1;
-    if (strcasecmp(kw, "Match") == 0) return 2;
+    if (strcasecmp(kw, "Match") == 0) return -1;
+    for (int i = 0; i < nr; i++)
+        if (strcasecmp(kw, rules[i].kw) == 0) return i + 1;
     return 0;
+}
+
+static int rewrite(const char *text, Rule *rules, int nr, char *out, size_t out_len) {
+    if (!text || !out || out_len < 2) return -1;
+    OutBuf o = { out, out_len, 0, false };
+    bool in_match = false;
+    const char *p = text;
+    while (*p) {
+        size_t n = strcspn(p, "\n");
+        int k = in_match ? 0 : line_rule(p, n, rules, nr);
+        if (k < 0) {
+            for (int i = 0; i < nr; i++)
+                if (!rules[i].seen && rules[i].add) { rule_emit(&o, &rules[i]); rules[i].seen = true; }
+            in_match = true;
+        }
+        if (k > 0) { rule_emit(&o, &rules[k - 1]); rules[k - 1].seen = true; }
+        else       ob_line(&o, p, n);
+        p += n;
+        if (*p == '\n') p++;
+    }
+    for (int i = 0; i < nr; i++)
+        if (!rules[i].seen && rules[i].add) rule_emit(&o, &rules[i]);
+    if (o.over) return -1;
+    out[o.len] = '\0';
+    return (int)o.len;
 }
 
 int sys_ssh_set_password_auth(const char *text, bool password_yes,
                               char *out, size_t out_len) {
-    if (!text || !out || out_len < 2) return -1;
-    OutBuf o = { out, out_len, 0, false };
-    const char *want = password_yes ? "PasswordAuthentication yes"
-                                    : "PasswordAuthentication no";
-    bool seen = false, in_match = false;
+    Rule r[1] = { { "PasswordAuthentication", password_yes ? "yes" : "no", true, false } };
+    return rewrite(text, r, 1, out, out_len);
+}
+
+int sys_ssh_set_mode(const char *text, SshMode mode, char *out, size_t out_len) {
+    if (mode != SSH_MODE_KEY_ONLY && mode != SSH_MODE_PASSWORD) return -1;
+    Rule r[2] = {
+        { "PasswordAuthentication", mode == SSH_MODE_PASSWORD ? "yes" : "no", true, false },
+        { "PubkeyAuthentication", "yes", false, false },
+    };
+    return rewrite(text, r, 2, out, out_len);
+}
+
+int sys_ssh_set_root_login(const char *text, SshRootLogin root, char *out, size_t out_len) {
+    if (root != SSH_ROOT_KEY && root != SSH_ROOT_PASSWORD) return -1;
+    Rule r[1] = { { "PermitRootLogin", root == SSH_ROOT_PASSWORD ? "yes" : "prohibit-password",
+                    true, false } };
+    return rewrite(text, r, 1, out, out_len);
+}
+
+const char *sys_ssh_refuse(SshMode mode, SshRootLogin root, bool has_key, bool has_password) {
+    if (mode == SSH_MODE_UNKNOWN || root == SSH_ROOT_UNKNOWN) return "SETTING NOT UNDERSTOOD";
+    if (root == SSH_ROOT_PASSWORD && !has_password) return "ROOT LOGIN NEEDS A PASSWORD FIRST";
+    if (mode == SSH_MODE_KEY_ONLY && !has_key) return "NO AUTHORIZED KEY FOR ROOT";
+    if (mode == SSH_MODE_PASSWORD) {
+        if (!has_password) return "SET A PASSWORD FIRST";
+        if (!has_key && root != SSH_ROOT_PASSWORD) return "NO KEY AND ROOT LOGIN IS KEY ONLY";
+    }
+    return NULL;
+}
+
+/* ── The root shadow line ───────────────────────────────────────────────── */
+
+/* The root line of shadow text: its start, and the span of its password field
+ * (colon to colon).  false when there is none. */
+static bool root_line(const char *text, const char **line, const char **f0,
+                      const char **f1, const char **eol) {
     const char *p = text;
     while (*p) {
         size_t n = strcspn(p, "\n");
-        int k = in_match ? 0 : line_kind(p, n);
-        if (k == 2) {
-            if (!seen) { ob_line(&o, want, strlen(want)); seen = true; }
-            in_match = true;
+        if (n > 5 && strncmp(p, "root:", 5) == 0) {
+            const char *e = p + n;
+            const char *a = p + 5;
+            const char *b = memchr(a, ':', (size_t)(e - a));
+            *line = p; *f0 = a; *f1 = b ? b : e; *eol = e;
+            return true;
         }
-        if (k == 1) { ob_line(&o, want, strlen(want)); seen = true; }
-        else        ob_line(&o, p, n);
         p += n;
         if (*p == '\n') p++;
     }
-    if (!seen) ob_line(&o, want, strlen(want));
+    return false;
+}
+
+bool sys_shadow_root_has_password(const char *text) {
+    const char *l, *a, *b, *e;
+    if (!text || !root_line(text, &l, &a, &b, &e)) return false;
+    return b > a && *a != '*' && *a != '!';
+}
+
+bool sys_hash_plausible(const char *h) {
+    if (!h || h[0] != '$') return false;
+    size_t n = strlen(h);
+    if (n < 13 || n > 255) return false;
+    for (size_t i = 0; i < n; i++) {
+        char c = h[i];
+        if (!(isalnum((unsigned char)c) || c == '.' || c == '/' || c == '$')) return false;
+    }
+    return true;
+}
+
+int sys_shadow_set_root(const char *text, const char *hash, char *out, size_t out_len) {
+    const char *l, *a, *b, *e;
+    if (!text || !out || out_len < 2 || !sys_hash_plausible(hash) ||
+        !root_line(text, &l, &a, &b, &e)) return -1;
+    OutBuf o = { out, out_len, 0, false };
+    const char *p = text;
+    while (*p) {
+        size_t n = strcspn(p, "\n");
+        if (p == l) {
+            ob_put(&o, "root:", 5);
+            ob_put(&o, hash, strlen(hash));
+            size_t rest = (size_t)(e - b);                 /* ":" and the later fields */
+            while (rest && b[rest - 1] == '\r') rest--;
+            ob_put(&o, b, rest);
+            ob_put(&o, "\n", 1);
+        } else {
+            ob_line(&o, p, n);
+        }
+        p += n;
+        if (*p == '\n') p++;
+    }
     if (o.over) return -1;
     out[o.len] = '\0';
     return (int)o.len;
+}
+
+bool sys_hostname_valid(const char *name) {
+    if (!name) return false;
+    size_t n = strlen(name);
+    if (n < 1 || n > 63 || name[0] == '-' || name[n - 1] == '-') return false;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (!(c < 128 && (isalnum(c) || c == '-'))) return false;
+    }
+    return true;
 }
 
 static bool is_b64(char c) {

@@ -21,6 +21,7 @@
 #      exists and nothing that does not; the IMAGE lister's output passes the deny
 #      check (the two lists agree with each other), the BACKUP lister's does not.
 #   F  rw_state_backup_foreign: what restore.sh may write is the BACKUP set only.
+#   G  rw_state_ssh_keys_deny: a generic image (no state.tar) may carry no SSH key material.
 #
 # The count at the end includes a floor: a file that silently ran zero cases
 # reports success just as loudly as one that ran all of them.
@@ -259,10 +260,27 @@ expect_out "$TMP/f4.lst" "$TMP/f4.out" "F4 system files, a nested /home/root fil
 expect_rc 1 "$rc" "F5 and exits 1"
 
 echo ""
+echo "G  rw_state_ssh_keys_deny: a generic image carries no SSH key material"
+printf '%s\n' ./ ./etc/ssh/sshd_config ./home/root/.ssh/ ./home/root/.ssh/authorized_keys ./usr/bin/ssh > "$TMP/g1.lst"
+rw_state_ssh_keys_deny < "$TMP/g1.lst" > "$TMP/g1.out"; rc=$?
+printf '%s\n' ./home/root/.ssh/authorized_keys > "$TMP/g1.want"
+expect_out "$TMP/g1.want" "$TMP/g1.out" "G1 an authorized_keys under home/root/.ssh is refused, the .ssh directory entry and sshd_config are not"
+expect_rc 1 "$rc" "G2 and exits 1"
+printf '%s\n' home/root/.ssh/id_ed25519 home/root/.ssh/known_hosts home/pi/.ssh/authorized_keys2 \
+    etc/skel/authorized_keys > "$TMP/g3.lst"
+rw_state_ssh_keys_deny < "$TMP/g3.lst" > "$TMP/g3.out"
+expect_out "$TMP/g3.lst" "$TMP/g3.out" "G3 any file inside a .ssh directory, in any home, and any authorized_keys* is refused"
+printf '%s\n' ./ ./etc/ ./etc/ssh/ ./etc/ssh/sshd_config ./etc/ssh/ssh_host_rsa_key ./home/root/ ./home/root/.ssh/ \
+    ./home/root/.sshrc.d/x ./usr/share/doc/ssh-keys.txt > "$TMP/g4.lst"
+rw_state_ssh_keys_deny < "$TMP/g4.lst" > "$TMP/g4.out"; rc=$?
+expect_out "$TMP/empty" "$TMP/g4.out" "G4 control: a rootfs listing with the empty .ssh directory, sshd_config and look-alike names passes"
+expect_rc 0 "$rc" "G5 and exits 0"
+
+echo ""
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed"
-# groups A..F: 3 + 3 + 5 + 4 + 9 + 5 = 29 (group E has four zero-numbered cases)
-MIN_CASES=29
+# groups A..G: 3 + 3 + 5 + 4 + 9 + 5 + 5 = 34 (group E has four zero-numbered cases)
+MIN_CASES=34
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then
     echo -e "  ${RED}HARNESS ERROR${NC}: only $TOTAL cases ran, expected at least $MIN_CASES."
     exit 2

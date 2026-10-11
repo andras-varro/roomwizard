@@ -33,6 +33,7 @@
 #include "common/pointer.h"
 #include "common/hardware.h"
 #include "common/config.h"
+#include "app_launcher/launcher_banner.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,6 +134,7 @@ typedef struct {
     uint32_t    last_launch_return_ms;  /* Timestamp of last child-exit for cooldown */
     Logger      logger;
     bool        needs_redraw;       /* Dirty flag — skip rendering when false */
+    const char *calib_banner;       /* Banner text if calibration is missing, NULL if present */
 } Launcher;
 
 /* ════════════════════════════════════════════════════════════════════════ */
@@ -273,6 +275,15 @@ static void draw_launcher(Launcher *l) {
     /* Title */
     text_draw_centered(&l->fb, l->fb.width / 2, SCREEN_VISIBLE_TOP + 18,
                        "ROOMWIZARD", TITLE_COLOR, 4);
+
+    /* Calibration banner: draw below title if calibration is missing.
+     * Centred at y 40, scale 2: rows 33-46, under the title (rows 4-31) and above
+     * the grid, which starts TITLE_H (50) below SCREEN_SAFE_TOP. 34 chars = 408 px, so
+     * it fits the 480 px portrait width too. */
+    if (l->calib_banner != NULL) {
+        text_draw_centered(&l->fb, l->fb.width / 2, SCREEN_VISIBLE_TOP + 40,
+                           l->calib_banner, TITLE_COLOR, 2);
+    }
 
     /* Tiles for current page */
     int start = l->current_page * grid.per_page;
@@ -680,6 +691,9 @@ int main(int argc, char *argv[]) {
     compute_grid_layout(&launcher.fb);
     pointer_init(&launcher.pointer);   /* after touch_init: SCREEN_SAFE_* */
 
+    /* Check for missing calibration at startup */
+    launcher.calib_banner = launcher_check_calibration("/etc/touch_calibration.conf");
+
     modal_dialog_init(&power_dialog, "SHUT DOWN OR REBOOT?", NULL, 3);
     modal_dialog_set_button(&power_dialog, PWR_SHUTDOWN, "SHUT DOWN", BTN_COLOR_DANGER, COLOR_WHITE);
     modal_dialog_set_button(&power_dialog, PWR_REBOOT,   "REBOOT",    BTN_COLOR_WARNING, COLOR_WHITE);
@@ -763,6 +777,8 @@ int main(int argc, char *argv[]) {
                 icon_grid_focus_land(&grid, &launcher.focus,
                                      &launcher.current_page, result);
                 launch_app(&launcher, result, fb_dev, touch_dev);
+                /* Re-check calibration after app returns */
+                launcher.calib_banner = launcher_check_calibration("/etc/touch_calibration.conf");
                 launcher.needs_redraw = true;  /* State changed after launch return */
             }
 
@@ -770,6 +786,8 @@ int main(int argc, char *argv[]) {
             int gp_result = handle_gamepad_input(&launcher, ts.pressed);
             if (gp_result >= 0) {
                 launch_app(&launcher, gp_result, fb_dev, touch_dev);
+                /* Re-check calibration after app returns */
+                launcher.calib_banner = launcher_check_calibration("/etc/touch_calibration.conf");
                 launcher.needs_redraw = true;  /* State changed after launch return */
             }
         }

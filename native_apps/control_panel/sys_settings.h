@@ -1,9 +1,11 @@
-/* sys_settings.h — the System page's pure logic: the SSH mode read out of
- * sshd_config text, and the date/time editor's field arithmetic.
+/* sys_settings.h — the System and SSH pages' pure logic: the SSH mode and root
+ * login read out of sshd_config text and rewritten, the lockout guard, the
+ * root shadow line, the host-name check, and the date/time editor's field
+ * arithmetic.
  *
  * Pure: functions take text or a struct, never a path, so a host test drives
- * them (tests/sys_settings_test.c).  system_page.c does the reading and the
- * setting.
+ * them (tests/sys_settings_test.c).  ssh_page.c and system_page.c do the
+ * reading and the setting.
  */
 #ifndef SYS_SETTINGS_H
 #define SYS_SETTINGS_H
@@ -14,37 +16,89 @@
 typedef enum {
     SSH_MODE_UNKNOWN,    /* absent, a hybrid, or not understood */
     SSH_MODE_KEY_ONLY,   /* PasswordAuthentication no */
-    SSH_MODE_PASSWORD    /* PasswordAuthentication yes and PermitRootLogin yes */
+    SSH_MODE_PASSWORD,   /* PasswordAuthentication yes: password AND key */
+    SSH_MODE_OFF         /* sshd stopped and kept from starting; never read from sshd_config */
 } SshMode;
 
-/* The mode an OpenSSH sshd_config text sets, by the two directives the
- * provisioning groups write.  As sshd reads it: keywords and values are
- * case-insensitive, `Keyword value` or `Keyword=value`, '#' lines are
- * comments, the FIRST occurrence of a keyword wins, and a Match block ends
- * the global section.  A directive that is absent does not count as a mode:
- * PASSWORD needs both PasswordAuthentication yes and PermitRootLogin yes (the
- * password group's pair); KEY_ONLY needs PasswordAuthentication no.  Anything
- * else, including NULL, is UNKNOWN. */
+typedef enum {
+    SSH_ROOT_UNKNOWN,    /* no, forced-commands-only, a value not ours */
+    SSH_ROOT_KEY,        /* PermitRootLogin prohibit-password (sshd's default) */
+    SSH_ROOT_PASSWORD    /* PermitRootLogin yes */
+} SshRootLogin;
+
+/* The mode an OpenSSH sshd_config text sets: KEY_ONLY for PasswordAuthentication
+ * no, PASSWORD for yes.  A password mode never turns key login off, so a text
+ * that also says PubkeyAuthentication no (password only, or nothing at all) is
+ * UNKNOWN, as is an absent or unrecognised PasswordAuthentication and NULL.
+ * Never OFF: that is a marker file, not a directive (sys_ssh_effective).
+ * As sshd reads it: keywords and values are case-insensitive, `Keyword value`
+ * or `Keyword=value`, '#' lines are comments, the FIRST occurrence of a
+ * keyword wins, and a Match block ends the global section. */
 SshMode sys_ssh_mode(const char *sshd_config_text);
 
-/* Rewrite sshd_config text so PasswordAuthentication is `yes` or `no`.
- * Writes the new text to out (NUL-terminated, LF only: any CR is dropped) and
- * returns its length, or -1 when out is too small or an argument is NULL.
- * Policy, from sshd's first-match-wins: every ACTIVE PasswordAuthentication
- * line in the global section (before the first Match) is rewritten, so no
- * stale duplicate can still win; commented lines and everything else are
- * copied unchanged, as is everything from the first Match on.  If no active
- * line exists the directive is inserted just BEFORE the first Match line (an
- * append would land inside the Match block), else appended at the end.
- * PubkeyAuthentication and PermitRootLogin are never touched. */
+/* The mode in force: OFF when the off marker exists, else cfg_mode. */
+SshMode sys_ssh_effective(SshMode cfg_mode, bool off_marker);
+
+/* The root login an sshd_config sets (first global PermitRootLogin).  Absent is
+ * KEY, which is sshd's default.  prohibit-password and its old spelling
+ * without-password are KEY, yes is PASSWORD, anything else UNKNOWN. */
+SshRootLogin sys_ssh_root_login(const char *sshd_config_text);
+
+/* Rewrite sshd_config text for a mode (KEY_ONLY or PASSWORD; anything else is
+ * refused with -1): PasswordAuthentication is set no/yes, and an ACTIVE
+ * PubkeyAuthentication line is set to yes so key login stays on (none is added:
+ * sshd's default is yes).  PermitRootLogin is never touched.  Writes the new
+ * text to out (NUL-terminated, LF only: any CR is dropped) and returns its
+ * length, or -1 when out is too small or an argument is NULL.  Policy, from
+ * sshd's first-match-wins: every ACTIVE line of a directive in the global
+ * section (before the first Match) is rewritten, so no stale duplicate can still
+ * win; commented lines and everything else are copied unchanged, as is
+ * everything from the first Match on.  A directive with no active line that is
+ * to be added goes just BEFORE the first Match line (an append would land inside
+ * the Match block), else at the end. */
+int sys_ssh_set_mode(const char *text, SshMode mode, char *out, size_t out_len);
+
+/* The same for PermitRootLogin: KEY writes prohibit-password, PASSWORD yes,
+ * UNKNOWN is refused.  Nothing else is touched. */
+int sys_ssh_set_root_login(const char *text, SshRootLogin root, char *out, size_t out_len);
+
+/* Rewrite sshd_config text so PasswordAuthentication is `yes` or `no` alone
+ * (the primitive under sys_ssh_set_mode; same policy and return). */
 int sys_ssh_set_password_auth(const char *text, bool password_yes,
                               char *out, size_t out_len);
 
+/* The lockout guard, over the combination about to be written: NULL when it
+ * is allowed, else a short reason (at most 40 characters) for a status line.
+ * has_key: root has a plausible authorized key; has_password: root has a
+ * password.  Rules: KEY_ONLY needs a key; PASSWORD needs a password and a way in
+ * (a key, or root login yes); root login yes needs a password; UNKNOWN is never
+ * written; OFF needs nothing. */
+const char *sys_ssh_refuse(SshMode mode, SshRootLogin root, bool has_key, bool has_password);
+
 /* True when authorized_keys text holds at least one plausible public-key
  * line: not blank, not '#', with a key-type token (ssh-*, ecdsa-sha2-*, sk-*)
- * followed by a base64 blob of 20+ characters.  The lockout guard for KEY
- * ONLY: it cannot prove the key is the operator's, only that one exists. */
+ * followed by a base64 blob of 20+ characters.  It cannot prove the key is the
+ * operator's, only that one exists. */
 bool sys_authkeys_plausible(const char *text);
+
+/* True when /etc/shadow text gives user root a usable password hash: the
+ * second field is non-empty and starts neither with '*' nor with '!'. */
+bool sys_shadow_root_has_password(const char *shadow_text);
+
+/* True for a string fit to be a crypt hash in a shadow field: starts with '$',
+ * 13..255 characters of [A-Za-z0-9./$] (no ':', no newline, no space). */
+bool sys_hash_plausible(const char *hash);
+
+/* shadow text with the password field of the root line replaced by hash; the
+ * other fields and every other line are copied unchanged (LF only).  Returns
+ * the length, or -1 for an implausible hash, no root line, out too small or a
+ * NULL argument. */
+int sys_shadow_set_root(const char *shadow_text, const char *hash,
+                        char *out, size_t out_len);
+
+/* A host name set-hostname accepts: one RFC-1123 label, 1..63 characters of
+ * letters, digits and hyphens, not starting or ending with a hyphen. */
+bool sys_hostname_valid(const char *name);
 
 typedef struct { int year, mon, day, hour, min; } SysDateTime;
 enum { SYS_DT_YEAR, SYS_DT_MON, SYS_DT_DAY, SYS_DT_HOUR, SYS_DT_MIN, SYS_DT_FIELDS };

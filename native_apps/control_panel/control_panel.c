@@ -115,6 +115,7 @@ static const CpPage *const home_pages[] = {
     &cp_bluetooth_page,
     &cp_input_page,
     &cp_network_page,
+    &cp_ssh_page,
     &cp_monitor_page,
     &cp_system_page,
     &cp_info_page,

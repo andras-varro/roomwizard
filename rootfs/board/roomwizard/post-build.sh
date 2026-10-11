@@ -35,6 +35,8 @@ link rcS.d S01mountall    mountall
 link rcS.d S01seedrng     seedrng
 link rcS.d S02alignment   alignment
 link rcS.d S03udev        udev
+# Sorts before S04hostname: a generic image names itself before the kernel name is set.
+link rcS.d S04firstboot-hostname firstboot-hostname
 link rcS.d S04hostname    hostname
 link rcS.d S05sysctl      sysctl
 link rcS.d S06watchdog    watchdog
@@ -42,6 +44,9 @@ link rcS.d S07syslog      syslog
 link rcS.d S08networking  networking
 link rc5.d S02dbus-1      dbus-1
 link rc5.d S09sshd        sshd
+# mDNS from the image, so a unit that named itself is reachable as <name>.local with no
+# further install. After dbus; provision-rules.conf makes the same link (ln -sf, idempotent).
+link rc5.d S30avahi-daemon avahi-daemon
 link rc5.d S20hwclock.sh  hwclock.sh
 for lvl in rc0.d rc6.d; do
     link $lvl K10sshd       sshd
@@ -86,6 +91,10 @@ for t in ed25519 rsa; do
     ln -s "/home/root/data/ssh/ssh_host_${t}_key" "$TARGET/etc/ssh/ssh_host_${t}_key"
     ln -s "/home/root/data/ssh/ssh_host_${t}_key.pub" "$TARGET/etc/ssh/ssh_host_${t}_key.pub"
 done
+
+# The on-device host-name tool is the commissioning script itself (one implementation of the
+# name rules and the /etc/hosts rewrite), installed under a command name.
+install -D -m 0755 "$(cd "$OVERLAY/../../../.." && pwd)/commissioning/set-hostname.sh" "$TARGET/usr/sbin/set-hostname"
 
 # Identity marker: lib/rw-identify.sh's rw_is_rootfs recognises this tree by it, since
 # none of the vendor's marker files are here.

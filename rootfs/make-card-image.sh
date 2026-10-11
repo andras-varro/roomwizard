@@ -1,5 +1,5 @@
 #!/bin/bash
-# make-card-image.sh [--modules <dir>] <partsdir> <rootfs.tar> <out.img>
+# make-card-image.sh [--generic] [--modules <dir>] [--bundle <b>] <partsdir> <rootfs.tar> <out.img>
 #
 # Builds a whole SD-card IMAGE FILE for a RoomWizard whose p6 is our own root
 # filesystem. Inputs: the directory fetch-card-parts.sh filled (partition table
@@ -14,6 +14,10 @@
 # script touches is the loop device it creates itself on the image file; it
 # never opens /dev/mmcblk* or any other disk, and any argument that is a
 # block device is refused.
+#
+# With --generic there is no per-unit state at all: the parts directory then supplies only the
+# partition table and p1 (geometry.txt, head.bin, md5.txt, ebr-*.bin; state.tar is ignored if
+# present), the card carries no SSH key of anyone, and the unit names itself on first boot.
 #
 # p1 is copied byte for byte (the FAT geometry must not change), then everything
 # on it except the five boot-chain files is deleted. p2/p3/p5 are made fresh and
@@ -31,8 +35,13 @@ die() { echo "FAIL: $*" >&2; exit 1; }
 
 usage() {
     cat <<'USAGE'
-Usage: make-card-image.sh [--modules <dir>] [--bundle <dir|tar>] <partsdir> <rootfs.tar> <out.img>
+Usage: make-card-image.sh [--generic] [--modules <dir>] [--bundle <dir|tar>] <partsdir> <rootfs.tar> <out.img>
 
+  --generic        a card with NO per-unit state: state.tar is not read (ignored if the
+                   parts directory has one) and no SSH key material of any kind may be on
+                   the finished card (refused, never filtered). p1 and the partition table
+                   still come from the parts directory. The unit picks its own host name
+                   on first boot. Works with --bundle.
   --modules <dir>  directory of kernel modules (*.ko) copied to p6
                    /lib/modules/4.14.52/extra/ (default: ~/rw-kmods of the
                    invoking user, $SUDO_USER under sudo). cy8ctmg120_ts.ko is required.
@@ -44,11 +53,13 @@ Usage: make-card-image.sh [--modules <dir>] [--bundle <dir|tar>] <partsdir> <roo
   -h, --help       this text
 USAGE
 }
+GENERIC=0
 MODDIR=""
 BUNDLE=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -h|--help) usage; exit 0 ;;
+        --generic) GENERIC=1; shift ;;
         --modules) [ $# -ge 2 ] || { usage >&2; exit 2; }; MODDIR="$2"; shift 2 ;;
         --modules=*) MODDIR="${1#--modules=}"; shift ;;
         --bundle) [ $# -ge 2 ] || { usage >&2; exit 2; }; BUNDLE="$2"; shift 2 ;;
@@ -79,7 +90,9 @@ esac
 [ -d "$PARTS" ] || die "no parts directory $PARTS"
 [ -f "$ROOTTAR" ] || die "no rootfs tar $ROOTTAR"
 [ -f "$MODDIR/cy8ctmg120_ts.ko" ] || die "no $MODDIR/cy8ctmg120_ts.ko (build with kernel/build-modules.sh --out <dir>, or pass --modules)"
-for f in geometry.txt head.bin md5.txt state.tar; do
+REQ="geometry.txt head.bin md5.txt"
+[ "$GENERIC" -eq 1 ] || REQ="$REQ state.tar"
+for f in $REQ; do
     [ -f "$PARTS/$f" ] || die "missing $PARTS/$f"
 done
 for t in sfdisk losetup mke2fs mkswap e2fsck truncate; do
@@ -114,15 +127,41 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # /home/root files, calibration .bak files, the vendor /etc/hosts or p2 contents.
 # Refused, not filtered: a state.tar that fails was made by an older
 # fetch-card-parts.sh, and the cure is to fetch a clean one.
-STATE_LIST=$(tar -tf "$PARTS/state.tar") || die "$PARTS/state.tar does not list"
-if ! STATE_DENIED=$(printf '%s\n' "$STATE_LIST" | rw_state_image_deny); then
-    echo "FAIL: $PARTS/state.tar carries entries no card image may hold:" >&2
-    printf '%s\n' "$STATE_DENIED" | sed 's/^/  /' >&2
-    echo "No image was written. Regenerate the parts with the current script (as the normal user):" >&2
-    echo "  rootfs/fetch-card-parts.sh <unit-ip> $PARTS" >&2
-    echo "and keep the unit's private config with commissioning/backup.sh <unit-ip>." >&2
-    exit 1
+if [ "$GENERIC" -eq 1 ]; then
+    # A generic image has no state.tar to gate; what it must not hold is SSH key material,
+    # in the rootfs tar here and, below, in everything that lands on the card.
+    ROOT_LIST=$(tar -tf "$ROOTTAR") || die "$ROOTTAR does not list"
+    if ! KEYS_DENIED=$(printf '%s\n' "$ROOT_LIST" | rw_state_ssh_keys_deny); then
+        echo "FAIL: $ROOTTAR carries SSH key material a generic image may not hold:" >&2
+        printf '%s\n' "$KEYS_DENIED" | sed 's/^/  /' >&2
+        echo "No image was written. Rebuild the rootfs without it." >&2
+        exit 1
+    fi
+else
+    STATE_LIST=$(tar -tf "$PARTS/state.tar") || die "$PARTS/state.tar does not list"
+    if ! STATE_DENIED=$(printf '%s\n' "$STATE_LIST" | rw_state_image_deny); then
+        echo "FAIL: $PARTS/state.tar carries entries no card image may hold:" >&2
+        printf '%s\n' "$STATE_DENIED" | sed 's/^/  /' >&2
+        echo "No image was written. Regenerate the parts with the current script (as the normal user):" >&2
+        echo "  rootfs/fetch-card-parts.sh <unit-ip> $PARTS" >&2
+        echo "and keep the unit's private config with commissioning/backup.sh <unit-ip>." >&2
+        exit 1
+    fi
 fi
+
+# ssh_scan <dir>... — the same refusal over what is already on the card (the bundle can
+# carry files the rootfs tar does not). Run on the mounted trees; never crosses a mount.
+ssh_scan() {
+    local d hits
+    for d in "$@"; do
+        if ! hits=$(cd "$d" && find . -xdev ! -type d | rw_state_ssh_keys_deny); then
+            echo "FAIL: SSH key material on the card under $d:" >&2
+            printf '%s\n' "$hits" | sed 's/^/  /' >&2
+            return 1
+        fi
+    done
+    return 0
+}
 
 geom() { awk -v n="$1" -v c="$2" '$1==n{print $c}' "$PARTS/geometry.txt"; }
 DISK_SECT=$(geom mmcblk0 3)
@@ -239,8 +278,9 @@ fill() {   # fill <partnum> <rootfs tar> [<state tar>]
         [ ! -d "$MNT/p/home/root/.ssh" ] || chmod 700 "$MNT/p/home/root/.ssh"
         [ ! -f "$MNT/p/home/root/.ssh/authorized_keys" ] || chmod 600 "$MNT/p/home/root/.ssh/authorized_keys"
         # state.tar no longer carries /etc/hosts (the vendor's), so the rootfs's own
+        # (A generic image keeps the build-time placeholder name: the first boot replaces it.)
         # maps 127.0.1.1 to the build-time name; map the carried one to loopback too.
-        if [ -f "$MNT/p/etc/hostname" ]; then
+        if [ "$GENERIC" -eq 0 ] && [ -f "$MNT/p/etc/hostname" ]; then
             UNIT_NAME=$(head -n 1 "$MNT/p/etc/hostname" | tr -d ' \t\r')
             sh "$SCRIPT_DIR/../commissioning/set-hostname.sh" "$UNIT_NAME" "$MNT/p" \
                 || die "set-hostname.sh $UNIT_NAME on p6"
@@ -255,12 +295,16 @@ fill() {   # fill <partnum> <rootfs tar> [<state tar>]
         done
         [ -f "$EXTRA/cy8ctmg120_ts.ko" ] || die "cy8ctmg120_ts.ko did not land in p6"
         echo "p6 holds $(find "$MNT/p" -xdev | wc -l) entries; $NKO kernel modules in /lib/modules/4.14.52/extra"
+        if [ "$GENERIC" -eq 1 ] && ! ssh_scan "$MNT/p"; then
+            umount "$MNT/p"; rm -f "$OUTABS"
+            die "SSH key material on a generic image; the image is deleted"
+        fi
     fi
     sync
     umount "$MNT/p" || die "umount p$n"
 }
 echo "== filling p6 (p2, p3, p5 stay empty)"
-fill 6 "$ROOTTAR" "$PARTS/state.tar"
+if [ "$GENERIC" -eq 1 ]; then fill 6 "$ROOTTAR"; else fill 6 "$ROOTTAR" "$PARTS/state.tar"; fi
 
 if [ -n "$BUNDLE" ]; then
     echo "== installing bundle $BUNDLE_TAG"
@@ -277,6 +321,10 @@ if [ -n "$BUNDLE" ]; then
         die "commission-offline.sh failed (above); the image is deleted, write nothing"
     fi
     sync
+    if [ "$GENERIC" -eq 1 ] && ! ssh_scan "$MNT/base/root" "$MNT/base/data" "$MNT/base/log"; then
+        rm -f "$OUTABS"
+        die "the bundle put SSH key material on a generic image; the image is deleted"
+    fi
     for r in root data log; do umount "$MNT/base/$r" || die "umount base/$r"; done
 fi
 
@@ -300,7 +348,7 @@ IMG_MD5=$(dd if="$OUTABS" bs=512 count="$P1START" status=none | md5sum | awk '{p
 HEAD_MD5=$(dd if="$PARTS/head.bin" bs=512 count="$P1START" status=none | md5sum | awk '{print $1}')
 if [ "$IMG_MD5" = "$HEAD_MD5" ]; then MATCH=yes; else MATCH=no; fi
 
-STATE_N=$(tar -tf "$PARTS/state.tar" | grep -vc '/$')
+if [ "$GENERIC" -eq 1 ]; then STATE_N="generic: none"; else STATE_N="$(tar -tf "$PARTS/state.tar" | grep -vc '/$') non-directory entries from the old p6"; fi
 echo
 echo "==================== SUMMARY ===================="
 echo "image:           $OUTABS"
@@ -308,7 +356,7 @@ echo "size:            $(stat -c %s "$OUTABS") bytes apparent, $(du -h "$OUTABS"
 echo "rootfs tar:      $ROOTTAR ($(stat -c %y "$ROOTTAR"))"
 echo "head match:      $MATCH (sectors 0..$((P1START - 1)) vs head.bin)"
 echo "fsck:            $([ "$FSCK_BAD" -eq 0 ] && echo 'all four clean' || echo 'PROBLEMS, see above')"
-echo "state carried:   $STATE_N non-directory entries from the old p6"
+echo "state carried:   $STATE_N"
 echo "bundle:          ${BUNDLE_TAG:-none (no --bundle: run provision.sh and deploy-all.sh after the first boot)}"
 echo
 echo "Next, on Windows: copy the image out of WSL, e.g."

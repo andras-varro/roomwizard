@@ -174,6 +174,26 @@ rw_state_image_deny() {
     [ "$found" -ne 0 ]
 }
 
+# rw_state_ssh_keys_deny
+#   stdin: a tar listing (tar -tf), or `find . ! -type d` output. Prints every entry
+#   that is SSH key material: anything inside a '.ssh' directory, in any home, and any
+#   file named authorized_keys*. Directory entries (trailing '/') are not material, so
+#   the rootfs's empty home/root/.ssh passes. Exit 1 if it printed any, 0 if none.
+#   Used by make-card-image.sh for a GENERIC image (no state.tar), which must hold no
+#   key of any operator or unit; a per-unit image legitimately carries its own.
+#   The caller must check tar's own exit status: an empty listing is clean.
+rw_state_ssh_keys_deny() {
+    local e found=1
+    while IFS= read -r e; do
+        [ -n "$e" ] || continue
+        case "$e" in */) continue ;; esac
+        case "/$e" in
+            */.ssh/*|*/authorized_keys*) printf '%s\n' "$e"; found=0 ;;
+        esac
+    done
+    [ "$found" -ne 0 ]
+}
+
 # _rw_state_backup_member ENTRY — 0 if a tar entry belongs to the BACKUP set.
 # Patterns are globs by design, hence the unquoted case patterns.
 # shellcheck disable=SC2254

@@ -2,7 +2,7 @@
  *
  * control_panel.c owns the page bar and the home grid; every page (led_page.c,
  * monitor_page.c, info_page.c, network_page.c, usb_page.c, input_page.c,
- * audio_page.c, display_page.c, bluetooth_page.c) lays itself out in the same content rectangle
+ * audio_page.c, display_page.c, bluetooth_page.c, ssh_page.c) lays itself out in the same content rectangle
  * and draws with the same helpers.
  * This header is the one home for that rectangle and those helpers, so a moved
  * page cannot carry a second copy of either.  The helper bodies stay in control_panel.c.

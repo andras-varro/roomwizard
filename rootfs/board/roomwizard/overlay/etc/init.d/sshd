@@ -2,6 +2,7 @@
 # OpenSSH server. Host keys live on the data partition (/home/root/data/ssh) so they survive
 # a reflash of the root filesystem; /etc/ssh/ssh_host_*_key link there. If that partition
 # is not mounted, the keys go to the tmpfs and sshd still starts, with fresh keys each boot.
+# The marker /etc/ssh/sshd_off (made by the Control Panel) keeps `start` from starting it.
 DAEMON=/usr/sbin/sshd
 PIDFILE=/var/run/sshd.pid
 KEYDIR=/home/root/data/ssh
@@ -34,6 +35,10 @@ genkeys() {
 case "$1" in
     start)
         [ -x "$DAEMON" ] || exit 0
+        if [ -e /etc/ssh/sshd_off ]; then
+            echo "sshd: off (Control Panel)"
+            exit 0
+        fi
         genkeys
         mkdir -p /var/empty
         if ! "$DAEMON" -t; then

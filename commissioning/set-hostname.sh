@@ -37,14 +37,9 @@ case "$ROOTFS" in
     */) ROOTFS="${ROOTFS%/}" ;;
 esac
 
-usage() {
-    echo "Usage: set-hostname.sh NAME [ROOTFS]" >&2
-    exit 1
-}
-
 if [ -z "$NAME" ]; then
-    echo "set-hostname.sh: no NAME given" >&2
-    usage
+    echo "set-hostname: no NAME given (usage: set-hostname NAME [ROOTFS])" >&2
+    exit 1
 fi
 
 # ── validate ────────────────────────────────────────────────────────────────
@@ -52,13 +47,11 @@ fi
 # plain ERE that needs no {n,m} interval, so this does not depend on how the
 # device's BusyBox grep was built.
 if [ "${#NAME}" -gt 63 ]; then
-    echo "set-hostname.sh: '$NAME' is ${#NAME} characters; the limit is 63." >&2
+    echo "set-hostname: '$NAME' is ${#NAME} characters; the limit is 63" >&2
     exit 1
 fi
 if ! printf '%s' "$NAME" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$'; then
-    echo "set-hostname.sh: '$NAME' is not a valid host name." >&2
-    echo "  Allowed: letters, digits and hyphens; must start and end alphanumeric." >&2
-    echo "  No dots — set 'rw09', not 'rw09.local'; mDNS adds the .local itself." >&2
+    echo "set-hostname: '$NAME' is not a valid host name (letters, digits, hyphens; start and end alphanumeric; no dots, mDNS adds .local)" >&2
     exit 1
 fi
 
@@ -137,6 +130,11 @@ printf '%s\n' "$NAME" > "$HOSTNAME_FILE"
 # Only meaningful for the live root; offline there is no kernel to tell.
 if [ -z "$ROOTFS" ]; then
     hostname "$NAME"
+    # Re-announce over mDNS: avahi takes the name once at start, so a running daemon is
+    # restarted. Not running (first boot, before rc5.d) means nothing to do.
+    if [ -x /etc/init.d/avahi-daemon ] && [ -x /usr/sbin/avahi-daemon ] && /usr/sbin/avahi-daemon -c > /dev/null 2>&1; then
+        /etc/init.d/avahi-daemon restart > /dev/null 2>&1 || true
+    fi
 fi
 
 if [ -n "$OLD" ] && [ "$OLD" != "$NAME" ]; then

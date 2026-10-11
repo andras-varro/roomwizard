@@ -3,7 +3,7 @@
  *   cd native_apps && gcc -Wall -Wextra -I. -o build/sys_settings_test \
  *       tests/sys_settings_test.c control_panel/sys_settings.c && ./build/sys_settings_test
  *
- * A  sshd_config text -> mode: the two provisioning groups' pairs, comments,
+ * A  sshd_config text -> mode: PasswordAuthentication yes/no, comments,
  *    '=' and mixed case, first occurrence wins, Match ends the global section,
  *    absent/hybrid/NULL are UNKNOWN;
  * B  days in month, including the century leap rules;
@@ -11,7 +11,12 @@
  *    year limits;
  * D  the date -s string, and an invalid value formats to nothing;
  * E  rewriting PasswordAuthentication (absent, commented, duplicate, Match, CRLF);
- * F  the authorized_keys lockout guard.
+ * F  the authorized_keys plausibility check;
+ * G  the three modes as sshd_config rewrites, the off marker, hybrid/unknown reads;
+ * H  root login (PermitRootLogin) read and rewrite;
+ * I  the lockout guard over mode + root login + key + password;
+ * J  the root shadow line and the hash check;
+ * K  the host name check.
  */
 #include "control_panel/sys_settings.h"
 
@@ -33,8 +38,8 @@ int main(void) {
     mode("  passwordauthentication=NO\r\n", SSH_MODE_KEY_ONLY, "case, '=', CRLF, indent");
     mode("PasswordAuthentication no\nPasswordAuthentication yes\n", SSH_MODE_KEY_ONLY, "first occurrence wins");
     mode("Port 22\nMatch User x\nPasswordAuthentication no\n", SSH_MODE_UNKNOWN, "Match ends the global section");
-    mode("PasswordAuthentication yes\n", SSH_MODE_UNKNOWN, "password without root yes");
-    mode("PasswordAuthentication yes\nPermitRootLogin prohibit-password\n", SSH_MODE_UNKNOWN, "hybrid");
+    mode("PasswordAuthentication yes\n", SSH_MODE_PASSWORD, "password mode does not need root login yes");
+    mode("PasswordAuthentication yes\nPermitRootLogin prohibit-password\n", SSH_MODE_PASSWORD, "root login is a separate setting");
     mode("PermitRootLogin yes\n", SSH_MODE_UNKNOWN, "password directive absent");
     mode("", SSH_MODE_UNKNOWN, "empty");
     mode(NULL, SSH_MODE_UNKNOWN, "NULL");
@@ -147,6 +152,139 @@ int main(void) {
         CHECK(!sys_authkeys_plausible("ssh-rsa\n"), "F9 type only");
         CHECK(!sys_authkeys_plausible(NULL), "F10 NULL");
     }
+
+    /* G  the three modes, as sshd_config text */
+    {
+        char o[1024], o2[1024];
+        int n;
+        const char *base = "PermitRootLogin prohibit-password\nPubkeyAuthentication yes\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n";
+        n = sys_ssh_set_mode(base, SSH_MODE_PASSWORD, o, sizeof(o));
+        CHECK(n > 0 && sys_ssh_mode(o) == SSH_MODE_PASSWORD, "G1 key -> key+password reads back");
+        CHECK(strstr(o, "PubkeyAuthentication yes") != NULL, "G2 key login stays on in a password mode");
+        CHECK(strstr(o, "PermitRootLogin prohibit-password") != NULL, "G3 mode leaves root login alone");
+        n = sys_ssh_set_mode(o, SSH_MODE_KEY_ONLY, o2, sizeof(o2));
+        CHECK(n > 0 && sys_ssh_mode(o2) == SSH_MODE_KEY_ONLY && strcmp(o2, base) == 0, "G4 and back, text identical: [%s]", o2);
+        /* a config that switched pubkey off must not survive a mode set */
+        n = sys_ssh_set_mode("PubkeyAuthentication no\nPasswordAuthentication yes\n", SSH_MODE_PASSWORD, o, sizeof(o));
+        CHECK(n > 0 && strstr(o, "PubkeyAuthentication yes") && !strstr(o, "PubkeyAuthentication no"), "G5 pubkey no is rewritten to yes: [%s]", o);
+        /* no Pubkey line: not invented (sshd's default is yes) */
+        n = sys_ssh_set_mode("Port 22\n", SSH_MODE_KEY_ONLY, o, sizeof(o));
+        CHECK(n > 0 && strcmp(o, "Port 22\nPasswordAuthentication no\n") == 0, "G6 pubkey line not added: [%s]", o);
+        /* Match body untouched */
+        n = sys_ssh_set_mode("PasswordAuthentication no\nMatch User x\n  PubkeyAuthentication no\n", SSH_MODE_PASSWORD, o, sizeof(o));
+        CHECK(n > 0 && strstr(o, "Match User x\n  PubkeyAuthentication no\n") != NULL && strncmp(o, "PasswordAuthentication yes\n", 27) == 0, "G7 Match block kept: [%s]", o);
+        CHECK(sys_ssh_set_mode(base, SSH_MODE_OFF, o, sizeof(o)) == -1, "G8 OFF is not a config mode");
+        CHECK(sys_ssh_set_mode(base, SSH_MODE_UNKNOWN, o, sizeof(o)) == -1, "G9 UNKNOWN refused");
+        CHECK(sys_ssh_set_mode(base, SSH_MODE_PASSWORD, o, 20) == -1, "G10 too small");
+        /* the reader: negative controls, hybrid and unknown configs */
+        mode("PasswordAuthentication yes\nPubkeyAuthentication no\n", SSH_MODE_UNKNOWN, "G11 password only is not a mode");
+        mode("PasswordAuthentication no\nPubkeyAuthentication no\n", SSH_MODE_UNKNOWN, "G12 nothing can log in");
+        mode("PasswordAuthentication maybe\n", SSH_MODE_UNKNOWN, "G13 garbage value");
+        mode("PasswordAuthentication yes\nPermitRootLogin prohibit-password\n", SSH_MODE_PASSWORD, "G14 password mode needs no root yes");
+        mode("PubkeyAuthentication no\nPasswordAuthentication no\nPasswordAuthentication yes\n", SSH_MODE_UNKNOWN, "G15 pubkey off, first pw wins");
+        CHECK(sys_ssh_effective(SSH_MODE_KEY_ONLY, true) == SSH_MODE_OFF, "G16 marker means OFF");
+        CHECK(sys_ssh_effective(SSH_MODE_PASSWORD, true) == SSH_MODE_OFF, "G17 marker beats password");
+        CHECK(sys_ssh_effective(SSH_MODE_UNKNOWN, true) == SSH_MODE_OFF, "G18 marker beats unknown");
+        CHECK(sys_ssh_effective(SSH_MODE_PASSWORD, false) == SSH_MODE_PASSWORD, "G19 no marker, config shows");
+        CHECK(sys_ssh_effective(SSH_MODE_UNKNOWN, false) == SSH_MODE_UNKNOWN, "G20 unknown stays unknown");
+    }
+
+    /* H  root login */
+    {
+        char o[1024];
+        int n;
+        CHECK(sys_ssh_root_login("PermitRootLogin prohibit-password\n") == SSH_ROOT_KEY, "H1 prohibit-password");
+        CHECK(sys_ssh_root_login("PermitRootLogin without-password\n") == SSH_ROOT_KEY, "H2 old spelling");
+        CHECK(sys_ssh_root_login("permitrootlogin = YES\n") == SSH_ROOT_PASSWORD, "H3 yes, case and '='");
+        CHECK(sys_ssh_root_login("Port 22\n") == SSH_ROOT_KEY, "H4 absent: sshd default is key only");
+        CHECK(sys_ssh_root_login("PermitRootLogin no\n") == SSH_ROOT_UNKNOWN, "H5 no is not ours");
+        CHECK(sys_ssh_root_login("PermitRootLogin forced-commands-only\n") == SSH_ROOT_UNKNOWN, "H6 forced-commands");
+        CHECK(sys_ssh_root_login("PermitRootLogin yes\nPermitRootLogin no\n") == SSH_ROOT_PASSWORD, "H7 first wins");
+        CHECK(sys_ssh_root_login("Match User x\nPermitRootLogin yes\n") == SSH_ROOT_KEY, "H8 Match ends the global section");
+        CHECK(sys_ssh_root_login(NULL) == SSH_ROOT_UNKNOWN, "H9 NULL");
+        n = sys_ssh_set_root_login("PermitRootLogin prohibit-password\nPasswordAuthentication no\n", SSH_ROOT_PASSWORD, o, sizeof(o));
+        CHECK(n > 0 && strcmp(o, "PermitRootLogin yes\nPasswordAuthentication no\n") == 0, "H10 to yes: [%s]", o);
+        n = sys_ssh_set_root_login("PermitRootLogin yes\n", SSH_ROOT_KEY, o, sizeof(o));
+        CHECK(n > 0 && strcmp(o, "PermitRootLogin prohibit-password\n") == 0, "H11 to prohibit-password: [%s]", o);
+        n = sys_ssh_set_root_login("Port 22\n", SSH_ROOT_PASSWORD, o, sizeof(o));
+        CHECK(n > 0 && strcmp(o, "Port 22\nPermitRootLogin yes\n") == 0, "H12 absent: appended: [%s]", o);
+        n = sys_ssh_set_root_login("PermitRootLogin yes\nPort 22\nPermitRootLogin yes\n", SSH_ROOT_KEY, o, sizeof(o));
+        CHECK(n > 0 && sys_ssh_root_login(o) == SSH_ROOT_KEY && strstr(o, "yes") == NULL, "H13 duplicates all rewritten: [%s]", o);
+        CHECK(sys_ssh_set_root_login("", SSH_ROOT_UNKNOWN, o, sizeof(o)) == -1, "H14 UNKNOWN refused");
+        mode("PasswordAuthentication no\nPermitRootLogin yes\n", SSH_MODE_KEY_ONLY, "H15 mode reader ignores root login");
+    }
+
+    /* I  the lockout guard over a mode + root login + what exists
+     *    (mode, root login, has_key, has_password; NULL = allowed) */
+    {
+        CHECK(sys_ssh_refuse(SSH_MODE_OFF, SSH_ROOT_KEY, false, false) == NULL, "I1 off needs nothing");
+        CHECK(sys_ssh_refuse(SSH_MODE_KEY_ONLY, SSH_ROOT_KEY, true, false) == NULL, "I2 key only with a key");
+        CHECK(sys_ssh_refuse(SSH_MODE_KEY_ONLY, SSH_ROOT_KEY, false, true) != NULL, "I3 key only without a key, password set");
+        CHECK(sys_ssh_refuse(SSH_MODE_KEY_ONLY, SSH_ROOT_PASSWORD, false, true) != NULL, "I4 key only never reaches the password");
+        CHECK(sys_ssh_refuse(SSH_MODE_PASSWORD, SSH_ROOT_PASSWORD, false, false) != NULL, "I5 password mode without a password");
+        CHECK(sys_ssh_refuse(SSH_MODE_PASSWORD, SSH_ROOT_KEY, true, false) != NULL, "I6 password mode needs a password even with a key");
+        CHECK(sys_ssh_refuse(SSH_MODE_PASSWORD, SSH_ROOT_PASSWORD, false, true) == NULL, "I7 password + root yes, no key: reachable");
+        CHECK(sys_ssh_refuse(SSH_MODE_PASSWORD, SSH_ROOT_KEY, false, true) != NULL, "I8 password set but root key-only and no key: locked out");
+        CHECK(sys_ssh_refuse(SSH_MODE_PASSWORD, SSH_ROOT_KEY, true, true) == NULL, "I9 password set, key present, root key-only");
+        CHECK(sys_ssh_refuse(SSH_MODE_PASSWORD, SSH_ROOT_PASSWORD, true, true) == NULL, "I10 everything present");
+        CHECK(sys_ssh_refuse(SSH_MODE_OFF, SSH_ROOT_PASSWORD, false, false) != NULL, "I11 root login yes needs a password even when off");
+        CHECK(sys_ssh_refuse(SSH_MODE_KEY_ONLY, SSH_ROOT_PASSWORD, true, false) != NULL, "I12 root login yes needs a password");
+        CHECK(sys_ssh_refuse(SSH_MODE_UNKNOWN, SSH_ROOT_KEY, true, true) != NULL, "I13 unknown mode refused");
+        const char *why = sys_ssh_refuse(SSH_MODE_KEY_ONLY, SSH_ROOT_KEY, false, false);
+        CHECK(why && strlen(why) > 0 && strlen(why) < 60, "I14 reason fits a status line");
+    }
+
+    /* J  the shadow file and the hash */
+    {
+        char o[512];
+        int n;
+        const char *sh = "root:*:::::::\ndaemon:*:::::::\nsshd:*:::::::\n";
+        const char *hash = "$6$abcdefgh$0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789./abcdefghijklmnopqrstuv";
+        CHECK(!sys_shadow_root_has_password(sh), "J1 locked root is no password");
+        CHECK(!sys_shadow_root_has_password("root::::::::\n"), "J2 empty field is no password");
+        CHECK(!sys_shadow_root_has_password("root:!:::::::\n"), "J3 '!' is locked");
+        CHECK(!sys_shadow_root_has_password("root:!$6$aaaaaaaa$bbbbbbbbbbbb:::::::\n"), "J4 locked hash is locked");
+        CHECK(!sys_shadow_root_has_password("daemon:$6$aa$bbbbbbbbbbbbbb:::::::\n"), "J5 other users do not count");
+        CHECK(!sys_shadow_root_has_password(NULL) && !sys_shadow_root_has_password(""), "J6 NULL, empty");
+        CHECK(sys_shadow_root_has_password("daemon:*:::::::\nroot:$6$aa$bbbbbbbbbbbbbbbbbb:19000:0:99999:7:::\n"), "J7 hash set, not first line");
+        CHECK(sys_hash_plausible(hash), "J8 sha512 crypt string");
+        CHECK(sys_hash_plausible("$1$salt$abcdefghijklmnopqrstuv"), "J9 md5 crypt");
+        CHECK(!sys_hash_plausible(""), "J10 empty");
+        CHECK(!sys_hash_plausible("Password: "), "J11 a prompt is not a hash");
+        CHECK(!sys_hash_plausible("$6$ab:cd$xxxxxxxxxxxxxxxxxxxxxx"), "J12 ':' would split the field");
+        CHECK(!sys_hash_plausible("$6$abcd\n$xxxxxxxxxxxxxxxxxxxxxx"), "J13 newline would add a line");
+        CHECK(!sys_hash_plausible("*"), "J14 locked marker is not a hash");
+        CHECK(!sys_hash_plausible("$6$a"), "J15 too short");
+        CHECK(!sys_hash_plausible(NULL), "J16 NULL");
+        n = sys_shadow_set_root(sh, hash, o, sizeof(o));
+        CHECK(n > 0 && n == (int)strlen(o), "J17 length");
+        CHECK(sys_shadow_root_has_password(o), "J18 reads back as set");
+        CHECK(strstr(o, "daemon:*:::::::\nsshd:*:::::::\n") != NULL, "J19 other lines byte-identical");
+        CHECK(strncmp(o, "root:$6$abcdefgh$", 17) == 0 && strstr(o, "root:*") == NULL, "J20 root line replaced: %.30s", o);
+        n = sys_shadow_set_root("daemon:*:::::::\nroot:*:19000:0:99999:7:::\n", hash, o, sizeof(o));
+        CHECK(n > 0 && strstr(o, ":19000:0:99999:7:::\n") != NULL, "J21 later fields of the root line kept");
+        CHECK(sys_shadow_set_root("daemon:*:::::::\n", hash, o, sizeof(o)) == -1, "J22 no root line: refused, nothing invented");
+        CHECK(sys_shadow_set_root(sh, "Password:", o, sizeof(o)) == -1, "J23 implausible hash refused");
+        CHECK(sys_shadow_set_root(sh, hash, o, 20) == -1, "J24 too small");
+        CHECK(sys_shadow_set_root(NULL, hash, o, sizeof(o)) == -1, "J25 NULL");
+        n = sys_shadow_set_root("root:*:::::::\r\n", hash, o, sizeof(o));
+        CHECK(n > 0 && strchr(o, '\r') == NULL, "J26 CRLF dropped");
+    }
+
+    /* K  the host name, as set-hostname accepts it */
+    CHECK(sys_hostname_valid("rw09") && sys_hostname_valid("a") && sys_hostname_valid("Arca-12-x"), "K1 plain names");
+    CHECK(!sys_hostname_valid("") && !sys_hostname_valid(NULL), "K2 empty, NULL");
+    CHECK(!sys_hostname_valid("rw09.local") && !sys_hostname_valid("a b") && !sys_hostname_valid("a_b"), "K3 dot, space, underscore");
+    CHECK(!sys_hostname_valid("-rw") && !sys_hostname_valid("rw-"), "K4 hyphen at an end");
+    CHECK(sys_hostname_valid("rw-09"), "K5 inner hyphen");
+    {
+        char l[80];
+        memset(l, 'a', 63); l[63] = '\0';
+        CHECK(sys_hostname_valid(l), "K6 63 characters");
+        memset(l, 'a', 64); l[64] = '\0';
+        CHECK(!sys_hostname_valid(l), "K7 64 characters");
+    }
+    CHECK(!sys_hostname_valid("r\xc3\xb6w"), "K8 non-ASCII");
 
     if (fails) { printf("%d failure(s)\n", fails); return 1; }
     printf("sys_settings_test: all passed\n");

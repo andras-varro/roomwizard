@@ -1,18 +1,10 @@
 /* system_page.c — control_panel's System page: system settings that otherwise
- * need SSH.  First part: the SSH login mode (toggle), the clock and its RTC, and
- * a manual date/time set.
+ * need SSH.  The clock and its RTC, a manual date/time set and the timezone.
+ * (SSH access has its own page, ssh_page.c.)
  *
- * Exposed only as cp_system_page (cp_page.h).  The SSH mode is read from
- * /etc/ssh/sshd_config on entry and after every apply (sys_ssh_mode(),
- * sys_settings.c).  The toggle PASSWORD+KEY <-> KEY ONLY is confirmed and
- * refuses KEY ONLY unless /home/root/.ssh/authorized_keys holds a plausible key
- * (the unit has no serial console, and a button cannot prove the key is yours).
- * Apply: sys_ssh_set_password_auth() rewrites the text, sshd_config.new is
- * written and fsynced, checked with `sshd -t -f`, renamed over the original,
- * then the listener gets SIGHUP (what /etc/init.d/sshd reload does), so open
- * sessions survive.  The clock is read once a second.  The editor holds
- * year, month, day, hour and minute, each stepped by its own -/+ buttons
- * (sys_dt_step() keeps the day valid); SET asks first, then runs
+ * Exposed only as cp_system_page (cp_page.h).  The clock is read once a second.
+ * The editor holds year, month, day, hour and minute, each stepped by its own
+ * -/+ buttons (sys_dt_step() keeps the day valid); SET asks first, then runs
  * `date -s "YYYY-MM-DD HH:MM:00"` and `hwclock -w -u` by fork/exec, the argument
  * built from validated integers; `date` reads /etc/localtime, so the entered value
  * is LOCAL time.  The zone row cycles a short curated list (sys_tz_*) and APPLY
@@ -22,25 +14,16 @@
  */
 #include "cp_page.h"
 #include "cp_ui.h"
+#include "cp_exec.h"
 #include "sys_settings.h"
 #include "../common/common.h"
 
-#include <errno.h>
-#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <signal.h>
-#include <sys/stat.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
-#define SSHD_CONFIG      "/etc/ssh/sshd_config"
-#define SSHD_BIN         "/usr/sbin/sshd"
-#define SSHD_PIDFILE     "/var/run/sshd.pid"
-#define AUTH_KEYS        "/home/root/.ssh/authorized_keys"
-#define SSH_BUF          16384          /* a sshd_config is a few KB; a longer one is refused */
 #define RTC_SINCE_EPOCH  "/sys/class/rtc/rtc0/since_epoch"
 #define CLOCK_REFRESH_MS 1000
 #define RTC_SYNC_SLACK_S 2          /* the two clocks are read a moment apart */
@@ -48,7 +31,6 @@
 
 /* ── State ──────────────────────────────────────────────────────────────── */
 
-static SshMode ssh_mode = SSH_MODE_UNKNOWN;
 static char    now_str[48];         /* "YYYY-MM-DD HH:MM:SS", or "UNKNOWN" */
 static char    rtc_str[80];
 static uint32_t rtc_color = COLOR_WHITE;
@@ -74,34 +56,6 @@ static void read_zone(void) {
     tz_sel = tz_cur;
 }
 
-static Button ssh_btn;
-static bool   ssh_pending_pw;       /* what the open confirmation will set: true = password allowed */
-
-/* Reads a whole file into buf (NUL-terminated); the length, or -1 if it cannot
- * be opened or does not fit (a cut file must never be rewritten). */
-static int read_whole(const char *path, char *buf, size_t cap) {
-    FILE *f = fopen(path, "r");
-    if (!f) return -1;
-    size_t n = fread(buf, 1, cap - 1, f);
-    bool more = fgetc(f) != EOF;
-    fclose(f);
-    if (more) return -1;
-    buf[n] = '\0';
-    return (int)n;
-}
-
-/* The button offers the OTHER mode: KEY ONLY unless the file already is. */
-static void ssh_btn_refresh(void) {
-    snprintf(ssh_btn.text, sizeof(ssh_btn.text), "%s",
-             ssh_mode == SSH_MODE_KEY_ONLY ? "PASSWORD" : "KEY ONLY");
-}
-
-static void read_ssh_mode(void) {
-    static char buf[SSH_BUF];
-    ssh_mode = read_whole(SSHD_CONFIG, buf, sizeof(buf)) >= 0 ? sys_ssh_mode(buf)
-                                                              : SSH_MODE_UNKNOWN;
-    ssh_btn_refresh();
-}
 
 static void fmt_tm(const struct tm *tm, char *out, size_t len) {
     snprintf(out, len, "%04d-%02d-%02d %02d:%02d:%02d", tm->tm_year + 1900,
@@ -166,14 +120,12 @@ static void edit_from_clock(void) {
 
 static void system_page_load(const Config *cfg) {
     (void)cfg;
-    read_ssh_mode();
     read_zone();
     read_clock();
     edit_from_clock();
 }
 
 static void system_page_enter(void) {
-    read_ssh_mode();
     read_zone();
     read_clock();
     edit_from_clock();
@@ -196,32 +148,22 @@ static const char *const field_names[SYS_DT_FIELDS] =
     { "YEAR", "MON", "DAY", "HOUR", "MIN" };
 
 #define SYS_TZ_H        34
-#define SYS_SSH_H       36           /* the SSH band: info row + toggle button */
-#define SYS_SSH_BTN_W  104           /* "PASSWORD" at scale 2 is 96 px */
 #define SYS_VALUE_GAP    8           /* a section's widest label to its value column */
 #define SYS_TZ_ARROW_W  38
 #define SYS_TZ_APPLY_W  76           /* "APPLY" at scale 2 is 60 px; wider and Los_Angeles hits the arrows in portrait */
 
 static Button minus_btn[SYS_DT_FIELDS], plus_btn[SYS_DT_FIELDS], set_btn;
 static Button tz_prev_btn, tz_next_btn, tz_apply_btn;
-static int  sec_ssh_y, sec_clock_y, sec_set_y;
-static int  ssh_y, utc_y, rtc_y, tz_y, label_y, value_y, col_w, value_scale, note_y;
-static int  ssh_vx, clock_vx;   /* value columns: each section's widest label + SYS_VALUE_GAP */
+static int  sec_clock_y, sec_set_y;
+static int  utc_y, rtc_y, tz_y, label_y, value_y, col_w, value_scale, note_y;
+static int  clock_vx;   /* value columns: each section's widest label + SYS_VALUE_GAP */
 
 static void system_page_layout(void) {
     int y = CONTENT_Y + 6;
-    /* Each section's values start just past its own labels, not at
+    /* The values start just past the labels, not at
      * draw_info_row()'s 150/270 column: in portrait that column put the LOCAL
-     * time against the right edge and PASSWORD+KEY under the toggle button. */
-    ssh_vx   = CONTENT_LEFT + 10 + text_measure_width("SSH LOGIN:", 2) + SYS_VALUE_GAP;
+     * time against the right edge. */
     clock_vx = CONTENT_LEFT + 10 + text_measure_width("LOCAL:", 2) + SYS_VALUE_GAP;
-    sec_ssh_y = y;    y += SYS_HEADER_H;
-    ssh_y = y;                                  /* info row at the top of a SYS_SSH_H band */
-    button_init_full(&ssh_btn, CONTENT_RIGHT - SYS_SSH_BTN_W, y, SYS_SSH_BTN_W, SYS_SSH_H - 2,
-                     "KEY ONLY", RGB(0, 110, 60), COLOR_WHITE, BTN_COLOR_HIGHLIGHT, 2);
-    ssh_btn_refresh();
-    y += SYS_SSH_H;
-    y += SYS_GAP;
     sec_clock_y = y;  y += SYS_HEADER_H;
     utc_y = y;        y += SYS_ROW_H;
     rtc_y = y;        y += SYS_ROW_H;
@@ -292,11 +234,6 @@ static void system_page_layout(void) {
         if (w > right) right = w;
         w = CONTENT_LEFT + text_measure_width(SYS_NOTE, 1);
         if (w > right) right = w;
-        /* the longest SSH value must end clear of the toggle button */
-        w = ssh_vx + text_measure_width("PASSWORD+KEY", 2);
-        if (w + 8 > ssh_btn.x) clash = "SSH VALUE";
-        w = ssh_btn.x + ssh_btn.width;
-        if (w > right) right = w;
         const char *verdict = bottom > CONTENT_H     ? "⚠ PAST CONTENT BOTTOM"
                             : right  > CONTENT_RIGHT ? "⚠ PAST CONTENT RIGHT"
                             : clash                  ? "⚠ OVERLAPS A BUTTON"
@@ -314,15 +251,6 @@ static void system_page_layout(void) {
 /* ── Draw ───────────────────────────────────────────────────────────────── */
 
 static void system_page_draw(Framebuffer *fb) {
-    static const struct { const char *text; uint32_t color; } ssh_text[] = {
-        [SSH_MODE_UNKNOWN]  = { "UNKNOWN",  COLOR_ORANGE },
-        [SSH_MODE_KEY_ONLY] = { "KEY ONLY", COLOR_GREEN },
-        [SSH_MODE_PASSWORD] = { "PASSWORD+KEY", COLOR_YELLOW },
-    };
-    draw_section_header(fb, sec_ssh_y, "REMOTE ACCESS");
-    draw_info_row_at(fb, ssh_y, "SSH LOGIN:", ssh_text[ssh_mode].text, ssh_text[ssh_mode].color, ssh_vx);
-    button_draw(fb, &ssh_btn);
-
     draw_section_header(fb, sec_clock_y, "CLOCK AND TIMEZONE");
     draw_info_row_at(fb, utc_y, "LOCAL:", now_str, COLOR_WHITE, clock_vx);
     draw_info_row_at(fb, rtc_y, "RTC:", rtc_str, rtc_color, clock_vx);
@@ -356,18 +284,7 @@ static void system_page_draw(Framebuffer *fb) {
 
 /* Runs argv (no shell) with output discarded; true if it exited 0. */
 static bool run_cmd(char *const argv[]) {
-    pid_t pid = fork();
-    if (pid < 0) return false;
-    if (pid == 0) {
-        int nul = open("/dev/null", O_RDWR);
-        if (nul >= 0) { dup2(nul, 1); dup2(nul, 2); }
-        execvp(argv[0], argv);
-        _exit(127);
-    }
-    int st = 0;
-    while (waitpid(pid, &st, 0) < 0)
-        if (errno != EINTR) return false;
-    return WIFEXITED(st) && WEXITSTATUS(st) == 0;
+    return cp_exec(argv, NULL, NULL, 0, NULL, 0) == 0;
 }
 
 /* Repoint /etc/localtime and rewrite /etc/timezone, each through a temp name
@@ -408,63 +325,6 @@ static void apply_zone(Config *cfg) {
     edit_from_clock();
 }
 
-/* SIGHUP the sshd listener named in its pid file, as /etc/init.d/sshd reload
- * does (start-stop-daemon -s 1).  The pid must be a live sshd (its cmdline says
- * so) before anything is signalled.  The listener re-execs itself and re-reads
- * the config; open sessions are separate processes and stay. */
-static bool reload_sshd(void) {
-    char line[32], path[48], cmd[160];
-    long pid = 0;
-    if (read_file_line(SSHD_PIDFILE, line, sizeof(line)) != 0 ||
-        sscanf(line, "%ld", &pid) != 1 || pid <= 1) return false;
-    snprintf(path, sizeof(path), "/proc/%ld/cmdline", pid);
-    FILE *f = fopen(path, "r");
-    if (!f) return false;
-    size_t n = fread(cmd, 1, sizeof(cmd) - 1, f);
-    fclose(f);
-    cmd[n] = '\0';
-    return strstr(cmd, "sshd") != NULL && kill((pid_t)pid, SIGHUP) == 0;
-}
-
-/* Sets PasswordAuthentication to `yes` (password_yes) or `no`.  Every failure
- * before the rename leaves the old sshd_config untouched. */
-static void apply_ssh(Config *cfg) {
-    (void)cfg;
-    static char cur[SSH_BUF], next[SSH_BUF + 64];
-    const char *tmp = SSHD_CONFIG ".new";
-
-    if (read_whole(SSHD_CONFIG, cur, sizeof(cur)) < 0) { cp_status("SSHD CONFIG UNREADABLE, NOT CHANGED", false); return; }
-    if (!ssh_pending_pw) {
-        static char keys[4096];
-        if (read_whole(AUTH_KEYS, keys, sizeof(keys)) < 0 || !sys_authkeys_plausible(keys)) {
-            cp_status("NO AUTHORIZED KEY FOR ROOT, NOT CHANGED", false);
-            return;
-        }
-    }
-    int len = sys_ssh_set_password_auth(cur, ssh_pending_pw, next, sizeof(next));
-    if (len < 0) { cp_status("SSHD CONFIG TOO LARGE, NOT CHANGED", false); return; }
-
-    struct stat st;
-    mode_t mode = stat(SSHD_CONFIG, &st) == 0 ? (st.st_mode & 0777) : 0644;
-    unlink(tmp);
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_EXCL, 0600);
-    bool ok = fd >= 0;
-    if (ok) {
-        ok = write(fd, next, (size_t)len) == len && fchmod(fd, mode) == 0 && fsync(fd) == 0;
-        ok = (close(fd) == 0) && ok;
-    }
-    if (!ok) { unlink(tmp); cp_status("SSHD CONFIG WRITE FAILED, NOT CHANGED", false); return; }
-
-    char *const test_argv[] = { SSHD_BIN, "-t", "-f", (char *)tmp, NULL };
-    if (!run_cmd(test_argv)) { unlink(tmp); cp_status("SSHD REJECTED THE CONFIG, NOT CHANGED", false); return; }
-    if (rename(tmp, SSHD_CONFIG) != 0) { unlink(tmp); cp_status("SSHD CONFIG RENAME FAILED, NOT CHANGED", false); return; }
-
-    bool reloaded = reload_sshd();
-    read_ssh_mode();
-    cp_status(reloaded ? (ssh_pending_pw ? "SSH: PASSWORD LOGIN ALLOWED" : "SSH: KEY ONLY")
-                       : "FILE CHANGED, SSHD RELOAD FAILED (REBOOT APPLIES)", reloaded);
-}
-
 static void apply_clock(Config *cfg) {
     (void)cfg;
     char stamp[24];
@@ -494,20 +354,6 @@ static CpPageResult system_page_input(Config *cfg, int tx, int ty,
             sys_dt_step(&edit, i, -1);
             act = CP_PAGE_REDRAW;
         }
-    }
-    if (button_update(&ssh_btn, tx, ty, touching, now)) {
-        static char keys[4096];
-        ssh_pending_pw = ssh_mode == SSH_MODE_KEY_ONLY;
-        if (!ssh_pending_pw &&
-            (read_whole(AUTH_KEYS, keys, sizeof(keys)) < 0 || !sys_authkeys_plausible(keys))) {
-            cp_status("REFUSED: NO AUTHORIZED KEY IN ROOT'S .SSH", false);
-            return CP_PAGE_REDRAW;
-        }
-        if (ssh_pending_pw)
-            cp_confirm("ALLOW PASSWORD LOGIN", "SSH ACCEPTS PASSWORD OR KEY\nOPEN SESSIONS ARE KEPT", "ALLOW", apply_ssh);
-        else
-            cp_confirm("SSH KEY ONLY", "PASSWORD LOGINS ARE REFUSED\nOPEN SESSIONS ARE KEPT", "APPLY", apply_ssh);
-        return CP_PAGE_IDLE;
     }
     if (button_update(&tz_prev_btn, tx, ty, touching, now)) {
         tz_sel = sys_tz_step(tz_sel, -1);
@@ -547,7 +393,6 @@ static CpPageResult system_page_input(Config *cfg, int tx, int ty,
 
 static int system_page_focusables(UiRect *out, int max) {
     int n = 0;
-    n = focus_add_button(out, n, max, &ssh_btn);
     n = focus_add_button(out, n, max, &tz_prev_btn);
     n = focus_add_button(out, n, max, &tz_next_btn);
     n = focus_add_button(out, n, max, &tz_apply_btn);

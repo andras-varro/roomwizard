@@ -94,12 +94,18 @@ for d in rcS.d rc5.d rc0.d rc6.d; do
     check_links "$d"
     check "every etc/$d link resolves to an executable init.d script (and there is at least one)" $?
 done
-for want in rcS.d/S01mountall rcS.d/S06watchdog rcS.d/S08networking rc5.d/S02dbus-1 rc5.d/S09sshd rc5.d/S20hwclock.sh; do
+for want in rcS.d/S01mountall rcS.d/S04firstboot-hostname rcS.d/S04hostname rcS.d/S06watchdog rcS.d/S08networking rc5.d/S02dbus-1 rc5.d/S09sshd rc5.d/S30avahi-daemon rc5.d/S20hwclock.sh; do
     has "etc/$want"
     check "etc/$want exists" $?
 done
-! has etc/rc5.d/S30avahi-daemon
-check "no avahi link shipped (commissioning adds S30avahi-daemon)" $?
+has usr/sbin/set-hostname && entry usr/sbin/set-hostname | grep -q '^-..x'
+check "usr/sbin/set-hostname present and executable (the Control Panel and first boot exec it)" $?
+member_has usr/sbin/set-hostname 'is not a valid host name'
+check "usr/sbin/set-hostname is commissioning/set-hostname.sh (carries its name validation)" $?
+member_has etc/init.d/sshd 'sshd_off'
+check "init.d/sshd honours the /etc/ssh/sshd_off marker" $?
+! tar -tf "$TAR" | grep -E '(^|/)\.ssh/.|(^|/)authorized_keys' | grep -q .
+check "no SSH key material in the tar (no file under any .ssh, no authorized_keys)" $?
 has etc/init.d/avahi-daemon
 check "etc/init.d/avahi-daemon exists" $?
 

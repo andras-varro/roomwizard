@@ -96,6 +96,7 @@ SUITE_ROWS=(
     "rw_release_test.sh|deploy"
     "rw_ssh_test.sh|deploy"
     "rw_state_test.sh|deploy"
+    "rw_hostname_test.sh|deploy"
     "setup_build_env_test.sh|deploy"
     "smoke_first_screen_test.sh|deploy"
     "doc_check.sh|docs"
@@ -143,6 +144,7 @@ CTEST_ROWS=(
     "icon_grid_focus_test|-I common|common/icon_grid.c common/ppm.c common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/start_menu.c common/gamepad.c common/input_slots.c common/input_scan.c"
     "icon_grid_nav_test|-I common|common/icon_grid.c common/ppm.c common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/start_menu.c common/gamepad.c common/input_slots.c common/input_scan.c"
     "launcher_args_test|-I. -Dmain=app_launcher_main_unused|common/framebuffer.c common/touch_input.c common/hardware.c common/common.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/config.c common/gamepad.c common/input_slots.c common/input_scan.c common/ppm.c common/icon_grid.c common/logger.c common/pointer.c common/start_menu.c"
+    "launcher_banner_test|-I.|"
     "pointer_test|-I common|common/pointer.c common/framebuffer.c common/hardware.c common/config.c"
     "ppm_test|-I common|common/ppm.c"
     "text_truncate_test|-I common|common/common.c common/framebuffer.c common/touch_input.c common/hardware.c common/config.c common/highscore.c common/keyboard.c common/audio.c common/audio_gen.c common/audio_out.c common/audio_wav.c common/start_menu.c common/gamepad.c common/input_slots.c common/input_scan.c"
@@ -153,6 +155,7 @@ CTEST_ROWS=(
     "ui_scale_test|-I common|common/framebuffer.c common/hardware.c common/config.c"
     "cp_page_name_test|-I.|control_panel/cp_page_name.c"
     "sys_settings_test|-I.|control_panel/sys_settings.c"
+    "cp_exec_test|-I.|control_panel/cp_exec.c"
     "usb_bus_test|-I.|control_panel/usb_bus.c"
     "vnc_pad_test|-I common -I ../vnc_client|../vnc_client/vnc_pad.c common/ui_focus.c common/input_scan.c"
 )
