@@ -130,7 +130,10 @@ SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 if [ "$GENERIC" -eq 1 ]; then
     # A generic image has no state.tar to gate; what it must not hold is SSH key material,
     # in the rootfs tar here and, below, in everything that lands on the card.
-    ROOT_LIST=$(tar -tf "$ROOTTAR") || die "$ROOTTAR does not list"
+    # Symlinks are left out: they carry no key bytes, and the image deliberately links
+    # etc/ssh/ssh_host_*_key into the data partition, where each unit makes its own.
+    tar -tf "$ROOTTAR" > /dev/null || die "$ROOTTAR does not list"
+    ROOT_LIST=$(tar -tvf "$ROOTTAR" | awk '$1 !~ /^l/ { $1 = $2 = $3 = $4 = $5 = ""; sub(/^ +/, ""); print }')
     if ! KEYS_DENIED=$(printf '%s\n' "$ROOT_LIST" | rw_state_ssh_keys_deny); then
         echo "FAIL: $ROOTTAR carries SSH key material a generic image may not hold:" >&2
         printf '%s\n' "$KEYS_DENIED" | sed 's/^/  /' >&2
@@ -154,7 +157,7 @@ fi
 ssh_scan() {
     local d hits
     for d in "$@"; do
-        if ! hits=$(cd "$d" && find . -xdev ! -type d | rw_state_ssh_keys_deny); then
+        if ! hits=$(cd "$d" && find . -xdev ! -type d ! -type l | rw_state_ssh_keys_deny); then
             echo "FAIL: SSH key material on the card under $d:" >&2
             printf '%s\n' "$hits" | sed 's/^/  /' >&2
             return 1
