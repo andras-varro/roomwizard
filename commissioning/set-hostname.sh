@@ -44,16 +44,26 @@ fi
 
 # ── validate ────────────────────────────────────────────────────────────────
 # RFC-1123, single label. Length is checked with ${#NAME} and the charset with a
-# plain ERE that needs no {n,m} interval, so this does not depend on how the
-# device's BusyBox grep was built.
+# POSIX case statement. Empty names, leading/trailing hyphens, and chars outside
+# A-Za-z0-9- are rejected.
 if [ "${#NAME}" -gt 63 ]; then
-    echo "set-hostname: '$NAME' is ${#NAME} characters; the limit is 63" >&2
+    echo "set-hostname: is not a valid host name (letters, digits, hyphens; start and end alphanumeric; no dots, mDNS adds .local)" >&2
     exit 1
 fi
-if ! printf '%s' "$NAME" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$'; then
-    echo "set-hostname: '$NAME' is not a valid host name (letters, digits, hyphens; start and end alphanumeric; no dots, mDNS adds .local)" >&2
-    exit 1
-fi
+case "$NAME" in
+    "")
+        echo "set-hostname: is not a valid host name (letters, digits, hyphens; start and end alphanumeric; no dots, mDNS adds .local)" >&2
+        exit 1
+        ;;
+    -*|*-)
+        echo "set-hostname: is not a valid host name (letters, digits, hyphens; start and end alphanumeric; no dots, mDNS adds .local)" >&2
+        exit 1
+        ;;
+    *[!a-zA-Z0-9-]*)
+        echo "set-hostname: is not a valid host name (letters, digits, hyphens; start and end alphanumeric; no dots, mDNS adds .local)" >&2
+        exit 1
+        ;;
+esac
 
 HOSTNAME_FILE="$ROOTFS/etc/hostname"
 HOSTS_FILE="$ROOTFS/etc/hosts"
@@ -116,15 +126,30 @@ if grep -qiE "$LOCALHOST_RE" "$HOSTS_FILE" && ! grep -qiE "$LOCALHOST_RE" "$TMP"
     exit 1
 fi
 
-# cp onto the existing file so its mode and owner are preserved.
-cp "$TMP" "$HOSTS_FILE"
-rm -f "$TMP"
+# Create the temp file in the same directory, set its mode to match the target,
+# then move it atomically and sync.
+HOSTS_TMP_NEW="$(dirname "$HOSTS_FILE")/.hosts.tmp.$$"
+trap 'rm -f "$HOSTS_TMP_NEW"' EXIT INT TERM
+if [ -f "$HOSTS_FILE" ]; then
+    # Match the target's mode
+    chmod "$(stat -c %a "$HOSTS_FILE" 2>/dev/null || printf '644')" "$TMP"
+fi
+mv "$TMP" "$HOSTS_TMP_NEW"
+mv "$HOSTS_TMP_NEW" "$HOSTS_FILE"
+sync "$HOSTS_FILE"
 
 # ── /etc/hostname ───────────────────────────────────────────────────────────
 if [ -f "$HOSTNAME_FILE" ] && [ ! -f "$HOSTNAME_FILE.backup" ]; then
     cp "$HOSTNAME_FILE" "$HOSTNAME_FILE.backup"
 fi
-printf '%s\n' "$NAME" > "$HOSTNAME_FILE"
+HOSTNAME_TMP_NEW="$(dirname "$HOSTNAME_FILE")/.hostname.tmp.$$"
+trap 'rm -f "$HOSTNAME_TMP_NEW"' EXIT INT TERM
+printf '%s\n' "$NAME" > "$HOSTNAME_TMP_NEW"
+if [ -f "$HOSTNAME_FILE" ]; then
+    chmod "$(stat -c %a "$HOSTNAME_FILE" 2>/dev/null || printf '644')" "$HOSTNAME_TMP_NEW"
+fi
+mv "$HOSTNAME_TMP_NEW" "$HOSTNAME_FILE"
+sync "$HOSTNAME_FILE"
 
 # ── running kernel ──────────────────────────────────────────────────────────
 # Only meaningful for the live root; offline there is no kernel to tell.

@@ -48,7 +48,17 @@ case "$1" in
         start-stop-daemon -S -q -p "$PIDFILE" -x "$DAEMON"
         ;;
     stop)
-        start-stop-daemon -K -q -p "$PIDFILE"
+        PID=$(cat "$PIDFILE" 2>/dev/null)
+        if [ -n "$PID" ]; then
+            start-stop-daemon -K -q -p "$PIDFILE"
+            # Wait up to ~5 seconds for the process to exit
+            n=0
+            while [ "$n" -lt 50 ]; do
+                kill -0 "$PID" 2>/dev/null || break
+                n=$((n + 1))
+                sleep 0.1
+            done
+        fi
         rm -f "$PIDFILE"
         ;;
     restart)

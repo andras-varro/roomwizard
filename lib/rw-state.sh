@@ -176,9 +176,11 @@ rw_state_image_deny() {
 
 # rw_state_ssh_keys_deny
 #   stdin: a tar listing (tar -tf), or `find . ! -type d` output. Prints every entry
-#   that is SSH key material: anything inside a '.ssh' directory, in any home, and any
-#   file named authorized_keys*. Directory entries (trailing '/') are not material, so
-#   the rootfs's empty home/root/.ssh passes. Exit 1 if it printed any, 0 if none.
+#   that is SSH key material: anything inside a '.ssh' directory (including a non-directory
+#   .ssh symlink), any file named authorized_keys*, SSH host private keys (ssh_host_*_key),
+#   and user SSH private keys (id_rsa, id_ecdsa, id_ed25519, id_dsa) anywhere. Directory
+#   entries (trailing '/') are not material, so the rootfs's empty home/root/.ssh passes.
+#   Exit 1 if it printed any, 0 if none.
 #   Used by make-card-image.sh for a GENERIC image (no state.tar), which must hold no
 #   key of any operator or unit; a per-unit image legitimately carries its own.
 #   The caller must check tar's own exit status: an empty listing is clean.
@@ -188,7 +190,14 @@ rw_state_ssh_keys_deny() {
         [ -n "$e" ] || continue
         case "$e" in */) continue ;; esac
         case "/$e" in
-            */.ssh/*|*/authorized_keys*) printf '%s\n' "$e"; found=0 ;;
+            */.ssh/*) printf '%s\n' "$e"; found=0 ;;
+            */authorized_keys*) printf '%s\n' "$e"; found=0 ;;
+            */ssh_host_*_key) printf '%s\n' "$e"; found=0 ;;
+            */id_rsa) printf '%s\n' "$e"; found=0 ;;
+            */id_ecdsa) printf '%s\n' "$e"; found=0 ;;
+            */id_ed25519) printf '%s\n' "$e"; found=0 ;;
+            */id_dsa) printf '%s\n' "$e"; found=0 ;;
+            */.ssh) printf '%s\n' "$e"; found=0 ;;
         esac
     done
     [ "$found" -ne 0 ]

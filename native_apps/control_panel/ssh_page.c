@@ -105,7 +105,8 @@ static void read_ssh(void) {
     cfg_mode = ok ? sys_ssh_mode(cfg) : SSH_MODE_UNKNOWN;
     root = ok ? sys_ssh_root_login(cfg) : SSH_ROOT_UNKNOWN;
     mode = sys_ssh_effective(cfg_mode, access(SSHD_OFF_MARKER, F_OK) == 0);
-    has_key = read_whole(AUTH_KEYS, keys, sizeof(keys)) >= 0 && sys_authkeys_plausible(keys);
+    has_key = read_whole(AUTH_KEYS, keys, sizeof(keys)) >= 0 && sys_authkeys_plausible(keys) &&
+              sys_authkeys_safe(AUTH_KEYS, 0);
     has_pw = read_whole(SHADOW, shadow, sizeof(shadow)) >= 0 && sys_shadow_root_has_password(shadow);
     wipe(shadow, sizeof(shadow));
 }
@@ -404,13 +405,14 @@ static const char *set_root_password(const char *pw) {
     char *const argv[] = { "mkpasswd", "-m", "sha512", NULL };
     int r = access(MKPASSWD_BIN, X_OK) == 0 ? cp_exec(argv, line, hash, sizeof(hash), NULL, 0) : -2;
     wipe(line, sizeof(line));
-    if (r == -2) return "MKPASSWD NOT INSTALLED";
+    if (r == -2) { wipe(hash, sizeof(hash)); return "MKPASSWD NOT INSTALLED"; }
     char *nl = strchr(hash, '\n');
     if (nl) *nl = '\0';
-    if (r != 0 || !sys_hash_plausible(hash)) return "HASHING FAILED, PASSWORD UNCHANGED";
-    if (read_whole(SHADOW, shadow, sizeof(shadow)) < 0) return "SHADOW UNREADABLE, NOT CHANGED";
+    if (r != 0 || !sys_hash_plausible(hash)) { wipe(hash, sizeof(hash)); return "HASHING FAILED, PASSWORD UNCHANGED"; }
+    if (read_whole(SHADOW, shadow, sizeof(shadow)) < 0) { wipe(hash, sizeof(hash)); return "SHADOW UNREADABLE, NOT CHANGED"; }
     int len = sys_shadow_set_root(shadow, hash, next, sizeof(next));
     wipe(shadow, sizeof(shadow));
+    wipe(hash, sizeof(hash));
     if (len < 0) return "NO ROOT LINE IN SHADOW, NOT CHANGED";
     bool ok = write_file(tmp, next, (size_t)len, mode_of(SHADOW, 0600));
     wipe(next, sizeof(next));

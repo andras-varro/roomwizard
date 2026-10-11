@@ -74,7 +74,8 @@ rejects() {
 }
 i=0
 long=$(printf 'a%.0s' $(seq 1 64))
-for bad_name in "rw09.local" "-lead" "trail-" "has space" "under_score" "$long" "" "ünï"; do
+newline_name=$(printf 'ok\nx')
+for bad_name in "rw09.local" "-lead" "trail-" "has space" "under_score" "$long" "" "ünï" "$newline_name"; do
     i=$((i + 1))
     check "A4.$i invalid name (${#bad_name} chars) is refused: non-zero, one line, files untouched" rejects "$SETTER" "$bad_name"
 done

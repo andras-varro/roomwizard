@@ -5,6 +5,44 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+/* Check if a file/directory has safe permissions for SSH: owned by uid,
+ * not group- or world-writable. Returns true if safe, false otherwise. */
+static bool check_ssh_safe_perms(const char *path, uid_t allowed_uid) {
+    struct stat st;
+    if (stat(path, &st) != 0) return false;
+    if (st.st_uid != allowed_uid) return false;
+    if (st.st_mode & (S_IWGRP | S_IWOTH)) return false;
+    return true;
+}
+
+/* Check if authorized_keys file looks like it has a valid key: plausible content
+ * AND safe permissions for sshd's StrictModes check (owned by root, not group/world writable,
+ * and the directories /home/root, /home/root/.ssh also satisfy the same). */
+bool sys_authkeys_safe(const char *auth_keys_path, uid_t allowed_uid) {
+    /* Check the three paths sshd validates: home dir, .ssh dir, authorized_keys file */
+    if (!check_ssh_safe_perms(auth_keys_path, allowed_uid)) return false;
+
+    /* Get the directory name of authorized_keys (.ssh dir) */
+    char ssh_dir[256];
+    snprintf(ssh_dir, sizeof(ssh_dir), "%s", auth_keys_path);
+    char *last_slash = strrchr(ssh_dir, '/');
+    if (!last_slash) return false;
+    *last_slash = '\0';
+
+    if (!check_ssh_safe_perms(ssh_dir, allowed_uid)) return false;
+
+    /* Get the home directory (parent of .ssh) */
+    last_slash = strrchr(ssh_dir, '/');
+    if (!last_slash) return false;
+    *last_slash = '\0';
+
+    if (!check_ssh_safe_perms(ssh_dir, allowed_uid)) return false;
+
+    return true;
+}
 
 /* One line's keyword and value, in place: kw / val point into line,
  * NUL-terminated.  false for a blank or comment line. */

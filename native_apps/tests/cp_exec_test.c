@@ -14,6 +14,7 @@
 #include "control_panel/cp_exec.h"
 
 #include <dirent.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -97,6 +98,16 @@ int main(void) {
       sscanf(out, "%d", &n);
       /* 0, 1, 2 and the ls's own directory descriptor, plus whatever this shell has */
       CHECK(r == 0 && n <= 5, "E2 child sees %d fds", n); }
+    /* E3 child does not inherit extra fds opened without O_CLOEXEC */
+    { int fd_extra = open("/dev/null", O_RDWR);
+      if (fd_extra >= 0) {
+          char probe[64];
+          snprintf(probe, sizeof probe, "[ -e /proc/self/fd/%d ] && exit 1 || exit 0", fd_extra);
+          char *const a[] = { "sh", "-c", probe, NULL };
+          int r = cp_exec(a, NULL, NULL, 0, NULL, 0);
+          CHECK(r == 0, "E3 child does not inherit extra fd: r=%d", r);
+          close(fd_extra);
+      } }
 
     if (fails) { printf("%d failure(s)\n", fails); return 1; }
     printf("cp_exec_test: all passed\n");

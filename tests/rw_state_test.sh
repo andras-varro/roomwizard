@@ -270,17 +270,26 @@ printf '%s\n' home/root/.ssh/id_ed25519 home/root/.ssh/known_hosts home/pi/.ssh/
     etc/skel/authorized_keys > "$TMP/g3.lst"
 rw_state_ssh_keys_deny < "$TMP/g3.lst" > "$TMP/g3.out"
 expect_out "$TMP/g3.lst" "$TMP/g3.out" "G3 any file inside a .ssh directory, in any home, and any authorized_keys* is refused"
-printf '%s\n' ./ ./etc/ ./etc/ssh/ ./etc/ssh/sshd_config ./etc/ssh/ssh_host_rsa_key ./home/root/ ./home/root/.ssh/ \
-    ./home/root/.sshrc.d/x ./usr/share/doc/ssh-keys.txt > "$TMP/g4.lst"
+printf '%s\n' home/root/.ssh home/root/.ssh/id_rsa home/root/.ssh/id_ecdsa home/root/.ssh/id_ed25519 \
+    home/root/.ssh/id_dsa etc/ssh/ssh_host_rsa_key etc/ssh/ssh_host_ed25519_key > "$TMP/g3b.lst"
+rw_state_ssh_keys_deny < "$TMP/g3b.lst" > "$TMP/g3b.out"; rc=$?
+expect_out "$TMP/g3b.lst" "$TMP/g3b.out" "G3b SSH host private keys (ssh_host_*_key) and user keys (id_*) anywhere are refused"
+expect_rc 1 "$rc" "G3c and exits 1"
+printf '%s\n' ./ ./etc/ ./etc/ssh/ ./etc/ssh/sshd_config ./etc/ssh/ssh_host_rsa_key.pub ./home/root/ ./home/root/.ssh/ \
+    ./home/root/.sshrc.d/x ./usr/share/doc/ssh-keys.txt ./etc/ssh/ssh_host_ed25519_key.pub > "$TMP/g4.lst"
 rw_state_ssh_keys_deny < "$TMP/g4.lst" > "$TMP/g4.out"; rc=$?
-expect_out "$TMP/empty" "$TMP/g4.out" "G4 control: a rootfs listing with the empty .ssh directory, sshd_config and look-alike names passes"
+expect_out "$TMP/empty" "$TMP/g4.out" "G4 control: a rootfs listing with sshd_config, .ssh directory, .pub files and look-alike names passes"
 expect_rc 0 "$rc" "G5 and exits 0"
+printf '%s\n' ./etc/ssh/sshd_config ./etc/ssh/ssh_host_ed25519_key.pub home/root/.ssh/ > "$TMP/g6.lst"
+rw_state_ssh_keys_deny < "$TMP/g6.lst" > "$TMP/g6.out"; rc=$?
+expect_out "$TMP/empty" "$TMP/g6.out" "G6 a legitimate sshd_config, public key, and empty .ssh directory pass"
+expect_rc 0 "$rc" "G7 and exits 0"
 
 echo ""
 TOTAL=$((PASS + FAIL))
 echo "  $PASS passed, $FAIL failed"
-# groups A..G: 3 + 3 + 5 + 4 + 9 + 5 + 5 = 34 (group E has four zero-numbered cases)
-MIN_CASES=34
+# groups A..G: 3 + 3 + 5 + 4 + 9 + 5 + 7 = 36 (group E has four zero-numbered cases, group G now has 7)
+MIN_CASES=36
 if [ "$TOTAL" -lt "$MIN_CASES" ]; then
     echo -e "  ${RED}HARNESS ERROR${NC}: only $TOTAL cases ran, expected at least $MIN_CASES."
     exit 2

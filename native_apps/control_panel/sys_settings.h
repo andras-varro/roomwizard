@@ -81,6 +81,13 @@ const char *sys_ssh_refuse(SshMode mode, SshRootLogin root, bool has_key, bool h
  * operator's, only that one exists. */
 bool sys_authkeys_plausible(const char *text);
 
+/* True when authorized_keys file satisfies sshd's StrictModes check:
+ * the file, .ssh directory, and home directory are all owned by allowed_uid
+ * with no group or world write permissions. Caller is responsible for reading
+ * the file content separately if needed. */
+#include <sys/types.h>
+bool sys_authkeys_safe(const char *auth_keys_path, uid_t allowed_uid);
+
 /* True when /etc/shadow text gives user root a usable password hash: the
  * second field is non-empty and starts neither with '*' nor with '!'. */
 bool sys_shadow_root_has_password(const char *shadow_text);

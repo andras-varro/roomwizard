@@ -61,6 +61,8 @@ int cp_exec(char *const argv[], const char *in, char *out, size_t out_n,
         int fds[6] = { pin[0], pin[1], pout[0], pout[1], perr[0], perr[1] };
         for (int i = 0; i < 6; i++) if (fds[i] > 2) close(fds[i]);
         if (nul > 2) close(nul);
+        /* Close all fds >= 3 to avoid inheriting panel's fd (/dev/fb0, evdev, logs) */
+        for (int fd = 3; fd < 1024; fd++) close(fd);
         execvp(argv[0], argv);
         _exit(127);
     }

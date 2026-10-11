@@ -16,12 +16,17 @@
  * H  root login (PermitRootLogin) read and rewrite;
  * I  the lockout guard over mode + root login + key + password;
  * J  the root shadow line and the hash check;
- * K  the host name check.
+ * K  the host name check;
+ * L  authorized_keys permission checks (ownership and mode for sshd StrictModes).
  */
 #include "control_panel/sys_settings.h"
 
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 static int fails;
 #define CHECK(cond, ...) do { if (!(cond)) { fails++; printf("FAIL: "); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -285,6 +290,61 @@ int main(void) {
         CHECK(!sys_hostname_valid(l), "K7 64 characters");
     }
     CHECK(!sys_hostname_valid("r\xc3\xb6w"), "K8 non-ASCII");
+
+    /* L  authorized_keys permission checks */
+    {
+        /* Create a temporary directory structure to test permissions */
+        char tmpdir[256], home[256], sshdir[256], keyfile[256];
+        char *tmpbase = getenv("TMPDIR");
+        if (!tmpbase) tmpbase = "/tmp";
+        snprintf(tmpdir, sizeof(tmpdir), "%s/sys_settings_test_XXXXXX", tmpbase);
+        mkdtemp(tmpdir);
+
+        snprintf(home, sizeof(home), "%s/root", tmpdir);
+        snprintf(sshdir, sizeof(sshdir), "%s/.ssh", home);
+        snprintf(keyfile, sizeof(keyfile), "%s/authorized_keys", sshdir);
+
+        mkdir(home, 0755);
+        mkdir(sshdir, 0755);
+
+        /* Create authorized_keys file with good permissions */
+        FILE *f = fopen(keyfile, "w");
+        if (f) { fputs("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFoo\n", f); fclose(f); }
+        chmod(home, 0700);
+        chmod(sshdir, 0700);
+        chmod(keyfile, 0600);
+        chown(home, getuid(), -1);
+        chown(sshdir, getuid(), -1);
+        chown(keyfile, getuid(), -1);
+
+        CHECK(sys_authkeys_safe(keyfile, getuid()), "L1 good perms: owned by uid, 0700/0700/0600");
+
+        /* Test group-writable authorized_keys */
+        chmod(keyfile, 0660);
+        CHECK(!sys_authkeys_safe(keyfile, getuid()), "L2 group-writable file fails");
+        chmod(keyfile, 0600);
+
+        /* Test group-writable .ssh dir */
+        chmod(sshdir, 0770);
+        CHECK(!sys_authkeys_safe(keyfile, getuid()), "L3 group-writable .ssh dir fails");
+        chmod(sshdir, 0700);
+
+        /* Test group-writable home */
+        chmod(home, 0770);
+        CHECK(!sys_authkeys_safe(keyfile, getuid()), "L4 group-writable home fails");
+        chmod(home, 0700);
+
+        /* Test world-writable authorized_keys */
+        chmod(keyfile, 0666);
+        CHECK(!sys_authkeys_safe(keyfile, getuid()), "L5 world-writable file fails");
+        chmod(keyfile, 0600);
+
+        /* Cleanup */
+        unlink(keyfile);
+        rmdir(sshdir);
+        rmdir(home);
+        rmdir(tmpdir);
+    }
 
     if (fails) { printf("%d failure(s)\n", fails); return 1; }
     printf("sys_settings_test: all passed\n");
